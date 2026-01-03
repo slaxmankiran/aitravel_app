@@ -7,8 +7,7 @@ import Home from "@/pages/Home";
 import CreateTrip from "@/pages/CreateTrip";
 import TripDetails from "@/pages/TripDetails";
 import NotFound from "@/pages/not-found";
-import { EarthGlobe } from "@/components/EarthGlobe";
-import { Canvas } from "@react-three/fiber";
+import landscapeVideo from "@assets/generated_videos/cinematic_aerial_landscape_of_mountains_and_oceans.mp4";
 
 function Router() {
   return (
@@ -26,13 +25,18 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <div className="relative min-h-screen w-full bg-[#000814] overflow-hidden">
-          {/* Background Animation */}
-          <div className="fixed inset-0 z-0 opacity-40 pointer-events-none">
-            <Canvas camera={{ position: [0, 0, 15], fov: 45 }}>
-              <ambientLight intensity={0.5} />
-              <pointLight position={[10, 10, 10]} intensity={1} />
-              <EarthGlobe />
-            </Canvas>
+          {/* Background Video */}
+          <div className="fixed inset-0 z-0">
+            <video
+              src={landscapeVideo}
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="h-full w-full object-cover opacity-60"
+            />
+            {/* Overlay to ensure readability */}
+            <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/60" />
           </div>
           
           {/* Main Content */}
