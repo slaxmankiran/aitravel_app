@@ -1,4 +1,6 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import compression from "compression";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -11,6 +13,17 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+// Enable gzip compression for all responses
+app.use(compression({
+  level: 6, // Balanced speed/compression
+  threshold: 1024, // Only compress responses > 1KB
+  filter: (req, res) => {
+    // Always compress JSON API responses
+    if (req.path.startsWith('/api')) return true;
+    return compression.filter(req, res);
+  }
+}));
 
 app.use(
   express.json({
@@ -76,6 +89,8 @@ app.use((req, res, next) => {
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
+    // ensure crypto shim before loading Vite (Vite expects `crypto.hash` in newer Node)
+    await import("./ensure-crypto");
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }

@@ -7,11 +7,12 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
-  
+
   // Trip operations
   createTrip(trip: InsertTrip): Promise<Trip>;
   getTrip(id: number): Promise<Trip | undefined>;
   updateTripFeasibility(id: number, status: string, report: FeasibilityReport): Promise<Trip>;
+  updateTripItinerary(id: number, itinerary: any): Promise<Trip>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -43,14 +44,79 @@ export class DatabaseStorage implements IStorage {
   async updateTripFeasibility(id: number, status: string, report: FeasibilityReport): Promise<Trip> {
     const [updatedTrip] = await db
       .update(trips)
-      .set({ 
+      .set({
         feasibilityStatus: status,
-        feasibilityReport: report 
+        feasibilityReport: report
       })
       .where(eq(trips.id, id))
       .returning();
     return updatedTrip;
   }
+
+  async updateTripItinerary(id: number, itinerary: any): Promise<Trip> {
+    const [updatedTrip] = await db
+      .update(trips)
+      .set({ itinerary })
+      .where(eq(trips.id, id))
+      .returning();
+    return updatedTrip;
+  }
+}
+// In-memory fallback for local development. When `USE_IN_MEMORY_DB` is set
+// the app will not attempt to query Postgres/SQLite and will instead store
+// data in memory. Useful for quickly running the app without a DB.
+export class InMemoryStorage implements IStorage {
+  private users: User[] = [];
+  private trips: Trip[] = [];
+  private nextId = 1;
+
+  async getUser(id: number): Promise<User | undefined> {
+    return this.users.find(u => u.id === id);
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    return this.users.find(u => u.username === username);
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const user: any = { id: this.nextId++, ...insertUser };
+    this.users.push(user);
+    return user;
+  }
+
+  async createTrip(trip: InsertTrip): Promise<Trip> {
+    const newTrip: any = {
+      id: this.nextId++,
+      ...trip,
+      feasibilityStatus: "pending",
+      feasibilityReport: null,
+      itinerary: null,
+      createdAt: new Date().toISOString(),
+    };
+    this.trips.push(newTrip);
+    return newTrip;
+  }
+
+  async getTrip(id: number): Promise<Trip | undefined> {
+    return this.trips.find(t => t.id === id);
+  }
+
+  async updateTripFeasibility(id: number, status: string, report: FeasibilityReport): Promise<Trip> {
+    const trip = this.trips.find(t => t.id === id) as any;
+    if (!trip) throw new Error("Trip not found");
+    trip.feasibilityStatus = status;
+    trip.feasibilityReport = report;
+    return trip;
+  }
+
+  async updateTripItinerary(id: number, itinerary: any): Promise<Trip> {
+    const trip = this.trips.find(t => t.id === id) as any;
+    if (!trip) throw new Error("Trip not found");
+    trip.itinerary = itinerary;
+    return trip;
+  }
 }
 
-export const storage = new DatabaseStorage();
+export const storage: IStorage = process.env.USE_IN_MEMORY_DB
+  ? new InMemoryStorage()
+  : new DatabaseStorage();

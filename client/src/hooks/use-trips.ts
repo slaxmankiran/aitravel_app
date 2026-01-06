@@ -20,10 +20,19 @@ export function useTrip(id: number) {
       return api.trips.get.responses[200].parse(data);
     },
     enabled: !!id && !isNaN(id),
-    // Poll while status is 'pending' to get AI results
+    // Poll while feasibility is pending OR itinerary is not yet ready
     refetchInterval: (query) => {
       const data = query.state.data as TripResponse | undefined;
-      return data?.feasibilityStatus === "pending" ? 2000 : false;
+      if (!data) return 2000; // Keep polling if no data yet
+      if (data.feasibilityStatus === "pending") return 2000; // Feasibility in progress
+      if (data.feasibilityStatus === "yes" || data.feasibilityStatus === "warning") {
+        // Feasibility done, but check if itinerary is ready
+        const itinerary = data.itinerary as any;
+        if (!itinerary || !itinerary.days || itinerary.days.length === 0) {
+          return 2000; // Keep polling until itinerary is ready
+        }
+      }
+      return false; // Stop polling - everything is ready
     }
   });
 }
@@ -40,6 +49,9 @@ export function useCreateTrip() {
         ...data,
         budget: Number(data.budget),
         groupSize: Number(data.groupSize),
+        adults: Number(data.adults) || 1,
+        children: Number(data.children) || 0,
+        infants: Number(data.infants) || 0,
       };
       
       // Client-side validation using the schema before sending

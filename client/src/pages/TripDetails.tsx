@@ -1,22 +1,862 @@
 import { useParams, Link } from "wouter";
 import { useTrip } from "@/hooks/use-trips";
-import { Loader2, ArrowLeft, Download, Share2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, ArrowLeft, Download, Share2, Check, MapPin, Calendar, Users, Wallet, Plane, FileText, Map, DollarSign, ClipboardList, ChevronRight, CheckCircle, AlertTriangle, XCircle, TrendingUp, TrendingDown, Navigation, Globe, Hotel, Sparkles, CircleCheck, Pencil, ShoppingCart, ExternalLink } from "lucide-react";
 import { FeasibilityReportView } from "@/components/FeasibilityReport";
 import { ItineraryTimeline } from "@/components/ItineraryTimeline";
+import { ItineraryMap } from "@/components/ItineraryMap";
+import { CostBreakdown } from "@/components/CostBreakdown";
+import { BookNow } from "@/components/BookNow";
+import { TripChat } from "@/components/TripChat";
 import { Button } from "@/components/ui/button";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import { useToast } from "@/hooks/use-toast";
+
+// Progress step icons
+const PROGRESS_ICONS = [
+  { icon: Globe, label: "Starting" },
+  { icon: FileText, label: "Feasibility" },
+  { icon: Plane, label: "Flights" },
+  { icon: Hotel, label: "Hotels" },
+  { icon: ClipboardList, label: "Itinerary" },
+  { icon: Sparkles, label: "Finalizing" },
+  { icon: CircleCheck, label: "Complete" },
+];
+
+// Hook to fetch progress
+function useTripProgress(tripId: number, isProcessing: boolean) {
+  return useQuery({
+    queryKey: ['trip-progress', tripId],
+    queryFn: async () => {
+      const res = await fetch(`/api/trips/${tripId}/progress`);
+      if (!res.ok) throw new Error("Failed to fetch progress");
+      return res.json();
+    },
+    enabled: isProcessing && !!tripId,
+    refetchInterval: isProcessing ? 500 : false, // Poll every 500ms while processing
+  });
+}
+
+// Currency symbol mapping
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$', INR: '₹', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿'
+};
+
+function getCurrencySymbol(currency?: string): string {
+  return CURRENCY_SYMBOLS[currency || 'USD'] || currency || '$';
+}
+
+// Curated high-quality Pexels images for destinations
+const DESTINATION_IMAGES: Record<string, string> = {
+  // Asia & Pacific
+  'tokyo': 'https://images.pexels.com/photos/2506923/pexels-photo-2506923.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'japan': 'https://images.pexels.com/photos/1440476/pexels-photo-1440476.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'kyoto': 'https://images.pexels.com/photos/1440476/pexels-photo-1440476.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'osaka': 'https://images.pexels.com/photos/2506923/pexels-photo-2506923.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'seoul': 'https://images.pexels.com/photos/237211/pexels-photo-237211.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'korea': 'https://images.pexels.com/photos/237211/pexels-photo-237211.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'bangkok': 'https://images.pexels.com/photos/1031659/pexels-photo-1031659.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'thailand': 'https://images.pexels.com/photos/1682748/pexels-photo-1682748.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'phuket': 'https://images.pexels.com/photos/1430672/pexels-photo-1430672.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'singapore': 'https://images.pexels.com/photos/777059/pexels-photo-777059.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'bali': 'https://images.pexels.com/photos/2166559/pexels-photo-2166559.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'indonesia': 'https://images.pexels.com/photos/2166559/pexels-photo-2166559.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'vietnam': 'https://images.pexels.com/photos/2835436/pexels-photo-2835436.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'hanoi': 'https://images.pexels.com/photos/2835436/pexels-photo-2835436.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'ho chi minh': 'https://images.pexels.com/photos/2835436/pexels-photo-2835436.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'kuala lumpur': 'https://images.pexels.com/photos/22804/pexels-photo.jpg?auto=compress&cs=tinysrgb&w=1920',
+  'malaysia': 'https://images.pexels.com/photos/22804/pexels-photo.jpg?auto=compress&cs=tinysrgb&w=1920',
+  'hong kong': 'https://images.pexels.com/photos/1738986/pexels-photo-1738986.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'manila': 'https://images.pexels.com/photos/2850347/pexels-photo-2850347.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'philippines': 'https://images.pexels.com/photos/2850347/pexels-photo-2850347.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'india': 'https://images.pexels.com/photos/1603650/pexels-photo-1603650.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'delhi': 'https://images.pexels.com/photos/1603650/pexels-photo-1603650.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'mumbai': 'https://images.pexels.com/photos/2104882/pexels-photo-2104882.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'jaipur': 'https://images.pexels.com/photos/3581364/pexels-photo-3581364.jpeg?auto=compress&cs=tinysrgb&w=1920',
+
+  // Oceania - New Zealand & Australia
+  'wellington': 'https://images.pexels.com/photos/5169056/pexels-photo-5169056.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'auckland': 'https://images.pexels.com/photos/5169050/pexels-photo-5169050.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'new zealand': 'https://images.pexels.com/photos/1659438/pexels-photo-1659438.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'queenstown': 'https://images.pexels.com/photos/1659438/pexels-photo-1659438.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'sydney': 'https://images.pexels.com/photos/995764/pexels-photo-995764.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'melbourne': 'https://images.pexels.com/photos/1968631/pexels-photo-1968631.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'australia': 'https://images.pexels.com/photos/2193300/pexels-photo-2193300.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'brisbane': 'https://images.pexels.com/photos/2193300/pexels-photo-2193300.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'perth': 'https://images.pexels.com/photos/2193300/pexels-photo-2193300.jpeg?auto=compress&cs=tinysrgb&w=1920',
+
+  // Europe
+  'paris': 'https://images.pexels.com/photos/338515/pexels-photo-338515.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'france': 'https://images.pexels.com/photos/699466/pexels-photo-699466.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'nice': 'https://images.pexels.com/photos/699466/pexels-photo-699466.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'london': 'https://images.pexels.com/photos/460672/pexels-photo-460672.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'uk': 'https://images.pexels.com/photos/460672/pexels-photo-460672.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'edinburgh': 'https://images.pexels.com/photos/5006822/pexels-photo-5006822.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'scotland': 'https://images.pexels.com/photos/5006822/pexels-photo-5006822.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'rome': 'https://images.pexels.com/photos/532263/pexels-photo-532263.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'italy': 'https://images.pexels.com/photos/1701595/pexels-photo-1701595.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'venice': 'https://images.pexels.com/photos/1796715/pexels-photo-1796715.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'florence': 'https://images.pexels.com/photos/2422461/pexels-photo-2422461.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'milan': 'https://images.pexels.com/photos/1701595/pexels-photo-1701595.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'barcelona': 'https://images.pexels.com/photos/1388030/pexels-photo-1388030.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'spain': 'https://images.pexels.com/photos/3757144/pexels-photo-3757144.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'madrid': 'https://images.pexels.com/photos/3757144/pexels-photo-3757144.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'berlin': 'https://images.pexels.com/photos/109629/pexels-photo-109629.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'germany': 'https://images.pexels.com/photos/109629/pexels-photo-109629.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'munich': 'https://images.pexels.com/photos/109629/pexels-photo-109629.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'amsterdam': 'https://images.pexels.com/photos/2031706/pexels-photo-2031706.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'netherlands': 'https://images.pexels.com/photos/2031706/pexels-photo-2031706.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'prague': 'https://images.pexels.com/photos/2346216/pexels-photo-2346216.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'czech': 'https://images.pexels.com/photos/2346216/pexels-photo-2346216.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'vienna': 'https://images.pexels.com/photos/2351425/pexels-photo-2351425.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'austria': 'https://images.pexels.com/photos/2351425/pexels-photo-2351425.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'budapest': 'https://images.pexels.com/photos/63328/budapest-hungary-tourism-europe-63328.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'hungary': 'https://images.pexels.com/photos/63328/budapest-hungary-tourism-europe-63328.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'lisbon': 'https://images.pexels.com/photos/1534560/pexels-photo-1534560.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'portugal': 'https://images.pexels.com/photos/1534560/pexels-photo-1534560.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'porto': 'https://images.pexels.com/photos/1534560/pexels-photo-1534560.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'switzerland': 'https://images.pexels.com/photos/1586298/pexels-photo-1586298.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'zurich': 'https://images.pexels.com/photos/1586298/pexels-photo-1586298.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'geneva': 'https://images.pexels.com/photos/1586298/pexels-photo-1586298.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'greece': 'https://images.pexels.com/photos/1285625/pexels-photo-1285625.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'athens': 'https://images.pexels.com/photos/772689/pexels-photo-772689.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'santorini': 'https://images.pexels.com/photos/1010657/pexels-photo-1010657.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'mykonos': 'https://images.pexels.com/photos/1010657/pexels-photo-1010657.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'istanbul': 'https://images.pexels.com/photos/3889704/pexels-photo-3889704.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'turkey': 'https://images.pexels.com/photos/3889704/pexels-photo-3889704.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'copenhagen': 'https://images.pexels.com/photos/2563683/pexels-photo-2563683.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'denmark': 'https://images.pexels.com/photos/2563683/pexels-photo-2563683.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'stockholm': 'https://images.pexels.com/photos/3274978/pexels-photo-3274978.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'sweden': 'https://images.pexels.com/photos/3274978/pexels-photo-3274978.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'oslo': 'https://images.pexels.com/photos/1559821/pexels-photo-1559821.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'norway': 'https://images.pexels.com/photos/1559821/pexels-photo-1559821.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'reykjavik': 'https://images.pexels.com/photos/2563681/pexels-photo-2563681.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'iceland': 'https://images.pexels.com/photos/2563681/pexels-photo-2563681.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'dublin': 'https://images.pexels.com/photos/2416653/pexels-photo-2416653.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'ireland': 'https://images.pexels.com/photos/2416653/pexels-photo-2416653.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'brussels': 'https://images.pexels.com/photos/2587166/pexels-photo-2587166.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'belgium': 'https://images.pexels.com/photos/2587166/pexels-photo-2587166.jpeg?auto=compress&cs=tinysrgb&w=1920',
+
+  // Americas
+  'new york': 'https://images.pexels.com/photos/802024/pexels-photo-802024.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'los angeles': 'https://images.pexels.com/photos/1486222/pexels-photo-1486222.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'san francisco': 'https://images.pexels.com/photos/1006965/pexels-photo-1006965.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'las vegas': 'https://images.pexels.com/photos/415999/pexels-photo-415999.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'miami': 'https://images.pexels.com/photos/421655/pexels-photo-421655.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'chicago': 'https://images.pexels.com/photos/1823681/pexels-photo-1823681.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'seattle': 'https://images.pexels.com/photos/2539665/pexels-photo-2539665.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'hawaii': 'https://images.pexels.com/photos/3601425/pexels-photo-3601425.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'honolulu': 'https://images.pexels.com/photos/3601425/pexels-photo-3601425.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'canada': 'https://images.pexels.com/photos/2662116/pexels-photo-2662116.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'toronto': 'https://images.pexels.com/photos/374870/pexels-photo-374870.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'vancouver': 'https://images.pexels.com/photos/2662116/pexels-photo-2662116.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'montreal': 'https://images.pexels.com/photos/374870/pexels-photo-374870.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'mexico': 'https://images.pexels.com/photos/3290068/pexels-photo-3290068.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'cancun': 'https://images.pexels.com/photos/3290068/pexels-photo-3290068.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'mexico city': 'https://images.pexels.com/photos/3290068/pexels-photo-3290068.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'rio': 'https://images.pexels.com/photos/1008155/pexels-photo-1008155.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'brazil': 'https://images.pexels.com/photos/1008155/pexels-photo-1008155.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'buenos aires': 'https://images.pexels.com/photos/1060803/pexels-photo-1060803.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'argentina': 'https://images.pexels.com/photos/1060803/pexels-photo-1060803.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'lima': 'https://images.pexels.com/photos/2929906/pexels-photo-2929906.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'peru': 'https://images.pexels.com/photos/2929906/pexels-photo-2929906.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'bogota': 'https://images.pexels.com/photos/2929906/pexels-photo-2929906.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'colombia': 'https://images.pexels.com/photos/2929906/pexels-photo-2929906.jpeg?auto=compress&cs=tinysrgb&w=1920',
+
+  // Middle East & Africa
+  'dubai': 'https://images.pexels.com/photos/1707310/pexels-photo-1707310.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'abu dhabi': 'https://images.pexels.com/photos/1707310/pexels-photo-1707310.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'uae': 'https://images.pexels.com/photos/1707310/pexels-photo-1707310.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'doha': 'https://images.pexels.com/photos/3551203/pexels-photo-3551203.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'qatar': 'https://images.pexels.com/photos/3551203/pexels-photo-3551203.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'tel aviv': 'https://images.pexels.com/photos/3355379/pexels-photo-3355379.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'israel': 'https://images.pexels.com/photos/3355379/pexels-photo-3355379.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'jerusalem': 'https://images.pexels.com/photos/3355379/pexels-photo-3355379.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'cairo': 'https://images.pexels.com/photos/3243027/pexels-photo-3243027.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'egypt': 'https://images.pexels.com/photos/3243027/pexels-photo-3243027.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'marrakech': 'https://images.pexels.com/photos/3889891/pexels-photo-3889891.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'morocco': 'https://images.pexels.com/photos/3889891/pexels-photo-3889891.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'cape town': 'https://images.pexels.com/photos/963713/pexels-photo-963713.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'south africa': 'https://images.pexels.com/photos/963713/pexels-photo-963713.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'johannesburg': 'https://images.pexels.com/photos/963713/pexels-photo-963713.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'nairobi': 'https://images.pexels.com/photos/3889742/pexels-photo-3889742.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'kenya': 'https://images.pexels.com/photos/3889742/pexels-photo-3889742.jpeg?auto=compress&cs=tinysrgb&w=1920',
+
+  // Island destinations
+  'maldives': 'https://images.pexels.com/photos/1287460/pexels-photo-1287460.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'fiji': 'https://images.pexels.com/photos/1287460/pexels-photo-1287460.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'mauritius': 'https://images.pexels.com/photos/1287460/pexels-photo-1287460.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  'seychelles': 'https://images.pexels.com/photos/1287460/pexels-photo-1287460.jpeg?auto=compress&cs=tinysrgb&w=1920',
+
+  'default': 'https://images.pexels.com/photos/3155666/pexels-photo-3155666.jpeg?auto=compress&cs=tinysrgb&w=1920',
+};
+
+function getDestinationImage(destination: string): string {
+  const destLower = destination.toLowerCase();
+  for (const [key, url] of Object.entries(DESTINATION_IMAGES)) {
+    if (destLower.includes(key)) return url;
+  }
+  return DESTINATION_IMAGES['default'];
+}
+
+type SectionType = 'analysis' | 'map' | 'budget' | 'itinerary' | 'booking' | null;
+
+// Animated background with floating travel icons
+function AnimatedBackground() {
+  const icons = [
+    { icon: Plane, delay: 0, x: 10, y: 20 },
+    { icon: Globe, delay: 1, x: 85, y: 15 },
+    { icon: MapPin, delay: 0.5, x: 70, y: 75 },
+    { icon: Calendar, delay: 1.5, x: 15, y: 80 },
+    { icon: Wallet, delay: 2, x: 50, y: 10 },
+    { icon: Hotel, delay: 0.8, x: 25, y: 50 },
+    { icon: Sparkles, delay: 1.2, x: 80, y: 45 },
+    { icon: Navigation, delay: 1.8, x: 40, y: 85 },
+  ];
+
+  return (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {/* Animated gradient overlay */}
+      <motion.div
+        className="absolute inset-0 bg-gradient-to-r from-primary/10 via-transparent to-emerald-500/10"
+        animate={{
+          opacity: [0.3, 0.5, 0.3],
+          backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'],
+        }}
+        transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+      />
+
+      {/* Floating icons */}
+      {icons.map((item, idx) => {
+        const Icon = item.icon;
+        return (
+          <motion.div
+            key={idx}
+            className="absolute"
+            style={{ left: `${item.x}%`, top: `${item.y}%` }}
+            initial={{ opacity: 0, scale: 0.5 }}
+            animate={{
+              opacity: [0.15, 0.3, 0.15],
+              y: [-20, 20, -20],
+              rotate: [-10, 10, -10],
+              scale: [1, 1.1, 1],
+            }}
+            transition={{
+              duration: 6 + idx * 0.5,
+              delay: item.delay,
+              repeat: Infinity,
+              ease: "easeInOut",
+            }}
+          >
+            <Icon className="w-8 h-8 md:w-12 md:h-12 text-white/20" />
+          </motion.div>
+        );
+      })}
+
+      {/* Traveling plane animation */}
+      <motion.div
+        className="absolute"
+        initial={{ left: '-10%', top: '30%' }}
+        animate={{ left: '110%', top: '25%' }}
+        transition={{
+          duration: 12,
+          repeat: Infinity,
+          ease: "linear",
+          repeatDelay: 3,
+        }}
+      >
+        <Plane className="w-6 h-6 text-white/30 transform -rotate-12" />
+      </motion.div>
+
+      {/* Second plane going opposite direction */}
+      <motion.div
+        className="absolute"
+        initial={{ right: '-10%', top: '60%' }}
+        animate={{ right: '110%', top: '55%' }}
+        transition={{
+          duration: 15,
+          repeat: Infinity,
+          ease: "linear",
+          delay: 5,
+          repeatDelay: 4,
+        }}
+      >
+        <Plane className="w-5 h-5 text-white/20 transform rotate-[168deg]" />
+      </motion.div>
+
+      {/* Pulsing circles */}
+      {[1, 2, 3].map((i) => (
+        <motion.div
+          key={i}
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/10"
+          style={{ width: 100 + i * 100, height: 100 + i * 100 }}
+          animate={{
+            scale: [1, 1.2, 1],
+            opacity: [0.1, 0.2, 0.1],
+          }}
+          transition={{
+            duration: 4,
+            delay: i * 0.8,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Travel tips that rotate while waiting
+const TRAVEL_TIPS = [
+  "Pack a portable charger - you'll thank yourself later!",
+  "Take photos of your passport and travel documents",
+  "Learn a few phrases in the local language",
+  "Book popular attractions in advance to skip lines",
+  "Try local street food for authentic experiences",
+  "Keep copies of important documents in your email",
+  "Download offline maps before you go",
+  "Check visa requirements at least 3 months ahead",
+  "Travel insurance can save you thousands",
+  "Early morning is the best time for tourist spots",
+];
+
+// Progress indicator component
+function ProgressIndicator({ step, message, details, elapsed, percentComplete }: {
+  step: number;
+  message: string;
+  details?: string;
+  elapsed: number;
+  percentComplete: number;
+}) {
+  // Rotate travel tips every 5 seconds
+  const [tipIndex, setTipIndex] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTipIndex((prev) => (prev + 1) % TRAVEL_TIPS.length);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="bg-white/10 backdrop-blur-xl rounded-2xl p-8 text-center border border-white/20 relative z-10">
+      {/* Step indicators */}
+      <div className="flex justify-center items-center gap-2 mb-6">
+        {PROGRESS_ICONS.slice(0, 6).map((item, idx) => {
+          const Icon = item.icon;
+          const isActive = idx === step;
+          const isComplete = idx < step;
+          return (
+            <motion.div
+              key={idx}
+              className={`relative flex flex-col items-center`}
+              initial={{ scale: 0.8, opacity: 0.5 }}
+              animate={{
+                scale: isActive ? 1.2 : 1,
+                opacity: isComplete || isActive ? 1 : 0.4,
+              }}
+              transition={{ duration: 0.3 }}
+            >
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                isComplete ? 'bg-emerald-500/30 border-2 border-emerald-400' :
+                isActive ? 'bg-primary/30 border-2 border-primary animate-pulse' :
+                'bg-white/10 border border-white/20'
+              }`}>
+                {isComplete ? (
+                  <Check className="w-5 h-5 text-emerald-400" />
+                ) : (
+                  <Icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-white/60'}`} />
+                )}
+              </div>
+              <span className={`text-[10px] mt-1.5 font-medium ${
+                isActive ? 'text-white' : isComplete ? 'text-emerald-400' : 'text-white/40'
+              }`}>
+                {item.label}
+              </span>
+              {/* Connector line */}
+              {idx < 5 && (
+                <div className={`absolute top-5 left-[calc(100%+2px)] w-4 h-0.5 ${
+                  isComplete ? 'bg-emerald-400' : 'bg-white/20'
+                }`} />
+              )}
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {/* Animated icon */}
+      <motion.div
+        className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center"
+        animate={{ rotate: [0, 5, -5, 0] }}
+        transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+      >
+        {step < 6 ? (
+          <Loader2 className="w-10 h-10 text-primary animate-spin" />
+        ) : (
+          <CircleCheck className="w-10 h-10 text-emerald-400" />
+        )}
+      </motion.div>
+
+      {/* Progress bar */}
+      <div className="w-full max-w-md mx-auto h-2 bg-white/10 rounded-full mb-4 overflow-hidden">
+        <motion.div
+          className="h-full bg-gradient-to-r from-primary to-emerald-400 rounded-full"
+          initial={{ width: 0 }}
+          animate={{ width: `${percentComplete}%` }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+        />
+      </div>
+
+      {/* Status text */}
+      <motion.h2
+        key={message}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="text-xl font-bold text-white mb-2"
+      >
+        {message}
+      </motion.h2>
+      {details && (
+        <motion.p
+          key={details}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="text-white/60 text-sm mb-2"
+        >
+          {details}
+        </motion.p>
+      )}
+      <p className="text-white/40 text-xs">
+        {elapsed > 0 ? `${elapsed}s elapsed` : 'Starting...'} • {percentComplete}% complete
+      </p>
+
+      {/* Travel tip */}
+      <motion.div
+        className="mt-6 pt-6 border-t border-white/10"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 1 }}
+      >
+        <p className="text-white/40 text-xs mb-2">💡 Travel Tip</p>
+        <AnimatePresence mode="wait">
+          <motion.p
+            key={tipIndex}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="text-white/70 text-sm italic"
+          >
+            "{TRAVEL_TIPS[tipIndex]}"
+          </motion.p>
+        </AnimatePresence>
+      </motion.div>
+    </div>
+  );
+}
 
 export default function TripDetails() {
   const { id } = useParams();
-  const { data: trip, isLoading, error } = useTrip(Number(id));
+  const queryClient = useQueryClient();
+  const { data: trip, isLoading, error, refetch } = useTrip(Number(id));
+  const [copied, setCopied] = useState(false);
+  const [highlightedLocation, setHighlightedLocation] = useState<string | null>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [expandedSection, setExpandedSection] = useState<SectionType>(null);
+  const [localItinerary, setLocalItinerary] = useState<any>(null);
+  const [localBudgetBreakdown, setLocalBudgetBreakdown] = useState<any>(null);
+  const [updateKey, setUpdateKey] = useState(0); // Force re-render key
+  const [showUpdateAnimation, setShowUpdateAnimation] = useState(false); // Animation trigger for updates
+  const { toast } = useToast();
+
+  // Only reset local state when navigating to a different trip (id changes)
+  // Don't reset when trip data is refetched - we want to keep chat updates
+  useEffect(() => {
+    setLocalItinerary(null);
+    setLocalBudgetBreakdown(null);
+  }, [id]);
+
+  // Handle real-time updates from chat assistant
+  const handleTripUpdate = useCallback((updatedData: {
+    itinerary?: any;
+    budgetBreakdown?: any;
+    mapMarkers?: any[];
+  }) => {
+    console.log('[TripDetails] Received update from chat:', updatedData);
+
+    // Immediately update local state for instant UI feedback
+    if (updatedData.itinerary) {
+      setLocalItinerary(updatedData.itinerary);
+    }
+    if (updatedData.budgetBreakdown) {
+      setLocalBudgetBreakdown(updatedData.budgetBreakdown);
+    }
+
+    // Trigger update animation
+    setShowUpdateAnimation(true);
+    setTimeout(() => setShowUpdateAnimation(false), 2000); // Animation lasts 2 seconds
+
+    // Force component re-render
+    setUpdateKey(prev => prev + 1);
+
+    // Invalidate and refetch the trip query to sync with server
+    queryClient.invalidateQueries({ queryKey: ['/api/trips/:id', Number(id)] });
+    refetch();
+  }, [refetch, queryClient, id]);
+
+  // Check if trip is still being processed
+  const isProcessing = trip?.feasibilityStatus === 'pending' ||
+    (trip?.feasibilityStatus === 'yes' && !trip?.itinerary) ||
+    (trip?.feasibilityStatus === 'warning' && !trip?.itinerary);
+
+  // Fetch progress while processing
+  const { data: progress } = useTripProgress(Number(id), isProcessing);
+
+  const handleLocationSelect = useCallback((locationId: string) => {
+    setHighlightedLocation(locationId);
+    // Switch to map when a location is selected from itinerary
+    if (expandedSection === 'itinerary') {
+      setExpandedSection('map');
+    }
+  }, [expandedSection]);
+
+  // Extract data for preview cards (use local updates for immediate feedback)
+  const itineraryData = localItinerary || trip?.itinerary as any;
+  const feasibilityReport = trip?.feasibilityReport as any;
+  const costBreakdown = localBudgetBreakdown || itineraryData?.costBreakdown;
+
+  const daysCount = itineraryData?.days?.length || 0;
+  const activitiesCount = itineraryData?.days?.reduce((sum: number, d: any) => sum + (d.activities?.length || 0), 0) || 0;
+  const locationsCount = itineraryData?.days?.reduce((sum: number, d: any) =>
+    sum + (d.activities?.filter((a: any) => a.coordinates?.lat).length || 0), 0) || 0;
+
+  const backgroundUrl = useMemo(() =>
+    trip ? getDestinationImage(trip.destination) : DESTINATION_IMAGES['default'],
+    [trip?.destination]
+  );
+
+  // Preload background image
+  useEffect(() => {
+    if (backgroundUrl) {
+      const img = new Image();
+      img.onload = () => setImageLoaded(true);
+      img.src = backgroundUrl;
+    }
+  }, [backgroundUrl]);
+
+  const handleShare = async () => {
+    const url = window.location.href;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `Trip to ${trip?.destination}`,
+          text: `Check out my trip plan to ${trip?.destination}!`,
+          url,
+        });
+      } else {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        toast({ title: "Link copied!", description: "Trip URL copied to clipboard" });
+        setTimeout(() => setCopied(false), 2000);
+      }
+    } catch (err) {
+      console.error("Share failed:", err);
+    }
+  };
+
+  const handleExport = () => {
+    if (!trip) return;
+    const exportData = {
+      destination: trip.destination,
+      dates: trip.dates,
+      budget: trip.budget,
+      groupSize: trip.groupSize,
+      passport: trip.passport,
+      feasibilityStatus: trip.feasibilityStatus,
+      feasibilityReport: trip.feasibilityReport,
+      itinerary: trip.itinerary,
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trip-${trip.destination.replace(/[^a-z0-9]/gi, "-").toLowerCase()}-${trip.id}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast({ title: "Exported!", description: "Trip data downloaded as JSON" });
+  };
+
+  const handleExportPDF = () => {
+    if (!trip) return;
+
+    const itinerary = localItinerary || trip.itinerary as any;
+    const breakdown = localBudgetBreakdown || itinerary?.costBreakdown;
+    const feasibility = trip.feasibilityReport as any;
+    const currencySymbol = breakdown?.currencySymbol || getCurrencySymbol(trip.currency ?? undefined);
+    const exportDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const daysCount = itinerary?.days?.length || 0;
+    const activitiesCount = itinerary?.days?.reduce((sum: number, d: any) => sum + (d.activities?.length || 0), 0) || 0;
+
+    // Create professional printable HTML content
+    const printContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Trip to ${trip.destination} - VoyageAI Travel Plan</title>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; color: #1a1a2e; line-height: 1.6; background: #fff; }
+
+          /* Cover Page */
+          .cover { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; padding: 60px 40px; page-break-after: always; }
+          .logo { font-size: 32px; font-weight: 700; letter-spacing: -1px; margin-bottom: 60px; }
+          .logo span { background: white; color: #667eea; padding: 8px 16px; border-radius: 12px; margin-right: 10px; }
+          .cover h1 { font-size: 48px; font-weight: 700; margin-bottom: 20px; text-shadow: 0 2px 20px rgba(0,0,0,0.2); }
+          .cover .subtitle { font-size: 20px; opacity: 0.9; margin-bottom: 40px; }
+          .cover-meta { display: flex; gap: 30px; font-size: 16px; opacity: 0.9; }
+          .cover-meta span { display: flex; align-items: center; gap: 8px; }
+          .cover-footer { margin-top: auto; padding-top: 60px; font-size: 14px; opacity: 0.7; }
+
+          /* Content Pages */
+          .content { padding: 50px; }
+          .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; padding-bottom: 15px; border-bottom: 2px solid #667eea; }
+          .page-header .brand { font-weight: 600; color: #667eea; font-size: 14px; }
+          .page-header .page-title { font-size: 12px; color: #888; }
+
+          .section { margin-bottom: 40px; }
+          .section-title { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+          .section-title::before { content: ''; width: 4px; height: 24px; background: linear-gradient(135deg, #667eea, #764ba2); border-radius: 2px; }
+
+          /* Trip Overview */
+          .overview-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
+          .overview-item { background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%); padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #e8e8ff; }
+          .overview-item .icon { font-size: 24px; margin-bottom: 8px; }
+          .overview-item .value { font-size: 24px; font-weight: 700; color: #667eea; }
+          .overview-item .label { font-size: 12px; color: #666; margin-top: 4px; }
+
+          /* Budget Section */
+          .budget-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+          .budget-card { background: #f8f9fa; padding: 20px; border-radius: 12px; border-left: 4px solid #667eea; }
+          .budget-card .label { font-size: 13px; color: #666; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+          .budget-card .amount { font-size: 28px; font-weight: 700; color: #1a1a2e; margin-top: 5px; }
+          .budget-card .note { font-size: 12px; color: #888; margin-top: 5px; }
+          .budget-total { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 25px; border-radius: 12px; text-align: center; margin-top: 20px; }
+          .budget-total .label { font-size: 14px; opacity: 0.9; }
+          .budget-total .amount { font-size: 36px; font-weight: 700; margin-top: 5px; }
+          .budget-total .status { font-size: 14px; margin-top: 10px; padding: 5px 15px; background: rgba(255,255,255,0.2); border-radius: 20px; display: inline-block; }
+
+          /* Itinerary */
+          .day-section { margin-bottom: 30px; page-break-inside: avoid; }
+          .day-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px 20px; border-radius: 12px 12px 0 0; display: flex; justify-content: space-between; align-items: center; }
+          .day-header h3 { font-size: 18px; font-weight: 600; }
+          .day-header .date { font-size: 14px; opacity: 0.9; }
+          .day-activities { background: #f8f9fa; border-radius: 0 0 12px 12px; overflow: hidden; }
+          .activity-item { padding: 15px 20px; display: flex; align-items: flex-start; gap: 15px; border-bottom: 1px solid #eee; }
+          .activity-item:last-child { border-bottom: none; }
+          .activity-time { background: #667eea; color: white; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; min-width: 70px; text-align: center; }
+          .activity-details { flex: 1; }
+          .activity-name { font-weight: 600; color: #1a1a2e; font-size: 15px; }
+          .activity-location { font-size: 13px; color: #666; margin-top: 3px; }
+          .activity-cost { font-weight: 700; color: #059669; font-size: 15px; }
+
+          /* Feasibility */
+          .feasibility-card { background: #f0fdf4; border: 1px solid #bbf7d0; padding: 20px; border-radius: 12px; }
+          .feasibility-card.warning { background: #fffbeb; border-color: #fde68a; }
+          .feasibility-card.danger { background: #fef2f2; border-color: #fecaca; }
+          .feasibility-status { font-size: 18px; font-weight: 600; margin-bottom: 10px; }
+          .feasibility-summary { font-size: 14px; color: #444; }
+
+          /* Footer */
+          .page-footer { text-align: center; padding: 30px; border-top: 1px solid #eee; margin-top: 40px; font-size: 12px; color: #888; }
+          .page-footer .brand { color: #667eea; font-weight: 600; }
+
+          @media print {
+            body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .cover { min-height: auto; padding: 40px; }
+          }
+        </style>
+      </head>
+      <body>
+        <!-- Cover Page -->
+        <div class="cover">
+          <div class="logo"><span>V</span>VoyageAI</div>
+          <h1>${trip.destination}</h1>
+          <p class="subtitle">Your Personalized Travel Plan</p>
+          <div class="cover-meta">
+            <span>📅 ${trip.dates}</span>
+            <span>👥 ${trip.groupSize} Traveler${trip.groupSize > 1 ? 's' : ''}</span>
+            <span>🗓️ ${daysCount} Days</span>
+            <span>📍 ${activitiesCount} Activities</span>
+          </div>
+          <div class="cover-footer">
+            <p>Generated on ${exportDate}</p>
+            <p>AI-Powered Travel Planning by VoyageAI</p>
+          </div>
+        </div>
+
+        <!-- Trip Overview -->
+        <div class="content">
+          <div class="page-header">
+            <div class="brand">VoyageAI Travel Plan</div>
+            <div class="page-title">${trip.destination} • ${trip.dates}</div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Trip Overview</div>
+            <div class="overview-grid">
+              <div class="overview-item">
+                <div class="icon">📍</div>
+                <div class="value">${trip.destination.split(',')[0]}</div>
+                <div class="label">Destination</div>
+              </div>
+              <div class="overview-item">
+                <div class="icon">🗓️</div>
+                <div class="value">${daysCount}</div>
+                <div class="label">Days</div>
+              </div>
+              <div class="overview-item">
+                <div class="icon">👥</div>
+                <div class="value">${trip.groupSize}</div>
+                <div class="label">Travelers</div>
+              </div>
+              <div class="overview-item">
+                <div class="icon">💰</div>
+                <div class="value">${currencySymbol}${trip.budget?.toLocaleString()}</div>
+                <div class="label">Budget</div>
+              </div>
+            </div>
+          </div>
+
+          ${feasibility ? `
+          <div class="section">
+            <div class="section-title">Trip Feasibility Analysis</div>
+            <div class="feasibility-card ${feasibility.overall === 'warning' ? 'warning' : feasibility.overall === 'no' ? 'danger' : ''}">
+              <div class="feasibility-status">
+                ${feasibility.overall === 'yes' ? '✅ Trip is Feasible' : feasibility.overall === 'warning' ? '⚠️ Some Considerations' : '❌ Not Recommended'}
+              </div>
+              <div class="feasibility-summary">${feasibility.summary || ''}</div>
+            </div>
+          </div>
+          ` : ''}
+
+          ${breakdown ? `
+          <div class="section">
+            <div class="section-title">Budget Breakdown</div>
+            <div class="budget-grid">
+              ${breakdown.flights ? `
+              <div class="budget-card">
+                <div class="label">✈️ Flights</div>
+                <div class="amount">${currencySymbol}${breakdown.flights.total?.toLocaleString() || 0}</div>
+                <div class="note">${breakdown.flights.note || 'Round-trip flights'}</div>
+              </div>` : ''}
+              ${breakdown.accommodation ? `
+              <div class="budget-card">
+                <div class="label">🏨 Accommodation</div>
+                <div class="amount">${currencySymbol}${breakdown.accommodation.total?.toLocaleString() || 0}</div>
+                <div class="note">${breakdown.accommodation.nights || daysCount - 1} nights</div>
+              </div>` : ''}
+              ${breakdown.food ? `
+              <div class="budget-card">
+                <div class="label">🍽️ Food & Dining</div>
+                <div class="amount">${currencySymbol}${breakdown.food.total?.toLocaleString() || 0}</div>
+                <div class="note">${currencySymbol}${breakdown.food.perDay || Math.round((breakdown.food.total || 0) / daysCount)} per day</div>
+              </div>` : ''}
+              ${breakdown.activities ? `
+              <div class="budget-card">
+                <div class="label">🎯 Activities</div>
+                <div class="amount">${currencySymbol}${breakdown.activities.total?.toLocaleString() || 0}</div>
+                <div class="note">Tours, attractions & experiences</div>
+              </div>` : ''}
+              ${breakdown.localTransport ? `
+              <div class="budget-card">
+                <div class="label">🚕 Local Transport</div>
+                <div class="amount">${currencySymbol}${breakdown.localTransport.total?.toLocaleString() || 0}</div>
+                <div class="note">Metro, taxis, buses</div>
+              </div>` : ''}
+              ${breakdown.misc ? `
+              <div class="budget-card">
+                <div class="label">📦 Miscellaneous</div>
+                <div class="amount">${currencySymbol}${breakdown.misc.total?.toLocaleString() || 0}</div>
+                <div class="note">Tips, souvenirs, extras</div>
+              </div>` : ''}
+            </div>
+            <div class="budget-total">
+              <div class="label">Total Estimated Cost</div>
+              <div class="amount">${currencySymbol}${(breakdown.grandTotal || breakdown.totalSpent || 0).toLocaleString()}</div>
+              <div class="status">${breakdown.budgetStatus === 'within_budget' ? '✓ Within Budget' : breakdown.budgetStatus === 'tight' ? '⚡ Tight Budget' : '⚠️ Over Budget'}</div>
+            </div>
+          </div>
+          ` : ''}
+
+          ${itinerary?.days?.length > 0 ? `
+          <div class="section" style="page-break-before: always;">
+            <div class="section-title">Day-by-Day Itinerary</div>
+            ${itinerary.days.map((day: any, index: number) => `
+              <div class="day-section">
+                <div class="day-header">
+                  <h3>Day ${day.day || day.dayNumber || index + 1}: ${day.title || 'Exploring ' + trip.destination}</h3>
+                  <div class="date">${day.date || ''}</div>
+                </div>
+                <div class="day-activities">
+                  ${(day.activities || []).map((act: any) => `
+                    <div class="activity-item">
+                      <div class="activity-time">${act.time || '—'}</div>
+                      <div class="activity-details">
+                        <div class="activity-name">${act.name || act.title || act.description || 'Activity'}</div>
+                        <div class="activity-location">${act.location || ''}</div>
+                      </div>
+                      ${act.estimatedCost || act.cost ? `<div class="activity-cost">${currencySymbol}${act.estimatedCost || act.cost}</div>` : ''}
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          ` : ''}
+
+          <div class="page-footer">
+            <p>This travel plan was generated by <span class="brand">VoyageAI</span></p>
+            <p>AI-Powered Travel Planning • voyageai.com</p>
+            <p style="margin-top: 10px;">Generated on ${exportDate} • Trip ID: #${trip.id}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Open print dialog
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(printContent);
+      printWindow.document.close();
+      printWindow.onload = () => {
+        printWindow.print();
+      };
+    }
+    toast({ title: "PDF Export", description: "Print dialog opened - select 'Save as PDF'" });
+  };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
-        <Loader2 className="w-12 h-12 text-primary animate-spin mb-4" />
-        <h2 className="text-xl font-display font-semibold text-slate-900">Analyzing Your Trip...</h2>
-        <p className="text-slate-500 max-w-md text-center mt-2">
-          We're checking 150+ visa policies, live flight prices, and safety advisories for you.
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+        >
+          <Plane className="w-16 h-16 text-primary" />
+        </motion.div>
+        <motion.h2
+          className="text-2xl font-display font-bold text-white mt-6"
+          animate={{ opacity: [0.5, 1, 0.5] }}
+          transition={{ repeat: Infinity, duration: 2 }}
+        >
+          Planning Your Adventure...
+        </motion.h2>
+        <p className="text-slate-400 max-w-md text-center mt-3">
+          Analyzing visa requirements, checking prices, and crafting your perfect itinerary
         </p>
       </div>
     );
@@ -24,11 +864,14 @@ export default function TripDetails() {
 
   if (error || !trip) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-slate-900 mb-2">Trip Not Found</h1>
+          <h1 className="text-3xl font-bold text-white mb-4">Trip Not Found</h1>
+          <p className="text-slate-400 mb-6">This trip doesn't exist or has been removed.</p>
           <Link href="/">
-            <Button variant="link">Go Back Home</Button>
+            <Button className="bg-white text-slate-900 hover:bg-slate-100">
+              <ArrowLeft className="w-4 h-4 mr-2" /> Back to Home
+            </Button>
           </Link>
         </div>
       </div>
@@ -38,81 +881,444 @@ export default function TripDetails() {
   const isFeasible = trip.feasibilityStatus === 'yes' || trip.feasibilityStatus === 'warning';
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
-        <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+    <div className="h-screen flex flex-col overflow-hidden">
+      {/* Full-Page Fixed Background */}
+      <div className="fixed inset-0 z-0">
+        <div
+          className={`absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-1000 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+          style={{ backgroundImage: `url(${backgroundUrl})` }}
+        />
+        {!imageLoaded && (
+          <div className="absolute inset-0 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900 animate-pulse" />
+        )}
+        <div className="absolute inset-0 bg-black/60" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
+      </div>
+
+      {/* Fixed Header */}
+      <header className="relative z-50 bg-black/20 backdrop-blur-md flex-shrink-0">
+        <div className="container mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            {/* Logo */}
             <Link href="/">
-              <Button variant="ghost" size="icon" className="rounded-full">
-                <ArrowLeft className="w-5 h-5" />
-              </Button>
+              <div className="flex items-center gap-2 cursor-pointer group">
+                <div className="w-8 h-8 rounded-lg bg-white/20 backdrop-blur-md flex items-center justify-center text-white font-bold font-display shadow-lg group-hover:bg-white/30 transition-colors">
+                  V
+                </div>
+                <span className="font-display font-semibold text-lg tracking-tight text-white/90 group-hover:text-white transition-colors hidden sm:block">VoyageAI</span>
+              </div>
             </Link>
-            <div>
-              <h1 className="text-lg font-bold font-display text-slate-900">{trip.destination}</h1>
-              <p className="text-xs text-slate-500">{trip.dates} • {trip.budget} USD</p>
+
+            {/* Actions - Consistent styling */}
+            <div className="flex items-center gap-2">
+              {/* Home Button */}
+              <Link href="/">
+                <Button size="sm" variant="ghost" className="bg-white/10 text-white hover:bg-white/20 rounded-full px-3 backdrop-blur-sm border border-white/10">
+                  <ArrowLeft className="w-4 h-4 mr-1" /> <span className="hidden sm:inline">Home</span>
+                </Button>
+              </Link>
+
+              {/* Edit Trip */}
+              <Link href={`/create?edit=${trip.id}&passport=${encodeURIComponent(trip.passport || '')}&origin=${encodeURIComponent(trip.origin || '')}&destination=${encodeURIComponent(trip.destination || '')}&dates=${encodeURIComponent(trip.dates || '')}&budget=${trip.budget || ''}&currency=${trip.currency || 'USD'}&adults=${trip.adults || 1}&children=${trip.children || 0}&infants=${trip.infants || 0}`}>
+                <Button size="sm" className="bg-white/10 hover:bg-white/20 text-white rounded-full px-3 backdrop-blur-sm border border-white/10">
+                  <Pencil className="w-4 h-4 mr-1" /> <span className="hidden sm:inline">Edit</span>
+                </Button>
+              </Link>
+
+              {/* Share Button */}
+              <Button size="sm" variant="ghost" className="bg-white/10 text-white hover:bg-white/20 rounded-full px-3 backdrop-blur-sm border border-white/10" onClick={handleShare}>
+                {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+                <span className="hidden sm:inline ml-1">Share</span>
+              </Button>
+
+              {/* Export to PDF Button */}
+              <Button size="sm" variant="ghost" className="bg-white/10 text-white hover:bg-white/20 rounded-full px-3 backdrop-blur-sm border border-white/10" onClick={handleExportPDF}>
+                <Download className="w-4 h-4" />
+                <span className="hidden sm:inline ml-1">PDF</span>
+              </Button>
             </div>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="hidden sm:flex">
-              <Share2 className="w-4 h-4 mr-2" /> Share
-            </Button>
-            <Button variant="outline" size="sm" className="hidden sm:flex">
-              <Download className="w-4 h-4 mr-2" /> Export
-            </Button>
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 max-w-5xl">
-        {/* Pending State */}
-        {trip.feasibilityStatus === 'pending' && (
-           <div className="text-center py-20">
-             <Loader2 className="w-16 h-16 text-primary animate-spin mx-auto mb-6" />
-             <h2 className="text-2xl font-bold mb-2">Finalizing Report</h2>
-             <p className="text-muted-foreground">Almost there...</p>
-           </div>
-        )}
+      {/* Main Content Area */}
+      <main className="relative z-10 flex-1 flex flex-col min-h-0 p-4 overflow-auto custom-scrollbar">
+        <div className="container mx-auto max-w-6xl">
+          <AnimatePresence mode="wait">
+            {/* Preview Cards Grid - Show when no section is expanded */}
+            {expandedSection === null && (
+              <motion.div
+                key="cards"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="space-y-6"
+              >
+                {/* Hero Section */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-center py-8"
+                >
+                  <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm rounded-full px-4 py-1.5 mb-4">
+                    <Plane className="w-4 h-4 text-white" />
+                    <span className="text-white/90 text-sm font-medium">Your Trip Plan</span>
+                  </div>
+                  <h1 className="text-4xl md:text-5xl font-display font-bold text-white drop-shadow-lg mb-4">
+                    {trip.destination}
+                  </h1>
+                  <div className="flex items-center justify-center gap-6 text-white/80 text-sm">
+                    <span className="flex items-center gap-2">
+                      <Calendar className="w-4 h-4" />
+                      {trip.dates}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <Users className="w-4 h-4" />
+                      {costBreakdown?.travelers?.note || `${trip.groupSize} traveler${trip.groupSize > 1 ? 's' : ''}`}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <Wallet className="w-4 h-4" />
+                      {getCurrencySymbol(trip.currency ?? undefined)}{trip.budget.toLocaleString()} budget
+                    </span>
+                  </div>
+                </motion.div>
 
-        {/* Report & Itinerary */}
-        {trip.feasibilityStatus !== 'pending' && (
-          <div className="space-y-12">
-            <section>
-              <h2 className="text-2xl font-display font-bold text-slate-900 mb-6">Feasibility Report</h2>
-              <FeasibilityReportView trip={trip} />
-            </section>
-            
-            {isFeasible ? (
-              <motion.section 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.5, duration: 0.8 }}
-              >
-                <div className="flex items-center justify-between mb-8 border-t border-slate-200 pt-12">
-                   <h2 className="text-2xl font-display font-bold text-slate-900">Proposed Itinerary</h2>
-                   <div className="text-sm text-muted-foreground">Generated by GPT-5.1</div>
-                </div>
-                <ItineraryTimeline trip={trip} />
-              </motion.section>
-            ) : (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="bg-red-50 border border-red-100 rounded-2xl p-8 text-center mt-12"
-              >
-                <h3 className="text-xl font-bold text-red-800 mb-2">Itinerary Generation Paused</h3>
-                <p className="text-red-600 mb-6">
-                  Due to the critical issues identified in the feasibility report, we haven't generated a detailed itinerary yet. 
-                  We recommend adjusting your budget or destination.
-                </p>
-                <Link href="/create">
-                   <Button variant="destructive">Adjust Trip Parameters</Button>
-                </Link>
+                {isProcessing ? (
+                  <div className="relative">
+                    {/* Animated background while processing */}
+                    <AnimatedBackground />
+                    <ProgressIndicator
+                      step={progress?.step ?? 0}
+                      message={progress?.message ?? "Analyzing your trip..."}
+                      details={progress?.details}
+                      elapsed={progress?.elapsed ?? 0}
+                      percentComplete={progress?.percentComplete ?? 0}
+                    />
+                  </div>
+                ) : (
+                  /* Preview Cards Grid */
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Analysis Card */}
+                    <motion.button
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.1 }}
+                      onClick={() => setExpandedSection('analysis')}
+                      className="group bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20 hover:bg-white/20 hover:border-white/30 transition-all text-left"
+                    >
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="p-3 rounded-xl bg-emerald-500/20">
+                          <FileText className="w-6 h-6 text-emerald-400" />
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white/80 group-hover:translate-x-1 transition-all" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">Trip Analysis</h3>
+                      <p className="text-white/60 text-sm mb-4">Visa requirements, safety info, and trip feasibility</p>
+                      {/* Status Preview */}
+                      <div className="flex items-center gap-2">
+                        {trip.feasibilityStatus === 'yes' && (
+                          <>
+                            <CheckCircle className="w-5 h-5 text-emerald-400" />
+                            <span className="text-emerald-400 font-medium">Good to Go!</span>
+                            {feasibilityReport?.score && (
+                              <span className="ml-auto bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full text-xs font-medium">
+                                {feasibilityReport.score}/100
+                              </span>
+                            )}
+                          </>
+                        )}
+                        {trip.feasibilityStatus === 'warning' && (
+                          <>
+                            <AlertTriangle className="w-5 h-5 text-amber-400" />
+                            <span className="text-amber-400 font-medium">Some Considerations</span>
+                          </>
+                        )}
+                        {trip.feasibilityStatus === 'no' && (
+                          <>
+                            <XCircle className="w-5 h-5 text-red-400" />
+                            <span className="text-red-400 font-medium">Issues Found</span>
+                          </>
+                        )}
+                      </div>
+                    </motion.button>
+
+                    {/* Map Card */}
+                    <motion.button
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.2 }}
+                      onClick={() => isFeasible && setExpandedSection('map')}
+                      disabled={!isFeasible}
+                      className={`group bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20 transition-all text-left ${
+                        isFeasible ? 'hover:bg-white/20 hover:border-white/30' : 'opacity-50 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="p-3 rounded-xl bg-blue-500/20">
+                          <Map className="w-6 h-6 text-blue-400" />
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white/80 group-hover:translate-x-1 transition-all" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">Interactive Map</h3>
+                      <p className="text-white/60 text-sm mb-4">Explore all your destinations on an interactive map</p>
+                      {/* Stats Preview */}
+                      <div className={`flex items-center gap-4 px-3 py-2 rounded-lg transition-all duration-500 ${
+                        showUpdateAnimation ? 'bg-emerald-500/30 ring-2 ring-emerald-400/50 animate-pulse' : ''
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          <Navigation className="w-4 h-4 text-blue-400" />
+                          <span className={`text-sm transition-all duration-300 ${showUpdateAnimation ? 'text-emerald-300 font-semibold' : 'text-white/80'}`}>{locationsCount} locations</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-blue-400" />
+                          <span className={`text-sm transition-all duration-300 ${showUpdateAnimation ? 'text-emerald-300 font-semibold' : 'text-white/80'}`}>{daysCount} days</span>
+                        </div>
+                      </div>
+                    </motion.button>
+
+                    {/* Budget Card */}
+                    <motion.button
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.3 }}
+                      onClick={() => isFeasible && setExpandedSection('budget')}
+                      disabled={!isFeasible}
+                      className={`group bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20 transition-all text-left ${
+                        isFeasible ? 'hover:bg-white/20 hover:border-white/30' : 'opacity-50 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="p-3 rounded-xl bg-amber-500/20">
+                          <DollarSign className="w-6 h-6 text-amber-400" />
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white/80 group-hover:translate-x-1 transition-all" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">Budget Breakdown</h3>
+                      <p className="text-white/60 text-sm mb-4">Estimated costs and money-saving tips</p>
+                      {/* Budget Preview */}
+                      {costBreakdown ? (
+                        <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-500 ${
+                          showUpdateAnimation ? 'bg-emerald-500/30 ring-2 ring-emerald-400/50 animate-pulse' : ''
+                        }`}>
+                          <div>
+                            <span className={`text-2xl font-bold transition-all duration-300 ${showUpdateAnimation ? 'text-emerald-300' : 'text-white'}`}>
+                              {costBreakdown.currencySymbol || getCurrencySymbol(trip.currency ?? undefined)}{costBreakdown.grandTotal?.toLocaleString()}
+                            </span>
+                            <span className="text-white/60 text-sm ml-2">estimated</span>
+                          </div>
+                          {costBreakdown.budgetStatus === 'within_budget' && (
+                            <span className="flex items-center gap-1 text-emerald-400 text-sm">
+                              <TrendingDown className="w-4 h-4" /> Under budget
+                            </span>
+                          )}
+                          {costBreakdown.budgetStatus === 'over_budget' && (
+                            <span className="flex items-center gap-1 text-red-400 text-sm">
+                              <TrendingUp className="w-4 h-4" /> Over budget
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <Loader2 className="w-4 h-4 text-white/60 animate-spin" />
+                          <span className="text-white/60 text-sm">Calculating costs...</span>
+                        </div>
+                      )}
+                    </motion.button>
+
+                    {/* Itinerary Card */}
+                    <motion.button
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.4 }}
+                      onClick={() => isFeasible && setExpandedSection('itinerary')}
+                      disabled={!isFeasible}
+                      className={`group bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20 transition-all text-left ${
+                        isFeasible ? 'hover:bg-white/20 hover:border-white/30' : 'opacity-50 cursor-not-allowed'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="p-3 rounded-xl bg-purple-500/20">
+                          <ClipboardList className="w-6 h-6 text-purple-400" />
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white/80 group-hover:translate-x-1 transition-all" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-white mb-2">Day-by-Day Itinerary</h3>
+                      <p className="text-white/60 text-sm mb-4">Complete daily schedule with activities and meals</p>
+                      {/* Itinerary Preview */}
+                      <div className={`flex items-center gap-4 px-3 py-2 rounded-lg transition-all duration-500 ${
+                        showUpdateAnimation ? 'bg-emerald-500/30 ring-2 ring-emerald-400/50 animate-pulse' : ''
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4 text-purple-400" />
+                          <span className={`text-sm transition-all duration-300 ${showUpdateAnimation ? 'text-emerald-300 font-semibold' : 'text-white/80'}`}>{daysCount} days</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Plane className="w-4 h-4 text-purple-400" />
+                          <span className={`text-sm transition-all duration-300 ${showUpdateAnimation ? 'text-emerald-300 font-semibold' : 'text-white/80'}`}>{activitiesCount} activities</span>
+                        </div>
+                      </div>
+                    </motion.button>
+                  </div>
+                )}
+
+                {/* Book Now Section - Full width below cards */}
+                {!isProcessing && isFeasible && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.5 }}
+                    className="mt-6"
+                  >
+                    <motion.button
+                      onClick={() => setExpandedSection('booking')}
+                      className="w-full group bg-gradient-to-r from-emerald-500/20 to-blue-500/20 backdrop-blur-xl rounded-2xl p-6 border border-emerald-400/30 hover:border-emerald-400/50 transition-all text-left"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className="p-3 rounded-xl bg-gradient-to-br from-emerald-500 to-blue-500">
+                            <ShoppingCart className="w-6 h-6 text-white" />
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-semibold text-white mb-1">Ready to Book?</h3>
+                            <p className="text-white/60 text-sm">Compare prices on flights, hotels & activities</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="hidden sm:flex items-center gap-2">
+                            <span className="px-2 py-1 bg-white/10 rounded text-white/80 text-xs">Skyscanner</span>
+                            <span className="px-2 py-1 bg-white/10 rounded text-white/80 text-xs">Booking.com</span>
+                            <span className="px-2 py-1 bg-white/10 rounded text-white/80 text-xs">Viator</span>
+                          </div>
+                          <ChevronRight className="w-5 h-5 text-emerald-400 group-hover:translate-x-1 transition-all" />
+                        </div>
+                      </div>
+                    </motion.button>
+                  </motion.div>
+                )}
               </motion.div>
             )}
-          </div>
-        )}
+
+            {/* Expanded Section View */}
+            {expandedSection !== null && (
+              <motion.div
+                key={expandedSection}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                {/* Back Button */}
+                <button
+                  onClick={() => setExpandedSection(null)}
+                  className="flex items-center gap-2 text-white/80 hover:text-white mb-4 transition-colors"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  <span>Back to Overview</span>
+                </button>
+
+                {/* Analysis Section */}
+                {expandedSection === 'analysis' && (
+                  <div className="bg-white/95 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-white/20">
+                    <FeasibilityReportView trip={trip} />
+                  </div>
+                )}
+
+                {/* Map Section */}
+                {expandedSection === 'map' && isFeasible && (
+                  <div className="bg-white/95 backdrop-blur-xl rounded-2xl overflow-hidden shadow-xl border border-white/20" style={{ height: 'calc(100vh - 200px)' }}>
+                    <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-5 py-3">
+                      <h3 className="text-lg font-display font-bold text-white">Interactive Trip Map</h3>
+                      <p className="text-slate-300 text-xs">Click markers to explore locations</p>
+                    </div>
+                    <div className="h-[calc(100%-60px)] p-2">
+                      <ItineraryMap
+                        key={`map-${updateKey}`}
+                        trip={localItinerary ? { ...trip, itinerary: localItinerary } : trip}
+                        highlightedLocation={highlightedLocation}
+                        onLocationSelect={handleLocationSelect}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Budget Section */}
+                {expandedSection === 'budget' && isFeasible && (
+                  <div className="bg-white/95 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-white/20">
+                    <CostBreakdown
+                      key={`budget-${updateKey}`}
+                      trip={localItinerary ? { ...trip, itinerary: localItinerary } : trip}
+                      budgetOverride={localBudgetBreakdown}
+                    />
+                  </div>
+                )}
+
+                {/* Itinerary Section */}
+                {expandedSection === 'itinerary' && isFeasible && (
+                  <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20">
+                    <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-5 py-3 rounded-t-2xl flex items-center justify-between">
+                      <div>
+                        <h3 className="text-lg font-display font-bold text-white">Day-by-Day Itinerary</h3>
+                        <p className="text-slate-300 text-xs flex items-center gap-1">
+                          <Plane className="w-3 h-3" /> AI Generated
+                        </p>
+                      </div>
+                      <div className="text-white/60 text-sm">{daysCount} days</div>
+                    </div>
+                    <div className="p-4">
+                      <ItineraryTimeline
+                        key={`itinerary-${updateKey}`}
+                        trip={localItinerary ? { ...trip, itinerary: localItinerary } : trip}
+                        highlightedLocation={highlightedLocation}
+                        onActivityClick={handleLocationSelect}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Booking Section */}
+                {expandedSection === 'booking' && isFeasible && (
+                  <div className="bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20">
+                    <BookNow trip={trip} />
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </main>
+
+      {/* Custom scrollbar styles */}
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.1);
+          border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(0, 0, 0, 0.3);
+          border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: rgba(0, 0, 0, 0.5);
+        }
+      `}</style>
+
+      {/* AI Chat Assistant */}
+      {!isProcessing && isFeasible && (
+        <TripChat
+          tripId={trip.id}
+          destination={trip.destination}
+          tripContext={{
+            destination: trip.destination,
+            dates: trip.dates,
+            budget: trip.budget,
+            currency: trip.currency || 'USD',
+            travelers: trip.groupSize,
+          }}
+          onTripUpdate={handleTripUpdate}
+        />
+      )}
     </div>
   );
 }

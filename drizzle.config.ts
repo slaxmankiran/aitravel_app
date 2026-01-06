@@ -1,14 +1,21 @@
 import { defineConfig } from "drizzle-kit";
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL, ensure the database is provisioned");
-}
+// Support running migrations against a local SQLite file when
+// DATABASE_URL is not provided (useful for local development).
+const sqlitePath = process.env.SQLITE_DB_PATH || "./dev.db";
 
-export default defineConfig({
-  out: "./migrations",
-  schema: "./shared/schema.ts",
-  dialect: "postgresql",
-  dbCredentials: {
-    url: process.env.DATABASE_URL,
-  },
-});
+const cfg = process.env.DATABASE_URL
+  ? {
+      out: "./migrations",
+      schema: "./shared/schema.ts",
+      dialect: "postgresql",
+      dbCredentials: { url: process.env.DATABASE_URL },
+    }
+  : {
+      out: "./migrations",
+      schema: "./shared/schema.ts",
+      dialect: "sqlite",
+      dbCredentials: { url: `file:${sqlitePath}` },
+    };
+
+export default defineConfig(cfg as any);

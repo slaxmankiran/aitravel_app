@@ -5,13 +5,23 @@ import { Progress } from "@/components/ui/progress";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
 import { type TripResponse, type FeasibilityReport } from "@shared/schema";
 
+// Currency symbol mapping
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$', INR: '₹', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿'
+};
+
+function getCurrencySymbol(currency?: string): string {
+  return CURRENCY_SYMBOLS[currency || 'USD'] || currency || '$';
+}
+
 interface Props {
   trip: TripResponse;
 }
 
 export function FeasibilityReportView({ trip }: Props) {
   const report = trip.feasibilityReport as unknown as FeasibilityReport;
-  
+  const currencySymbol = getCurrencySymbol(trip.currency ?? undefined);
+
   if (!report) return null;
 
   const getStatusColor = (status: string) => {
@@ -122,11 +132,11 @@ export function FeasibilityReportView({ trip }: Props) {
                <div className="flex justify-between items-end mb-4">
                  <div>
                    <p className="text-xs text-muted-foreground uppercase">Estimated</p>
-                   <p className="text-xl font-bold font-mono">${report.breakdown.budget.estimatedCost.toLocaleString()}</p>
+                   <p className="text-xl font-bold font-mono">{currencySymbol}{report.breakdown.budget.estimatedCost.toLocaleString()}</p>
                  </div>
                  <div className="text-right">
                    <p className="text-xs text-muted-foreground uppercase">Your Budget</p>
-                   <p className="text-lg font-mono text-slate-500">${trip.budget.toLocaleString()}</p>
+                   <p className="text-lg font-mono text-slate-500">{currencySymbol}{trip.budget.toLocaleString()}</p>
                  </div>
                </div>
                

@@ -1,56 +1,399 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, varchar, real, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
-import { sql } from "drizzle-orm";
+import { sql, relations } from "drizzle-orm";
 
-// === USERS (Standard Boilerplate) ===
+// ============================================================================
+// USERS & AUTHENTICATION
+// ============================================================================
+
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+  email: text("email").notNull().unique(),
+  password: text("password"), // Null for OAuth users
+  name: text("name"),
+  avatar: text("avatar"),
+
+  // OAuth providers
+  googleId: text("google_id").unique(),
+  appleId: text("apple_id").unique(),
+
+  // Subscription
+  subscriptionTier: text("subscription_tier").default("free"), // 'free', 'pro', 'business'
+  subscriptionExpiresAt: timestamp("subscription_expires_at"),
+  stripeCustomerId: text("stripe_customer_id"),
+
+  // Preferences
+  preferredCurrency: text("preferred_currency").default("USD"),
+  homeAirport: text("home_airport"),
+  travelStyle: jsonb("travel_style"), // { adventure: 0.8, relaxation: 0.5, culture: 0.9 }
+  dietaryRestrictions: text("dietary_restrictions").array(),
+
+  // Email preferences
+  emailVerified: boolean("email_verified").default(false),
+  emailNotifications: boolean("email_notifications").default(true),
+  marketingEmails: boolean("marketing_emails").default(false),
+
+  // Stats
+  tripsCreated: integer("trips_created").default(0),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export const sessions = pgTable("sessions", {
+  id: text("id").primaryKey(), // UUID token
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  userAgent: text("user_agent"),
+  ipAddress: text("ip_address"),
 });
+
+export const emailVerificationTokens = pgTable("email_verification_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ============================================================================
+// TRIPS
+// ============================================================================
+
+export const trips = pgTable("trips", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }), // Null for anonymous trips
+
+  // Trip Details
+  passport: text("passport").notNull(),
+  residence: text("residence"),
+  origin: text("origin"),
+  destination: text("destination").notNull(),
+  dates: text("dates").notNull(),
+  budget: integer("budget").notNull(),
+  currency: text("currency").default("USD"),
+  groupSize: integer("group_size").notNull().default(1),
+  adults: integer("adults").notNull().default(1),
+  children: integer("children").notNull().default(0),
+  infants: integer("infants").notNull().default(0),
+
+  // Trip Preferences
+  travelStyle: text("travel_style"), // 'adventure', 'relaxation', 'culture', 'foodie', 'budget'
+  accommodationType: text("accommodation_type"), // 'hotel', 'hostel', 'airbnb', 'luxury'
+  pacePreference: text("pace_preference"), // 'relaxed', 'moderate', 'packed'
+  interests: text("interests").array(), // ['museums', 'beaches', 'nightlife', 'food']
+
+  // AI Outputs
+  feasibilityStatus: text("feasibility_status").default("pending"),
+  feasibilityReport: jsonb("feasibility_report"),
+  itinerary: jsonb("itinerary"),
+
+  // Template/Sharing
+  isPublic: boolean("is_public").default(false),
+  isTemplate: boolean("is_template").default(false),
+  templateName: text("template_name"),
+  templateDescription: text("template_description"),
+  templateCategory: text("template_category"), // 'romantic', 'adventure', 'family', 'budget', 'luxury'
+  useCount: integer("use_count").default(0), // How many times template was copied
+  rating: real("rating"), // Average rating 1-5
+  ratingCount: integer("rating_count").default(0),
+
+  // Status
+  status: text("status").default("draft"), // 'draft', 'planning', 'booked', 'completed', 'cancelled'
+
+  // Checklist progress
+  checklistProgress: jsonb("checklist_progress"), // { visaApplied: true, flightsBooked: false, ... }
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  userIdIdx: index("trips_user_id_idx").on(table.userId),
+  destinationIdx: index("trips_destination_idx").on(table.destination),
+  isTemplateIdx: index("trips_is_template_idx").on(table.isTemplate),
+}));
+
+// ============================================================================
+// COLLABORATIVE PLANNING
+// ============================================================================
+
+export const tripCollaborators = pgTable("trip_collaborators", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+  email: text("email"), // For invited but not registered users
+  role: text("role").default("viewer"), // 'owner', 'editor', 'viewer'
+  inviteToken: text("invite_token"),
+  invitedAt: timestamp("invited_at").defaultNow(),
+  acceptedAt: timestamp("accepted_at"),
+});
+
+export const tripComments = pgTable("trip_comments", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+  dayIndex: integer("day_index"), // Which day the comment is about (null for general)
+  activityIndex: integer("activity_index"), // Which activity (null for day-level)
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const tripVotes = pgTable("trip_votes", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+  dayIndex: integer("day_index").notNull(),
+  activityIndex: integer("activity_index").notNull(),
+  vote: text("vote").notNull(), // 'up', 'down'
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ============================================================================
+// AI CHAT / CONVERSATIONS
+// ============================================================================
+
+export const tripConversations = pgTable("trip_conversations", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  messages: jsonb("messages").notNull().default([]), // [{ role: 'user'|'assistant', content: string, timestamp: Date }]
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
+// PRICE ALERTS
+// ============================================================================
+
+export const priceAlerts = pgTable("price_alerts", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }),
+
+  type: text("type").notNull(), // 'flight', 'hotel'
+
+  // Search parameters
+  origin: text("origin"),
+  destination: text("destination").notNull(),
+  departureDate: text("departure_date"),
+  returnDate: text("return_date"),
+  adults: integer("adults").default(1),
+
+  // Price tracking
+  initialPrice: real("initial_price"),
+  currentPrice: real("current_price"),
+  lowestPrice: real("lowest_price"),
+  targetPrice: real("target_price"), // Alert when price drops below this
+  currency: text("currency").default("USD"),
+
+  // Alert settings
+  isActive: boolean("is_active").default(true),
+  alertThreshold: real("alert_threshold").default(10), // Alert when drops by X%
+  lastChecked: timestamp("last_checked"),
+  lastAlertSent: timestamp("last_alert_sent"),
+
+  // Price history
+  priceHistory: jsonb("price_history").default([]), // [{ price: number, timestamp: Date }]
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  userIdIdx: index("price_alerts_user_id_idx").on(table.userId),
+  isActiveIdx: index("price_alerts_is_active_idx").on(table.isActive),
+}));
+
+// ============================================================================
+// PACKING LISTS
+// ============================================================================
+
+export const packingLists = pgTable("packing_lists", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+
+  items: jsonb("items").notNull().default([]), // [{ category: string, name: string, quantity: number, packed: boolean }]
+
+  // AI-generated based on
+  destination: text("destination"),
+  climate: text("climate"), // 'tropical', 'cold', 'temperate', 'desert'
+  duration: integer("duration"), // days
+  activities: text("activities").array(), // ['hiking', 'beach', 'business']
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
+// SUBSCRIPTIONS & BILLING
+// ============================================================================
+
+export const subscriptions = pgTable("subscriptions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+
+  plan: text("plan").notNull(), // 'pro', 'business'
+  status: text("status").notNull(), // 'active', 'cancelled', 'past_due', 'expired'
+
+  // Stripe
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  stripePriceId: text("stripe_price_id"),
+
+  // Billing
+  currentPeriodStart: timestamp("current_period_start"),
+  currentPeriodEnd: timestamp("current_period_end"),
+  cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false),
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
+// AFFILIATE TRACKING
+// ============================================================================
+
+export const affiliateClicks = pgTable("affiliate_clicks", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "set null" }),
+
+  linkType: text("link_type").notNull(), // 'flight', 'hotel', 'activity', 'insurance'
+  provider: text("provider").notNull(), // 'skyscanner', 'booking', 'viator', etc.
+  url: text("url"),
+
+  // Conversion tracking
+  clickedAt: timestamp("clicked_at").defaultNow(),
+  convertedAt: timestamp("converted_at"),
+  conversionValue: real("conversion_value"),
+  commission: real("commission"),
+});
+
+// ============================================================================
+// EMAIL NOTIFICATIONS
+// ============================================================================
+
+export const emailQueue = pgTable("email_queue", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+
+  type: text("type").notNull(), // 'welcome', 'price_alert', 'trip_reminder', 'collaboration_invite'
+  to: text("to").notNull(),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  htmlBody: text("html_body"),
+
+  // Metadata
+  metadata: jsonb("metadata"), // Additional data for templates
+
+  // Status
+  status: text("status").default("pending"), // 'pending', 'sent', 'failed'
+  sentAt: timestamp("sent_at"),
+  error: text("error"),
+  retryCount: integer("retry_count").default(0),
+
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ============================================================================
+// WEATHER CACHE
+// ============================================================================
+
+export const weatherCache = pgTable("weather_cache", {
+  id: serial("id").primaryKey(),
+  destination: text("destination").notNull(),
+  date: text("date").notNull(), // YYYY-MM-DD
+
+  // Weather data
+  tempHigh: real("temp_high"),
+  tempLow: real("temp_low"),
+  condition: text("condition"), // 'sunny', 'cloudy', 'rainy', etc.
+  precipitation: real("precipitation"), // percentage
+  humidity: real("humidity"),
+  icon: text("icon"),
+
+  fetchedAt: timestamp("fetched_at").defaultNow(),
+}, (table) => ({
+  destDateIdx: index("weather_cache_dest_date_idx").on(table.destination, table.date),
+}));
+
+// ============================================================================
+// ZOD SCHEMAS FOR VALIDATION
+// ============================================================================
+
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  tripsCreated: true,
+  lastLoginAt: true,
+});
+
+export const insertTripSchema = createInsertSchema(trips).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  feasibilityStatus: true,
+  feasibilityReport: true,
+  itinerary: true,
+  useCount: true,
+  rating: true,
+  ratingCount: true,
+});
+
+export const insertPriceAlertSchema = createInsertSchema(priceAlerts).omit({
+  id: true,
+  createdAt: true,
+  lastChecked: true,
+  lastAlertSent: true,
+  priceHistory: true,
+});
+
+export const insertPackingListSchema = createInsertSchema(packingLists).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+// ============================================================================
+// TYPES
+// ============================================================================
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
-// === TRIP & FEASIBILITY ===
-export const trips = pgTable("trips", {
-  id: serial("id").primaryKey(),
-  passport: text("passport").notNull(),
-  residence: text("residence"), // Optional residence
-  destination: text("destination").notNull(),
-  dates: text("dates").notNull(),
-  budget: integer("budget").notNull(),
-  groupSize: integer("group_size").notNull().default(1),
-  
-  // AI Outputs
-  feasibilityStatus: text("feasibility_status").default("pending"), // 'yes', 'no', 'pending'
-  feasibilityReport: jsonb("feasibility_report"), // Structured reason
-  itinerary: jsonb("itinerary"), // The generated plan if feasible
-  
-  createdAt: timestamp("created_at").defaultNow(),
-});
-
-export const insertTripSchema = createInsertSchema(trips).omit({ 
-  id: true, 
-  createdAt: true,
-  feasibilityStatus: true,
-  feasibilityReport: true,
-  itinerary: true
-});
+export type Session = typeof sessions.$inferSelect;
 
 export type Trip = typeof trips.$inferSelect;
 export type InsertTrip = z.infer<typeof insertTripSchema>;
 
-// Feasibility Report Structure
+export type TripCollaborator = typeof tripCollaborators.$inferSelect;
+export type TripComment = typeof tripComments.$inferSelect;
+export type TripConversation = typeof tripConversations.$inferSelect;
+
+export type PriceAlert = typeof priceAlerts.$inferSelect;
+export type InsertPriceAlert = z.infer<typeof insertPriceAlertSchema>;
+
+export type PackingList = typeof packingLists.$inferSelect;
+export type InsertPackingList = z.infer<typeof insertPackingListSchema>;
+
+export type Subscription = typeof subscriptions.$inferSelect;
+export type AffiliateClick = typeof affiliateClicks.$inferSelect;
+export type WeatherCache = typeof weatherCache.$inferSelect;
+
+// ============================================================================
+// API TYPES
+// ============================================================================
+
 export interface FeasibilityReport {
   overall: "yes" | "no" | "warning";
-  score: number; // 0-100
+  score: number;
   breakdown: {
     visa: { status: "ok" | "issue"; reason: string };
     budget: { status: "ok" | "tight" | "impossible"; estimatedCost: number; reason: string };
@@ -59,5 +402,83 @@ export interface FeasibilityReport {
   summary: string;
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface PackingItem {
+  category: string;
+  name: string;
+  quantity: number;
+  packed: boolean;
+  essential: boolean;
+}
+
+export interface ChecklistProgress {
+  visaApplied?: boolean;
+  visaApproved?: boolean;
+  flightsBooked?: boolean;
+  hotelsBooked?: boolean;
+  activitiesBooked?: boolean;
+  insurancePurchased?: boolean;
+  packingComplete?: boolean;
+}
+
+export interface WeatherForecast {
+  date: string;
+  tempHigh: number;
+  tempLow: number;
+  condition: string;
+  precipitation: number;
+  icon: string;
+}
+
 export type CreateTripRequest = InsertTrip;
 export type TripResponse = Trip;
+
+// ============================================================================
+// SUBSCRIPTION TIERS
+// ============================================================================
+
+export const SUBSCRIPTION_TIERS = {
+  free: {
+    name: 'Free',
+    price: 0,
+    features: {
+      tripsPerMonth: 3,
+      priceAlerts: 1,
+      collaborators: 0,
+      chatMessages: 10,
+      templates: false,
+      prioritySupport: false,
+    }
+  },
+  pro: {
+    name: 'Pro',
+    price: 49, // per year
+    features: {
+      tripsPerMonth: -1, // unlimited
+      priceAlerts: 10,
+      collaborators: 5,
+      chatMessages: -1,
+      templates: true,
+      prioritySupport: false,
+    }
+  },
+  business: {
+    name: 'Business',
+    price: 199, // per year
+    features: {
+      tripsPerMonth: -1,
+      priceAlerts: -1,
+      collaborators: -1,
+      chatMessages: -1,
+      templates: true,
+      prioritySupport: true,
+      apiAccess: true,
+      whiteLabel: true,
+    }
+  }
+} as const;

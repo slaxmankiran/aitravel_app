@@ -3,6 +3,8 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider } from "@/contexts/AuthContext";
+import { AuthModal } from "@/components/AuthModal";
 import Home from "@/pages/Home";
 import CreateTrip from "@/pages/CreateTrip";
 import TripDetails from "@/pages/TripDetails";
@@ -23,29 +25,32 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <div className="relative min-h-screen w-full bg-[#000814] overflow-hidden">
-          {/* Background Video */}
-          <div className="fixed inset-0 z-0">
-            <video
-              src={landscapeVideo}
-              autoPlay
-              loop
-              muted
-              playsInline
-              className="h-full w-full object-cover opacity-60"
-            />
-            {/* Overlay to ensure readability */}
-            <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/60" />
+      <AuthProvider>
+        <TooltipProvider>
+          <div className="relative min-h-screen w-full bg-[#000814] overflow-hidden">
+            {/* Background Video */}
+            <div className="fixed inset-0 z-0">
+              <video
+                src={landscapeVideo}
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="h-full w-full object-cover opacity-60"
+              />
+              {/* Overlay to ensure readability */}
+              <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/60" />
+            </div>
+
+            {/* Main Content */}
+            <div className="relative z-10">
+              <Toaster />
+              <AuthModal />
+              <Router />
+            </div>
           </div>
-          
-          {/* Main Content */}
-          <div className="relative z-10">
-            <Toaster />
-            <Router />
-          </div>
-        </div>
-      </TooltipProvider>
+        </TooltipProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

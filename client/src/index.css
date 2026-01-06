@@ -68,12 +68,12 @@
   .text-balance {
     text-wrap: balance;
   }
-  
+
   /* Glassmorphism utility */
   .glass {
     @apply bg-white/70 backdrop-blur-lg border border-white/20 shadow-xl;
   }
-  
+
   /* Smooth transitions */
   .transition-smooth {
     @apply transition-all duration-300 ease-in-out;
@@ -88,5 +88,21 @@
   }
   .badge-destructive {
     @apply bg-red-100 text-red-700 border-red-200;
+  }
+
+  /* Animated gradient background */
+  .animate-gradient-shift {
+    background-size: 400% 400%;
+    animation: gradient-shift 15s ease infinite;
+  }
+}
+
+/* Keyframe animations */
+@keyframes gradient-shift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
   }
 }
