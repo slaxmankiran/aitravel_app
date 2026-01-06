@@ -357,7 +357,13 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
       tileLayerRef.current = L.tileLayer(MAP_STYLES[mapStyle].url, {
         attribution: '&copy; OpenStreetMap contributors',
         maxZoom: 19,
+        crossOrigin: 'anonymous',
       }).addTo(map);
+
+      // Force map to recalculate size (fixes tiles not loading in hidden containers)
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 100);
 
       // Initial marker update
       updateMarkers();

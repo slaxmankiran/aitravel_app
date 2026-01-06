@@ -1,7 +1,7 @@
 import { useParams, Link } from "wouter";
 import { useTrip } from "@/hooks/use-trips";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, ArrowLeft, Download, Share2, Check, MapPin, Calendar, Users, Wallet, Plane, FileText, Map, DollarSign, ClipboardList, ChevronRight, CheckCircle, AlertTriangle, XCircle, TrendingUp, TrendingDown, Navigation, Globe, Hotel, Sparkles, CircleCheck, Pencil, ShoppingCart, ExternalLink } from "lucide-react";
+import { Loader2, ArrowLeft, Download, Share2, Check, MapPin, Calendar, Users, Wallet, Plane, FileText, Map, DollarSign, ClipboardList, ChevronRight, CheckCircle, AlertTriangle, XCircle, TrendingUp, TrendingDown, Navigation, Globe, Hotel, Sparkles, CircleCheck, Pencil, ShoppingCart, ExternalLink, Train, Bus, Car, Clock, Zap } from "lucide-react";
 import { FeasibilityReportView } from "@/components/FeasibilityReport";
 import { ItineraryTimeline } from "@/components/ItineraryTimeline";
 import { ItineraryMap } from "@/components/ItineraryMap";
@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 const PROGRESS_ICONS = [
   { icon: Globe, label: "Starting" },
   { icon: FileText, label: "Feasibility" },
-  { icon: Plane, label: "Flights" },
+  { icon: Train, label: "Transport" },  // Changed from Plane/Flights
   { icon: Hotel, label: "Hotels" },
   { icon: ClipboardList, label: "Itinerary" },
   { icon: Sparkles, label: "Finalizing" },
@@ -38,9 +38,12 @@ function useTripProgress(tripId: number, isProcessing: boolean) {
   });
 }
 
-// Currency symbol mapping
+// Currency symbol mapping - supports all 28 currencies
 const CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$', INR: '₹', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿'
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥', INR: '₹', AUD: 'A$', CAD: 'C$',
+  CHF: 'CHF', KRW: '₩', SGD: 'S$', HKD: 'HK$', NZD: 'NZ$', SEK: 'kr', NOK: 'kr', DKK: 'kr',
+  MXN: '$', BRL: 'R$', AED: 'د.إ', SAR: '﷼', THB: '฿', MYR: 'RM', IDR: 'Rp', PHP: '₱',
+  ZAR: 'R', TRY: '₺', RUB: '₽', PLN: 'zł', CZK: 'Kč', HUF: 'Ft'
 };
 
 function getCurrencySymbol(currency?: string): string {
@@ -339,9 +342,9 @@ function ProgressIndicator({ step, message, details, elapsed, percentComplete }:
   }, []);
 
   return (
-    <div className="bg-white/10 backdrop-blur-xl rounded-2xl p-8 text-center border border-white/20 relative z-10">
-      {/* Step indicators */}
-      <div className="flex justify-center items-center gap-2 mb-6">
+    <div className="bg-white/10 backdrop-blur-xl rounded-2xl p-6 text-center border border-white/20 relative z-10">
+      {/* Modern compact step indicators */}
+      <div className="flex justify-center items-center gap-1 mb-5">
         {PROGRESS_ICONS.slice(0, 6).map((item, idx) => {
           const Icon = item.icon;
           const isActive = idx === step;
@@ -349,58 +352,54 @@ function ProgressIndicator({ step, message, details, elapsed, percentComplete }:
           return (
             <motion.div
               key={idx}
-              className={`relative flex flex-col items-center`}
-              initial={{ scale: 0.8, opacity: 0.5 }}
-              animate={{
-                scale: isActive ? 1.2 : 1,
-                opacity: isComplete || isActive ? 1 : 0.4,
-              }}
+              className="flex items-center"
+              initial={{ opacity: 0.5 }}
+              animate={{ opacity: isComplete || isActive ? 1 : 0.4 }}
               transition={{ duration: 0.3 }}
             >
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                isComplete ? 'bg-emerald-500/30 border-2 border-emerald-400' :
-                isActive ? 'bg-primary/30 border-2 border-primary animate-pulse' :
-                'bg-white/10 border border-white/20'
+              {/* Step pill */}
+              <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full transition-all ${
+                isComplete ? 'bg-emerald-500/20' :
+                isActive ? 'bg-primary/20 ring-2 ring-primary/50' :
+                'bg-white/5'
               }`}>
                 {isComplete ? (
-                  <Check className="w-5 h-5 text-emerald-400" />
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
                 ) : (
-                  <Icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-white/60'}`} />
+                  <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-primary' : 'text-white/40'}`} />
                 )}
+                <span className={`text-[11px] font-medium hidden sm:inline ${
+                  isActive ? 'text-white' : isComplete ? 'text-emerald-300' : 'text-white/40'
+                }`}>
+                  {item.label}
+                </span>
               </div>
-              <span className={`text-[10px] mt-1.5 font-medium ${
-                isActive ? 'text-white' : isComplete ? 'text-emerald-400' : 'text-white/40'
-              }`}>
-                {item.label}
-              </span>
-              {/* Connector line */}
+              {/* Connector */}
               {idx < 5 && (
-                <div className={`absolute top-5 left-[calc(100%+2px)] w-4 h-0.5 ${
-                  isComplete ? 'bg-emerald-400' : 'bg-white/20'
-                }`} />
+                <div className={`w-3 h-0.5 mx-0.5 rounded ${isComplete ? 'bg-emerald-400/50' : 'bg-white/10'}`} />
               )}
             </motion.div>
           );
         })}
       </div>
 
-      {/* Animated icon */}
+      {/* Animated spinner */}
       <motion.div
-        className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center"
-        animate={{ rotate: [0, 5, -5, 0] }}
-        transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+        className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-primary/20 to-emerald-400/10 flex items-center justify-center"
+        animate={{ rotate: 360 }}
+        transition={{ repeat: Infinity, duration: 8, ease: "linear" }}
       >
         {step < 6 ? (
-          <Loader2 className="w-10 h-10 text-primary animate-spin" />
+          <Loader2 className="w-8 h-8 text-primary animate-spin" />
         ) : (
-          <CircleCheck className="w-10 h-10 text-emerald-400" />
+          <CircleCheck className="w-8 h-8 text-emerald-400" />
         )}
       </motion.div>
 
       {/* Progress bar */}
-      <div className="w-full max-w-md mx-auto h-2 bg-white/10 rounded-full mb-4 overflow-hidden">
+      <div className="w-full max-w-sm mx-auto h-1.5 bg-white/10 rounded-full mb-3 overflow-hidden">
         <motion.div
-          className="h-full bg-gradient-to-r from-primary to-emerald-400 rounded-full"
+          className="h-full bg-gradient-to-r from-primary via-blue-400 to-emerald-400 rounded-full"
           initial={{ width: 0 }}
           animate={{ width: `${percentComplete}%` }}
           transition={{ duration: 0.5, ease: "easeOut" }}
@@ -724,8 +723,8 @@ export default function TripDetails() {
               </div>
               <div class="overview-item">
                 <div class="icon">💰</div>
-                <div class="value">${currencySymbol}${trip.budget?.toLocaleString()}</div>
-                <div class="label">Budget</div>
+                <div class="value">${trip.travelStyle === 'custom' ? `${currencySymbol}${trip.budget?.toLocaleString()}` : (trip.travelStyle === 'budget' ? 'Budget' : trip.travelStyle === 'standard' ? 'Comfort' : trip.travelStyle === 'luxury' ? 'Luxury' : `${currencySymbol}${trip.budget?.toLocaleString()}`)}</div>
+                <div class="label">${trip.travelStyle === 'custom' ? 'Budget' : 'Travel Style'}</div>
               </div>
             </div>
           </div>
@@ -864,13 +863,62 @@ export default function TripDetails() {
 
   if (error || !trip) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-white mb-4">Trip Not Found</h1>
-          <p className="text-slate-400 mb-6">This trip doesn't exist or has been removed.</p>
+      <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
+        {/* Colorful travel-themed gradient background */}
+        <div className="absolute inset-0 bg-gradient-to-br from-orange-400 via-pink-500 to-purple-600" />
+
+        {/* Animated floating travel icons */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {/* Floating airplane */}
+          <div className="absolute top-[10%] left-[10%] text-6xl opacity-20 animate-bounce" style={{ animationDuration: '3s' }}>
+            ✈️
+          </div>
+          {/* Floating compass */}
+          <div className="absolute top-[20%] right-[15%] text-5xl opacity-25 animate-pulse" style={{ animationDuration: '2s' }}>
+            🧭
+          </div>
+          {/* Floating map */}
+          <div className="absolute bottom-[25%] left-[8%] text-5xl opacity-20 animate-bounce" style={{ animationDuration: '4s', animationDelay: '1s' }}>
+            🗺️
+          </div>
+          {/* Floating suitcase */}
+          <div className="absolute bottom-[15%] right-[20%] text-6xl opacity-25 animate-pulse" style={{ animationDuration: '2.5s' }}>
+            🧳
+          </div>
+          {/* Floating globe */}
+          <div className="absolute top-[50%] left-[5%] text-4xl opacity-15 animate-spin" style={{ animationDuration: '20s' }}>
+            🌍
+          </div>
+          {/* Floating passport */}
+          <div className="absolute top-[60%] right-[8%] text-5xl opacity-20 animate-bounce" style={{ animationDuration: '3.5s' }}>
+            🛂
+          </div>
+          {/* Question marks floating */}
+          <div className="absolute top-[35%] left-[25%] text-3xl opacity-30 animate-ping" style={{ animationDuration: '2s' }}>
+            ❓
+          </div>
+          <div className="absolute bottom-[40%] right-[30%] text-4xl opacity-25 animate-ping" style={{ animationDuration: '3s', animationDelay: '0.5s' }}>
+            ❓
+          </div>
+        </div>
+
+        {/* Decorative circles */}
+        <div className="absolute top-[-10%] right-[-10%] w-96 h-96 bg-yellow-300/20 rounded-full blur-3xl" />
+        <div className="absolute bottom-[-15%] left-[-10%] w-80 h-80 bg-blue-400/20 rounded-full blur-3xl" />
+
+        {/* Content card */}
+        <div className="relative z-10 text-center bg-white/10 backdrop-blur-xl rounded-3xl p-12 mx-4 border border-white/20 shadow-2xl max-w-md">
+          {/* Lost traveler illustration */}
+          <div className="text-8xl mb-6 animate-bounce" style={{ animationDuration: '2s' }}>
+            🏝️
+          </div>
+          <h1 className="text-4xl font-bold text-white mb-4 drop-shadow-lg">Trip Not Found</h1>
+          <p className="text-white/80 mb-8 text-lg">
+            Oops! This trip seems to have wandered off the map. It doesn't exist or has been removed.
+          </p>
           <Link href="/">
-            <Button className="bg-white text-slate-900 hover:bg-slate-100">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Back to Home
+            <Button className="bg-white text-purple-600 hover:bg-white/90 font-semibold px-8 py-3 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105">
+              <ArrowLeft className="w-5 h-5 mr-2" /> Back to Home
             </Button>
           </Link>
         </div>
@@ -978,7 +1026,9 @@ export default function TripDetails() {
                     </span>
                     <span className="flex items-center gap-2">
                       <Wallet className="w-4 h-4" />
-                      {getCurrencySymbol(trip.currency ?? undefined)}{trip.budget.toLocaleString()} budget
+                      {trip.travelStyle === 'custom'
+                        ? `${getCurrencySymbol(trip.currency ?? undefined)}${trip.budget.toLocaleString()} budget`
+                        : `${trip.travelStyle === 'budget' ? 'Budget' : trip.travelStyle === 'standard' ? 'Comfort' : trip.travelStyle === 'luxury' ? 'Luxury' : trip.travelStyle} travel`}
                     </span>
                   </div>
                 </motion.div>
@@ -1106,14 +1156,25 @@ export default function TripDetails() {
                             </span>
                             <span className="text-white/60 text-sm ml-2">estimated</span>
                           </div>
-                          {costBreakdown.budgetStatus === 'within_budget' && (
+                          {/* Only show budget comparison for custom budget trips */}
+                          {trip.travelStyle === 'custom' && costBreakdown.budgetStatus === 'within_budget' && (
                             <span className="flex items-center gap-1 text-emerald-400 text-sm">
                               <TrendingDown className="w-4 h-4" /> Under budget
                             </span>
                           )}
-                          {costBreakdown.budgetStatus === 'over_budget' && (
+                          {trip.travelStyle === 'custom' && costBreakdown.budgetStatus === 'over_budget' && (
                             <span className="flex items-center gap-1 text-red-400 text-sm">
                               <TrendingUp className="w-4 h-4" /> Over budget
+                            </span>
+                          )}
+                          {/* For non-custom styles, show travel style badge */}
+                          {trip.travelStyle !== 'custom' && (
+                            <span className={`flex items-center gap-1 text-sm px-2 py-1 rounded-full ${
+                              trip.travelStyle === 'budget' ? 'bg-emerald-500/20 text-emerald-400' :
+                              trip.travelStyle === 'luxury' ? 'bg-amber-500/20 text-amber-400' :
+                              'bg-blue-500/20 text-blue-400'
+                            }`}>
+                              {trip.travelStyle === 'budget' ? 'Budget' : trip.travelStyle === 'luxury' ? 'Luxury' : 'Comfort'}
                             </span>
                           )}
                         </div>
@@ -1124,6 +1185,107 @@ export default function TripDetails() {
                         </div>
                       )}
                     </motion.button>
+
+                    {/* Transport Options Card - NEW */}
+                    {costBreakdown?.transportOptions && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.35 }}
+                        className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 backdrop-blur-xl rounded-2xl p-6 border border-cyan-400/20"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="p-3 rounded-xl bg-cyan-500/20">
+                              {costBreakdown.transportOptions.primaryMode === 'train' ? (
+                                <Train className="w-6 h-6 text-cyan-400" />
+                              ) : costBreakdown.transportOptions.primaryMode === 'bus' ? (
+                                <Bus className="w-6 h-6 text-cyan-400" />
+                              ) : (
+                                <Plane className="w-6 h-6 text-cyan-400" />
+                              )}
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-semibold text-white">Getting There</h3>
+                              <p className="text-white/60 text-xs">{costBreakdown.transportOptions.distanceCategory} {costBreakdown.transportOptions.isDomestic ? 'domestic' : 'international'} journey</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Transport Options Comparison */}
+                        <div className="space-y-2">
+                          {costBreakdown.transportOptions.options?.slice(0, 3).map((opt: any, idx: number) => {
+                            const isCheapest = idx === costBreakdown.transportOptions.options.length - 1 ||
+                              (costBreakdown.transportOptions.options.every((o: any) => opt.estimatedCost <= o.estimatedCost));
+                            const isFastest = costBreakdown.transportOptions.options.every((o: any) =>
+                              parseFloat(opt.duration) <= parseFloat(o.duration));
+                            const TransportIcon = opt.mode.toLowerCase().includes('train') ? Train :
+                              opt.mode.toLowerCase().includes('bus') ? Bus :
+                              opt.mode.toLowerCase().includes('cab') || opt.mode.toLowerCase().includes('taxi') ? Car : Plane;
+
+                            return (
+                              <div
+                                key={idx}
+                                className={`flex items-center justify-between p-3 rounded-lg transition-all ${
+                                  opt.recommended
+                                    ? 'bg-cyan-500/20 border border-cyan-400/30'
+                                    : 'bg-white/5 border border-white/10'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <TransportIcon className={`w-5 h-5 ${opt.recommended ? 'text-cyan-400' : 'text-white/60'}`} />
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`font-medium ${opt.recommended ? 'text-cyan-300' : 'text-white/80'}`}>
+                                        {opt.mode}
+                                      </span>
+                                      {isCheapest && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">
+                                          Cheapest
+                                        </span>
+                                      )}
+                                      {isFastest && !isCheapest && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400">
+                                          Fastest
+                                        </span>
+                                      )}
+                                      {opt.recommended && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/30 text-cyan-300">
+                                          Recommended
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-xs text-white/50">{opt.duration}</span>
+                                  </div>
+                                </div>
+                                <span className={`font-bold ${opt.recommended ? 'text-cyan-300' : 'text-white/70'}`}>
+                                  {costBreakdown.currencySymbol}{opt.estimatedCost?.toLocaleString()}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Recommendation */}
+                        <p className="text-xs text-white/50 mt-3 italic">
+                          {costBreakdown.transportOptions.recommendation}
+                        </p>
+
+                        {/* Local Transport Preview */}
+                        {costBreakdown.localTransport?.options && (
+                          <div className="mt-4 pt-4 border-t border-white/10">
+                            <p className="text-xs text-white/60 mb-2">Local transport at destination:</p>
+                            <div className="flex flex-wrap gap-1">
+                              {costBreakdown.localTransport.options.slice(0, 4).map((opt: string, idx: number) => (
+                                <span key={idx} className="text-[10px] px-2 py-1 rounded-full bg-white/10 text-white/70">
+                                  {opt}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
 
                     {/* Itinerary Card */}
                     <motion.button

@@ -395,6 +395,7 @@ export interface FeasibilityReport {
   overall: "yes" | "no" | "warning";
   score: number;
   breakdown: {
+    accessibility?: { status: "accessible" | "restricted" | "impossible"; reason: string };
     visa: { status: "ok" | "issue"; reason: string };
     budget: { status: "ok" | "tight" | "impossible"; estimatedCost: number; reason: string };
     safety: { status: "safe" | "caution" | "danger"; reason: string };

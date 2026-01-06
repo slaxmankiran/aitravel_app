@@ -749,13 +749,14 @@ export function clearChatHistory(tripId: number): void {
 }
 
 /**
- * Get currency symbol
+ * Get currency symbol - supports all 28 currencies
  */
 function getCurrencySymbol(currency: string): string {
   const symbols: Record<string, string> = {
-    USD: '$', EUR: '€', GBP: '£', JPY: '¥', INR: '₹',
-    AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿',
-    MYR: 'RM', KRW: '₩', CNY: '¥', HKD: 'HK$', NZD: 'NZ$',
+    USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥', INR: '₹', AUD: 'A$', CAD: 'C$',
+    CHF: 'CHF', KRW: '₩', SGD: 'S$', HKD: 'HK$', NZD: 'NZ$', SEK: 'kr', NOK: 'kr', DKK: 'kr',
+    MXN: '$', BRL: 'R$', AED: 'د.إ', SAR: '﷼', THB: '฿', MYR: 'RM', IDR: 'Rp', PHP: '₱',
+    ZAR: 'R', TRY: '₺', RUB: '₽', PLN: 'zł', CZK: 'Kč', HUF: 'Ft'
   };
   return symbols[currency] || currency + ' ';
 }

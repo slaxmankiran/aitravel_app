@@ -63,9 +63,12 @@ interface CostBreakdownData {
   remaining?: number;
 }
 
-// Currency symbol mapping
+// Currency symbol mapping - supports all 28 currencies
 const CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$', INR: '₹', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿'
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥', INR: '₹', AUD: 'A$', CAD: 'C$',
+  CHF: 'CHF', KRW: '₩', SGD: 'S$', HKD: 'HK$', NZD: 'NZ$', SEK: 'kr', NOK: 'kr', DKK: 'kr',
+  MXN: '$', BRL: 'R$', AED: 'د.إ', SAR: '﷼', THB: '฿', MYR: 'RM', IDR: 'Rp', PHP: '₱',
+  ZAR: 'R', TRY: '₺', RUB: '₽', PLN: 'zł', CZK: 'Kč', HUF: 'Ft'
 };
 
 function getCurrencySymbol(currency?: string): string {
@@ -161,7 +164,7 @@ interface Props {
 }
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
-  flights: <Plane className="w-5 h-5" />,
+  flights: <Train className="w-5 h-5" />,  // Changed from Plane - "Travel" covers trains/buses/flights
   accommodation: <Home className="w-5 h-5" />,
   food: <Utensils className="w-5 h-5" />,
   activities: <Camera className="w-5 h-5" />,
@@ -181,7 +184,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
-  flights: "Flights",
+  flights: "Travel",  // Changed from "Flights" - covers trains/buses/flights
   accommodation: "Accommodation",
   food: "Food & Dining",
   activities: "Activities & Attractions",

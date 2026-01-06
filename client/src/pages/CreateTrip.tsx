@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight } from "lucide-react";
+import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight, AlertCircle } from "lucide-react";
 import { z } from "zod";
 import { format } from "date-fns";
 import { DateRange } from "react-day-picker";
@@ -429,8 +429,51 @@ const COUNTRIES = [
 // Splitting the schema for steps
 const step1Schema = insertTripSchema.pick({ passport: true, residence: true });
 const step2Schema = insertTripSchema.pick({ origin: true, destination: true, dates: true });
+// Travel style options with budget multipliers and visual details
+const TRAVEL_STYLES = [
+  {
+    value: 'budget',
+    label: 'Budget',
+    icon: '🎒',
+    color: 'emerald',
+    tagline: 'Smart & Savvy',
+    features: ['Hostels & budget hotels', 'Street food & local eats', 'Public transport', 'Free attractions'],
+    multiplier: 0.6
+  },
+  {
+    value: 'standard',
+    label: 'Comfort',
+    icon: '🧳',
+    color: 'blue',
+    tagline: 'Best of Both',
+    features: ['3-4 star hotels', 'Local restaurants', 'Mix of transport', 'Popular attractions'],
+    multiplier: 1.0
+  },
+  {
+    value: 'luxury',
+    label: 'Luxury',
+    icon: '✨',
+    color: 'amber',
+    tagline: 'Premium Experience',
+    features: ['5-star resorts', 'Fine dining', 'Private transfers', 'VIP experiences'],
+    multiplier: 2.5
+  },
+  {
+    value: 'custom',
+    label: 'Custom',
+    icon: '⚙️',
+    color: 'slate',
+    tagline: 'Set Your Own',
+    features: ['Enter your exact budget', 'Full control', 'Any travel style'],
+    multiplier: 1.0
+  },
+] as const;
+
+type TravelStyleValue = 'budget' | 'standard' | 'luxury' | 'custom';
+
 // Custom step3 schema that treats empty/NaN children/infants as 0
 const step3Schema = z.object({
+  travelStyle: z.enum(['budget', 'standard', 'luxury', 'custom']).default('standard'),
   budget: z.number().min(1, "Budget is required"),
   groupSize: z.number().min(1).default(1),
   adults: z.number().min(1, "At least 1 adult is required").default(1),
@@ -444,9 +487,52 @@ const step3Schema = z.object({
   }, z.number().min(0).default(0)),
 });
 
+// Detect if origin and destination are in the same country/region for domestic pricing
+function isDomesticTravel(origin: string, destination: string): boolean {
+  const o = origin.toLowerCase();
+  const d = destination.toLowerCase();
+
+  // India domestic
+  const indianCities = ['india', 'delhi', 'mumbai', 'bangalore', 'bengaluru', 'hyderabad', 'chennai', 'kolkata', 'goa', 'jaipur', 'agra', 'kerala', 'pune', 'ahmedabad', 'lucknow', 'chandigarh', 'kochi', 'thiruvananthapuram', 'varanasi', 'udaipur', 'jodhpur', 'amritsar', 'shimla', 'manali', 'rishikesh', 'darjeeling', 'gangtok', 'leh', 'srinagar', 'mysore', 'hampi', 'ooty', 'munnar', 'alleppey', 'coorg', 'pondicherry'];
+  if (indianCities.some(c => o.includes(c)) && indianCities.some(c => d.includes(c))) return true;
+
+  // Thailand domestic
+  const thaiCities = ['thailand', 'bangkok', 'phuket', 'chiang mai', 'pattaya', 'krabi', 'koh samui', 'koh phangan', 'koh tao', 'ayutthaya', 'sukhothai'];
+  if (thaiCities.some(c => o.includes(c)) && thaiCities.some(c => d.includes(c))) return true;
+
+  // Vietnam domestic
+  const vietnamCities = ['vietnam', 'hanoi', 'ho chi minh', 'saigon', 'da nang', 'hoi an', 'nha trang', 'hue', 'sapa', 'halong'];
+  if (vietnamCities.some(c => o.includes(c)) && vietnamCities.some(c => d.includes(c))) return true;
+
+  // Indonesia domestic
+  const indonesiaCities = ['indonesia', 'bali', 'jakarta', 'yogyakarta', 'lombok', 'ubud', 'denpasar', 'surabaya', 'bandung'];
+  if (indonesiaCities.some(c => o.includes(c)) && indonesiaCities.some(c => d.includes(c))) return true;
+
+  return false;
+}
+
+// Detect South Asia region for very affordable pricing
+function isSouthAsiaDestination(destination: string): boolean {
+  const d = destination.toLowerCase();
+  const southAsiaCities = ['india', 'delhi', 'mumbai', 'bangalore', 'bengaluru', 'hyderabad', 'chennai', 'kolkata', 'goa', 'jaipur', 'agra', 'kerala', 'pune', 'nepal', 'kathmandu', 'pokhara', 'sri lanka', 'colombo', 'bangladesh', 'dhaka', 'pakistan', 'karachi', 'lahore'];
+  return southAsiaCities.some(c => d.includes(c));
+}
+
 // Minimum budget per person per day (USD equivalent) by destination type
 // These are realistic estimates including accommodation, food, local transport, activities
 const BUDGET_MINIMUMS = {
+  // South Asia domestic - extremely affordable (₹800-1200/day)
+  southAsiaDomestic: {
+    perPersonPerDay: 10,   // ~₹830/day for budget travel
+    transportCost: 12,     // ~₹1000 for train/bus round trip
+    destinations: [] as string[]  // Detected via isDomesticTravel
+  },
+  // South Asia international - still affordable
+  southAsiaInternational: {
+    perPersonPerDay: 25,   // ~₹2000/day including better hotels
+    transportCost: 150,    // Budget flights from abroad
+    destinations: [] as string[]
+  },
   veryExpensive: {
     perPersonPerDay: 250,  // Reduced from 350 - budget-conscious estimate
     flightCost: 1200,      // Reduced from 1400
@@ -571,25 +657,37 @@ const BUDGET_MINIMUMS = {
   default: { perPersonPerDay: 100, flightCost: 600 }  // Reduced defaults
 };
 
-// Calculate minimum realistic budget including flights
-function calculateMinimumBudget(destination: string, numDays: number, adults: number, children: number, infants: number): number {
+// Calculate minimum realistic budget including transport
+function calculateMinimumBudget(origin: string, destination: string, numDays: number, adults: number, children: number, infants: number): number {
   const destLower = destination.toLowerCase();
 
   let perPersonPerDay = BUDGET_MINIMUMS.default.perPersonPerDay;
-  let flightCostPerAdult = BUDGET_MINIMUMS.default.flightCost;
+  let transportCostPerAdult = BUDGET_MINIMUMS.default.flightCost;
 
-  if (BUDGET_MINIMUMS.veryExpensive.destinations.some(d => destLower.includes(d))) {
+  // Priority 1: Check for domestic travel in affordable regions
+  const isDomestic = isDomesticTravel(origin, destination);
+  const isSouthAsia = isSouthAsiaDestination(destination);
+
+  if (isDomestic && isSouthAsia) {
+    // South Asia domestic - very affordable (₹800-1200/day total)
+    perPersonPerDay = BUDGET_MINIMUMS.southAsiaDomestic.perPersonPerDay;
+    transportCostPerAdult = BUDGET_MINIMUMS.southAsiaDomestic.transportCost;
+  } else if (isSouthAsia) {
+    // Coming to South Asia from abroad
+    perPersonPerDay = BUDGET_MINIMUMS.southAsiaInternational.perPersonPerDay;
+    transportCostPerAdult = BUDGET_MINIMUMS.southAsiaInternational.transportCost;
+  } else if (BUDGET_MINIMUMS.veryExpensive.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.veryExpensive.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.veryExpensive.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.veryExpensive.flightCost;
   } else if (BUDGET_MINIMUMS.expensive.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.expensive.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.expensive.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.expensive.flightCost;
   } else if (BUDGET_MINIMUMS.moderate.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.moderate.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.moderate.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.moderate.flightCost;
   } else if (BUDGET_MINIMUMS.budget.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.budget.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.budget.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.budget.flightCost;
   }
 
   // Adults: full cost, Children: 70%, Infants: 20%
@@ -597,15 +695,15 @@ function calculateMinimumBudget(destination: string, numDays: number, adults: nu
   const childDailyCost = children * perPersonPerDay * 0.7 * numDays;
   const infantDailyCost = infants * perPersonPerDay * 0.2 * numDays;
 
-  // Flight costs (round-trip): Adults full price, Children 75%, Infants 10%
-  const adultFlightCost = adults * flightCostPerAdult;
-  const childFlightCost = children * flightCostPerAdult * 0.75;
-  const infantFlightCost = infants * flightCostPerAdult * 0.1;
+  // Transport costs: Adults full price, Children 75%, Infants 10%
+  const adultTransportCost = adults * transportCostPerAdult;
+  const childTransportCost = children * transportCostPerAdult * 0.75;
+  const infantTransportCost = infants * transportCostPerAdult * 0.1;
 
   const totalDailyCosts = adultDailyCost + childDailyCost + infantDailyCost;
-  const totalFlightCosts = adultFlightCost + childFlightCost + infantFlightCost;
+  const totalTransportCosts = adultTransportCost + childTransportCost + infantTransportCost;
 
-  return Math.round(totalDailyCosts + totalFlightCosts);
+  return Math.round(totalDailyCosts + totalTransportCosts);
 }
 
 // Parse date range to get number of days
@@ -1181,6 +1279,7 @@ export default function CreateTrip() {
                   onBack={() => setStep(2)}
                   onSubmit={handleNext}
                   isLoading={isSubmitting || createTrip.isPending}
+                  origin={(formData as any).origin}
                   destination={(formData as any).destination}
                   dates={(formData as any).dates}
                 />
@@ -1338,7 +1437,7 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
           onChange={(value) => form.setValue("origin", value)}
           placeholder="Your departure city (e.g. New York, London)..."
         />
-        <p className="text-xs text-muted-foreground">Used to estimate flight costs for your trip.</p>
+        <p className="text-xs text-muted-foreground">Used to estimate travel costs for your trip.</p>
       </div>
 
       <div className="space-y-2">
@@ -1432,8 +1531,9 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
   );
 }
 
-function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, dates }: {
+function Step3Form({ defaultValues, onBack, onSubmit, isLoading, origin, destination, dates }: {
   defaultValues: Step3Data & { currency?: string },
+  origin: string,
   onBack: () => void,
   onSubmit: (data: Step3Data & { currency: string }) => void,
   isLoading: boolean,
@@ -1442,7 +1542,7 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
 }) {
   const form = useForm<Step3Data>({
     resolver: zodResolver(step3Schema),
-    defaultValues: defaultValues || { budget: 2000, groupSize: 1, adults: 1, children: 0, infants: 0 }
+    defaultValues: defaultValues || { travelStyle: 'standard', budget: 2000, groupSize: 1, adults: 1, children: 0, infants: 0 }
   });
 
   const [currency, setCurrency] = useState(defaultValues?.currency || "USD");
@@ -1450,6 +1550,10 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
   const [budgetError, setBudgetError] = useState<string | null>(null);
   const [budgetWarning, setBudgetWarning] = useState<string | null>(null);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
+  const [travelStyle, setTravelStyle] = useState<TravelStyleValue>(
+    (defaultValues?.travelStyle as TravelStyleValue) || 'standard'
+  );
+  const [showCustomBudget, setShowCustomBudget] = useState(defaultValues?.travelStyle === 'custom');
 
   // Fetch live exchange rates on mount (using free API)
   useEffect(() => {
@@ -1522,19 +1626,26 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
   const budget = (typeof rawBudget === 'number' && !Number.isNaN(rawBudget)) ? rawBudget : 0;
   const totalTravelers = adults + children + infants;
 
-  // Calculate minimum budget based on destination, duration, and travelers
+  // Calculate minimum budget based on origin, destination, duration, and travelers
   const numDays = getNumDaysFromDateString(dates || "");
   const minimumBudget = useMemo(() => {
-    return calculateMinimumBudget(destination || "", numDays, adults, children, infants);
-  }, [destination, numDays, adults, children, infants]);
+    return calculateMinimumBudget(origin || "", destination || "", numDays, adults, children, infants);
+  }, [origin, destination, numDays, adults, children, infants]);
 
   // Update groupSize when traveler counts change
   useEffect(() => {
     form.setValue("groupSize", totalTravelers);
   }, [adults, children, infants, totalTravelers, form]);
 
-  // Validate budget in real-time
+  // Validate budget in real-time - ONLY for Custom budget (not Budget/Standard/Luxury)
   useEffect(() => {
+    // Only validate when Custom is selected - AI handles Budget/Standard/Luxury automatically
+    if (!showCustomBudget) {
+      setBudgetError(null);
+      setBudgetWarning(null);
+      return;
+    }
+
     if (budget > 0 && minimumBudget > 0) {
       // Convert minimumBudget to selected currency using live rates
       const multiplier = getExchangeRate(currency);
@@ -1551,12 +1662,13 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
         setBudgetWarning(null);
       }
     }
-  }, [budget, minimumBudget, currency, selectedCurrency, totalTravelers, numDays]);
+  }, [budget, minimumBudget, currency, selectedCurrency, totalTravelers, numDays, showCustomBudget]);
 
   // Custom submit handler that includes currency
   const handleFormSubmit = (data: Step3Data) => {
-    // Block submission if budget is way too low
-    if (budgetError) {
+    // Block submission only for Custom if budget is way too low
+    // Budget/Standard/Luxury don't need validation - AI handles costs
+    if (showCustomBudget && budgetError) {
       return;
     }
     onSubmit({ ...data, currency });
@@ -1632,17 +1744,16 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
         <input type="hidden" {...form.register("groupSize", { valueAsNumber: true })} />
       </div>
 
-      {/* Budget Section - After Travelers */}
-      <div className="space-y-2">
-        <Label htmlFor="budget">Total Budget for {totalTravelers} Traveler{totalTravelers > 1 ? 's' : ''}</Label>
-        <div className="flex gap-2">
-          {/* Compact Currency Dropdown */}
-          <div className="relative">
+      {/* Travel Style & Budget Section - Combined for better UX */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <Label className="text-base font-medium">Travel Style & Budget</Label>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Currency:</span>
             <select
               value={currency}
               onChange={(e) => handleCurrencyChange(e.target.value)}
-              className="h-12 pl-3 pr-8 text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg appearance-none cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-              style={{ minWidth: '90px' }}
+              className="h-8 pl-2 pr-6 text-xs font-medium bg-slate-50 border border-slate-200 rounded-lg appearance-none cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-primary/20"
             >
               {CURRENCIES.map((c) => (
                 <option key={c.code} value={c.code}>
@@ -1650,39 +1761,151 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
                 </option>
               ))}
             </select>
-            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-          </div>
-
-          {/* Budget Input */}
-          <div className="relative flex-1">
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-medium text-sm">
-              {selectedCurrency?.symbol || '$'}
-            </div>
-            <Input
-              id="budget"
-              type="number"
-              placeholder="5000"
-              className="pl-8 h-12"
-              {...form.register("budget", { valueAsNumber: true })}
-            />
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Total budget for {totalTravelers} traveler{totalTravelers > 1 ? 's' : ''}{numDays > 0 ? `, ${numDays} days` : ''}.
-          {minimumBudget > 0 && numDays > 0 && (
-            <> Estimated minimum: <span className="text-emerald-600 font-semibold">{selectedCurrency?.symbol || '$'}{Math.round(minimumBudget * getExchangeRate(currency)).toLocaleString()}</span> (based on your selections)</>
+
+        {/* Travel Style Cards - 2x2 Grid - No upfront budget estimates */}
+        <div className="grid grid-cols-2 gap-3">
+          {TRAVEL_STYLES.map((style) => {
+            const isSelected = travelStyle === style.value;
+
+            // Color classes based on style
+            const colorClasses = {
+              emerald: { border: 'border-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700', badge: 'bg-emerald-100 text-emerald-700' },
+              blue: { border: 'border-blue-500', bg: 'bg-blue-50', text: 'text-blue-700', badge: 'bg-blue-100 text-blue-700' },
+              amber: { border: 'border-amber-500', bg: 'bg-amber-50', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-700' },
+              slate: { border: 'border-slate-500', bg: 'bg-slate-50', text: 'text-slate-700', badge: 'bg-slate-100 text-slate-700' },
+            }[style.color];
+
+            return (
+              <motion.button
+                key={style.value}
+                type="button"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  setTravelStyle(style.value as TravelStyleValue);
+                  form.setValue('travelStyle', style.value as TravelStyleValue);
+
+                  if (style.value === 'custom') {
+                    setShowCustomBudget(true);
+                  } else {
+                    setShowCustomBudget(false);
+                    // Set a placeholder budget - AI will calculate realistic costs based on travel style
+                    // This is just a marker; actual costs are determined by AI based on destination + style
+                    form.setValue('budget', 1); // Minimal placeholder, AI calculates actual costs
+                  }
+                }}
+                className={`relative p-4 rounded-xl border-2 transition-all text-left ${
+                  isSelected
+                    ? `${colorClasses?.border} ${colorClasses?.bg} shadow-lg`
+                    : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+                }`}
+              >
+                {/* Selected indicator */}
+                {isSelected && (
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    className={`absolute -top-2 -right-2 w-6 h-6 rounded-full ${colorClasses?.badge} flex items-center justify-center shadow-sm`}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </motion.div>
+                )}
+
+                <div className="flex items-start gap-3">
+                  <div className="text-2xl">{style.icon}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`font-semibold ${isSelected ? colorClasses?.text : 'text-slate-800'}`}>
+                        {style.label}
+                      </span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${isSelected ? colorClasses?.badge : 'bg-slate-100 text-slate-500'}`}>
+                        {style.tagline}
+                      </span>
+                    </div>
+
+                    {/* Features list - no budget estimate shown */}
+                    <ul className="mt-2 space-y-0.5">
+                      {style.features.slice(0, 3).map((feature, idx) => (
+                        <li key={idx} className="text-xs text-slate-500 flex items-center gap-1">
+                          <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                          {feature}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </motion.button>
+            );
+          })}
+        </div>
+
+        {/* Custom Budget Input - Only shown when Custom is selected */}
+        <AnimatePresence>
+          {showCustomBudget && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <Label htmlFor="budget" className="text-sm font-medium">
+                  Enter Your Total Budget for {totalTravelers} Traveler{totalTravelers > 1 ? 's' : ''} ({numDays} days)
+                </Label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-semibold">
+                      {selectedCurrency?.symbol || '$'}
+                    </div>
+                    <Input
+                      id="budget"
+                      type="number"
+                      placeholder="Enter your budget"
+                      className="pl-8 h-12 text-lg font-semibold bg-white"
+                      {...form.register("budget", { valueAsNumber: true })}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">
+                  AI will create a realistic itinerary that fits your budget. If budget is tight, it will suggest cheaper alternatives like free activities, budget stays, or shorter trips.
+                </p>
+              </div>
+            </motion.div>
           )}
-        </p>
-        {form.formState.errors.budget && <p className="text-destructive text-sm">{form.formState.errors.budget.message}</p>}
+        </AnimatePresence>
+
+        {/* Budget/Standard/Luxury - AI handles costs silently, no message needed */}
+
+        {/* Hidden input for non-custom styles to ensure budget is submitted */}
+        {!showCustomBudget && (
+          <input type="hidden" {...form.register("budget", { valueAsNumber: true })} />
+        )}
+
+        {/* Validation Messages */}
+        {form.formState.errors.budget && (
+          <p className="text-destructive text-sm">{form.formState.errors.budget.message}</p>
+        )}
         {budgetError && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-700 text-sm font-medium">{budgetError}</p>
-          </div>
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2"
+          >
+            <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+            <p className="text-red-700 text-sm">{budgetError}</p>
+          </motion.div>
         )}
         {budgetWarning && !budgetError && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2"
+          >
+            <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <p className="text-amber-700 text-sm">{budgetWarning}</p>
-          </div>
+          </motion.div>
         )}
       </div>
 

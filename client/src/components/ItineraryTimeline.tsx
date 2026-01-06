@@ -65,12 +65,23 @@ const TYPE_HIGHLIGHT_COLORS: Record<string, string> = {
   lodging: "bg-green-100 border-green-400 ring-2 ring-green-300",
 };
 
+// Currency symbol mapping
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$', INR: '₹', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿',
+  CNY: '¥', CHF: 'CHF', KRW: '₩', HKD: 'HK$', NZD: 'NZ$', SEK: 'kr', NOK: 'kr', DKK: 'kr', MXN: '$',
+  BRL: 'R$', SAR: '﷼', MYR: 'RM', IDR: 'Rp', PHP: '₱', ZAR: 'R', TRY: '₺', RUB: '₽', PLN: 'zł', CZK: 'Kč', HUF: 'Ft'
+};
+
+function getCurrencySymbol(currency?: string): string {
+  return CURRENCY_SYMBOLS[currency || 'USD'] || currency || '$';
+}
+
 export function ItineraryTimeline({ trip, highlightedLocation, onActivityClick }: Props) {
   const itinerary = trip.itinerary as unknown as { days: DayPlan[]; costBreakdown?: { currencySymbol?: string; currency?: string } };
   const activityRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
-  // Get currency symbol from trip data
-  const currencySymbol = itinerary?.costBreakdown?.currencySymbol || trip.currency === 'INR' ? '₹' : trip.currency === 'EUR' ? '€' : trip.currency === 'GBP' ? '£' : '$';
+  // Get currency symbol from trip data - use costBreakdown first, then trip.currency, then fallback
+  const currencySymbol = itinerary?.costBreakdown?.currencySymbol || getCurrencySymbol(trip.currency ?? undefined);
 
   // Generate day-based activity ID (e.g., "1-1", "1-2", "2-1")
   const getActivityId = (dayNum: number, activityIdx: number): string => {
