@@ -15,7 +15,7 @@
 
 import { useParams } from "wouter";
 import { useTrip } from "@/hooks/use-trips";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Loader2, X, ChevronDown, ChevronUp, Route } from "lucide-react";
 
@@ -23,6 +23,15 @@ import { Loader2, X, ChevronDown, ChevronUp, Route } from "lucide-react";
 import { HeaderBar } from "@/components/results/HeaderBar";
 import { CertaintyBar } from "@/components/results/CertaintyBar";
 import { RightRailPanels } from "@/components/results/RightRailPanels";
+
+// Failure state components
+import {
+  NotFeasibleState,
+  TimeoutState,
+  ErrorState,
+  InlineWarning,
+  EmptyItineraryState,
+} from "@/components/results/FailureStates";
 
 // Existing working components
 import { ItineraryMap } from "@/components/ItineraryMap";
@@ -147,15 +156,45 @@ function InlineProgress({ message, details }: InlineProgressProps) {
 }
 
 // ============================================================================
+// DEMO BANNER
+// ============================================================================
+
+function DemoBanner() {
+  return (
+    <div className="fixed top-0 left-0 right-0 z-[100] bg-gradient-to-r from-amber-500 to-orange-500 text-white text-center py-2 px-4 text-sm font-medium shadow-lg">
+      <span className="mr-2">📍</span>
+      Example trip — Your results will vary based on passport, dates, and budget
+      <a
+        href="/create"
+        className="ml-3 underline underline-offset-2 hover:no-underline font-semibold"
+      >
+        Plan your own trip →
+      </a>
+    </div>
+  );
+}
+
+// ============================================================================
 // MAIN PAGE COMPONENT
 // ============================================================================
 
-export default function TripResultsV1() {
-  const { id } = useParams();
-  const tripId = Number(id);
+export interface TripResultsV1Props {
+  tripIdOverride?: number;
+  tripDataOverride?: any; // Full trip data for demo mode fallback
+  isDemo?: boolean;
+}
 
-  // Fetch trip data
-  const { data: trip, isLoading, error } = useTrip(tripId);
+export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo = false }: TripResultsV1Props & Record<string, unknown> = {}) {
+  const { id } = useParams();
+  const tripId = tripIdOverride ?? Number(id);
+
+  // Fetch trip data (skip if we have tripDataOverride)
+  const { data: trip, isLoading, error } = useTrip(tripDataOverride ? -1 : tripId);
+
+  // Use override data if provided, otherwise use fetched data
+  const effectiveTrip = tripDataOverride || trip;
+
+  const queryClient = useQueryClient();
 
   // Working trip state - for optimistic updates
   const [workingTrip, setWorkingTrip] = useState<TripResponse | null>(null);
@@ -166,20 +205,26 @@ export default function TripResultsV1() {
   const [allDaysExpanded, setAllDaysExpanded] = useState(true);
   const [showDistances, setShowDistances] = useState(false);
 
+  // Timeout and retry state
+  const [generationStartTime] = useState(() => Date.now());
+  const [showTimeout, setShowTimeout] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const TIMEOUT_THRESHOLD_MS = 90000; // 90 seconds
+
   // Safe merge from server into working state
   useEffect(() => {
-    if (!trip) return;
+    if (!effectiveTrip) return;
     setWorkingTrip(prev => {
-      if (!prev) return trip;
+      if (!prev) return effectiveTrip;
       return {
         ...prev,
-        feasibilityStatus: trip.feasibilityStatus,
-        feasibilityReport: trip.feasibilityReport ?? prev.feasibilityReport,
-        itinerary: trip.itinerary ?? prev.itinerary,
-        updatedAt: trip.updatedAt,
+        feasibilityStatus: effectiveTrip.feasibilityStatus,
+        feasibilityReport: effectiveTrip.feasibilityReport ?? prev.feasibilityReport,
+        itinerary: effectiveTrip.itinerary ?? prev.itinerary,
+        updatedAt: effectiveTrip.updatedAt,
       };
     });
-  }, [trip]);
+  }, [effectiveTrip]);
 
   // Build analytics context once when trip loads
   const analyticsContext = useMemo(() => {
@@ -200,6 +245,36 @@ export default function TripResultsV1() {
   // Fetch progress while generating
   const { data: progress } = useTripProgress(tripId, isGenerating);
 
+  // Timeout detection - show timeout UI if generation takes too long
+  useEffect(() => {
+    if (!isGenerating) {
+      setShowTimeout(false);
+      return;
+    }
+
+    const checkTimeout = () => {
+      const elapsed = Date.now() - generationStartTime;
+      if (elapsed > TIMEOUT_THRESHOLD_MS && isGenerating) {
+        setShowTimeout(true);
+      }
+    };
+
+    const interval = setInterval(checkTimeout, 5000);
+    return () => clearInterval(interval);
+  }, [isGenerating, generationStartTime, TIMEOUT_THRESHOLD_MS]);
+
+  // Retry handler - invalidate queries to refetch
+  const handleRetry = useCallback(async () => {
+    setIsRetrying(true);
+    setShowTimeout(false);
+
+    // Invalidate trip query to trigger refetch
+    await queryClient.invalidateQueries({ queryKey: ['trip', tripId] });
+
+    // Reset retry state after a moment
+    setTimeout(() => setIsRetrying(false), 2000);
+  }, [queryClient, tripId]);
+
   // Track generation events
   useEffect(() => {
     if (workingTrip && isGenerating) {
@@ -211,6 +286,26 @@ export default function TripResultsV1() {
       );
     }
   }, [workingTrip?.id, isGenerating, analyticsContext]);
+
+  // Track feasibility_completed when feasibility analysis is done
+  useEffect(() => {
+    if (!workingTrip) return;
+    const status = workingTrip.feasibilityStatus;
+    // Fire when feasibility is complete (not pending)
+    if (status && status !== 'pending') {
+      const report = workingTrip.feasibilityReport as any;
+      trackTripEvent(
+        workingTrip.id,
+        'feasibility_completed',
+        {
+          verdict: status,
+          certaintyScore: report?.score,
+          visaType: report?.visaDetails?.type,
+        },
+        analyticsContext
+      );
+    }
+  }, [workingTrip?.id, workingTrip?.feasibilityStatus]);
 
   // Fire generate_completed exactly once when itinerary appears
   useEffect(() => {
@@ -228,6 +323,24 @@ export default function TripResultsV1() {
       );
     }
   }, [workingTrip, isGenerating, analyticsContext]);
+
+  // Fire itinerary_viewed when page loads with itinerary (separate from generate)
+  useEffect(() => {
+    if (!workingTrip) return;
+    const hasItinerary = !!(workingTrip.itinerary as any)?.days?.length;
+    if (hasItinerary) {
+      trackTripEvent(
+        workingTrip.id,
+        'itinerary_viewed',
+        {
+          daysCount: (workingTrip.itinerary as any)?.days?.length,
+          isDemo,
+        },
+        analyticsContext,
+        isDemo ? 'demo' : 'trip_results_v1'
+      );
+    }
+  }, [workingTrip?.id]); // Only fire once per trip load
 
   // Day click handler
   const handleDayClick = useCallback((dayIndex: number) => {
@@ -294,8 +407,8 @@ export default function TripResultsV1() {
     });
   }, [tripId, analyticsContext]);
 
-  // Loading state
-  if (isLoading || !workingTrip) {
+  // Loading state (skip if we have tripDataOverride)
+  if (!tripDataOverride && (isLoading || !workingTrip)) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-primary animate-spin" />
@@ -303,15 +416,61 @@ export default function TripResultsV1() {
     );
   }
 
-  // Error state
-  if (error) {
+  // Error state - use premium component (skip if we have tripDataOverride)
+  if (!tripDataOverride && error) {
+    return (
+      <ErrorState
+        title="Couldn't load your trip"
+        message={error.message || "Something went wrong while loading your trip details."}
+        errorCode={error.name}
+        onRetry={handleRetry}
+        isRetrying={isRetrying}
+      />
+    );
+  }
+
+  // For tripDataOverride, ensure workingTrip is set
+  if (tripDataOverride && !workingTrip) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-white/70">Failed to load trip</p>
-          <p className="text-white/50 text-sm mt-1">{error.message}</p>
-        </div>
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
       </div>
+    );
+  }
+
+  // At this point workingTrip is guaranteed to be non-null
+  if (!workingTrip) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  // Trip not feasible - show premium "not feasible" state
+  if (workingTrip.feasibilityStatus === 'no') {
+    const report = workingTrip.feasibilityReport as any;
+    return (
+      <NotFeasibleState
+        destination={workingTrip.destination || 'Unknown'}
+        passport={workingTrip.passport || undefined}
+        reason={report?.summary || report?.breakdown?.visa?.reason}
+        visaType={report?.visaDetails?.type}
+        tripId={workingTrip.id}
+      />
+    );
+  }
+
+  // Timeout state - show retry UI if generation is taking too long
+  if (showTimeout && isGenerating) {
+    const elapsedSeconds = Math.floor((Date.now() - generationStartTime) / 1000);
+    return (
+      <TimeoutState
+        destination={workingTrip.destination || 'your destination'}
+        onRetry={handleRetry}
+        isRetrying={isRetrying}
+        elapsedSeconds={elapsedSeconds}
+      />
     );
   }
 
@@ -337,7 +496,10 @@ export default function TripResultsV1() {
   } : null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+    <div className={`min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 ${isDemo ? 'pt-10' : ''}`}>
+      {/* Demo banner */}
+      {isDemo && <DemoBanner />}
+
       {/* Sticky headers */}
       <HeaderBar trip={workingTrip} />
       <CertaintyBar trip={workingTrip} />
@@ -346,7 +508,7 @@ export default function TripResultsV1() {
       <main className="max-w-7xl mx-auto px-4 md:px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left column: Itinerary - scrollable container */}
-          <section className="lg:col-span-7 lg:max-h-[calc(100vh-160px)] lg:overflow-y-auto lg:pr-2 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+          <section className="lg:col-span-7 lg:max-h-[calc(100vh-80px)] lg:overflow-y-auto lg:overflow-x-hidden scrollbar-dark">
             {/* Sticky header within scrollable area - solid bg to prevent content showing through */}
             <div className="sticky top-0 z-10 bg-slate-900 pb-3 -mx-1 px-1">
               {/* Title row with controls */}
@@ -389,6 +551,14 @@ export default function TripResultsV1() {
                 </p>
               )}
             </div>
+
+            {/* Inline warnings for missing data */}
+            {!isGenerating && itinerary?.days?.length > 0 && !costs && (
+              <InlineWarning type="missing_costs" />
+            )}
+            {!isGenerating && itinerary?.days?.length > 0 && costs && costs.grandTotal === 0 && (
+              <InlineWarning type="missing_costs" />
+            )}
 
             {/* Inline progress - non-blocking */}
             {isGenerating && (
@@ -454,6 +624,7 @@ export default function TripResultsV1() {
                     trip={workingTrip}
                     onLocationSelect={handleMapMarkerClick}
                     highlightedLocation={highlightedLocation}
+                    activeDayIndex={activeDayIndex}
                     isExpanded={false}
                     onExpandToggle={handleMapExpandToggle}
                   />
@@ -469,6 +640,7 @@ export default function TripResultsV1() {
                 hasLocalChanges={false}
                 hasUndoableChange={false}
                 onUndo={() => {}}
+                isDemo={isDemo}
               />
             </div>
           </aside>
@@ -500,6 +672,7 @@ export default function TripResultsV1() {
               trip={workingTrip}
               onLocationSelect={handleMapMarkerClick}
               highlightedLocation={highlightedLocation}
+              activeDayIndex={activeDayIndex}
               isExpanded={true}
               onExpandToggle={handleMapExpandToggle}
             />

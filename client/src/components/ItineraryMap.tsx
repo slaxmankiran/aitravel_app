@@ -20,6 +20,7 @@ interface DayPlan {
 interface Props {
   trip: TripResponse;
   highlightedLocation?: string | number | null;
+  activeDayIndex?: number | null; // When set, filters map to show only this day's markers
   onLocationSelect?: (locationId: string) => void;
   isExpanded?: boolean;
   onExpandToggle?: () => void;
@@ -92,7 +93,7 @@ function getWalkingTime(distanceKm: number): string {
   return `${hours}h ${mins}m walk`;
 }
 
-export function ItineraryMap({ trip, highlightedLocation, onLocationSelect, isExpanded, onExpandToggle }: Props) {
+export function ItineraryMap({ trip, highlightedLocation, activeDayIndex, onLocationSelect, isExpanded, onExpandToggle }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
 
@@ -354,6 +355,18 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect, isEx
     }
   }, [highlightedLocation, allLocations]);
 
+  // Sync external activeDayIndex with internal selectedDay state
+  // When a day card is clicked, filter map to show only that day's markers
+  useEffect(() => {
+    if (activeDayIndex !== null && activeDayIndex !== undefined) {
+      // Convert 0-based index to 1-based day number
+      const dayNumber = activeDayIndex + 1;
+      setSelectedDay(dayNumber);
+      // Zoom to that day's locations
+      zoomToDay(dayNumber);
+    }
+  }, [activeDayIndex]);
+
   // Initialize map
   useEffect(() => {
     if (!mapRef.current || allLocations.length === 0) return;
@@ -546,8 +559,17 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect, isEx
           ))}
         </div>
 
-        {/* Floating Controls - Top Right: Day selector */}
-        <div className="absolute top-2 right-12 z-[1000] print:hidden">
+        {/* Floating Controls - Top Right: Day selector + Active day indicator */}
+        <div className="absolute top-2 right-12 z-[1000] print:hidden flex items-center gap-2">
+          {/* Active day indicator - shows when an activity is highlighted */}
+          {highlightedLocation && (() => {
+            const dayNum = String(highlightedLocation).split('-')[0];
+            return (
+              <div className="px-2 py-1 rounded-md bg-primary/20 border border-primary/30 text-[10px] font-medium text-primary">
+                Showing Day {dayNum}
+              </div>
+            );
+          })()}
           <select
             value={selectedDay ?? ""}
             onChange={(e) => {

@@ -9,6 +9,7 @@ import { useCallback, useRef, useEffect } from "react";
 import { DayCard } from "./DayCard";
 import { type Itinerary, getCurrencySymbol, extractCityFromTitle } from "./itinerary-adapters";
 import { trackTripEvent } from "@/lib/analytics";
+import { CheckCircle2, Sparkles } from "lucide-react";
 
 // ============================================================================
 // PROPS
@@ -149,6 +150,27 @@ export function DayCardList({
           />
         );
       })}
+
+      {/* End of Journey Card - provides closure (compact) */}
+      <div className="relative mt-4">
+        {/* Subtle divider */}
+        <div className="flex items-center gap-3 mb-2">
+          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+          <Sparkles className="w-3 h-3 text-white/15" />
+          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+        </div>
+
+        {/* Closure card - compact */}
+        <div className="bg-gradient-to-br from-white/[0.02] to-transparent border border-white/8 rounded-xl px-4 py-3 text-center">
+          <div className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-emerald-500/10 mb-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          </div>
+          <h4 className="text-white/70 font-medium text-sm mb-1">End of Itinerary</h4>
+          <p className="text-white/40 text-xs leading-relaxed max-w-[280px] mx-auto">
+            Your {totalDays}-day journey is planned. Adjust days, swap activities, or review costs anytime.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

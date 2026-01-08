@@ -294,6 +294,125 @@ export function estimateWalkingTime(distanceKm: number): string {
 }
 
 // ============================================================================
+// SMART TRANSPORT MODE
+// ============================================================================
+
+/**
+ * Keywords that suggest user has luggage or special transport needs
+ */
+const LUGGAGE_KEYWORDS = [
+  'airport', 'check out', 'checkout', 'check-out', 'depart', 'departure',
+  'arrive', 'arrival', 'station', 'terminal', 'hotel', 'hostel', 'accommodation'
+];
+
+const LODGING_ACTIVITY_KEYWORDS = [
+  'check in', 'checkin', 'check-in', 'check out', 'checkout', 'check-out'
+];
+
+/**
+ * Determine if activity involves luggage (airport, hotel checkout, etc.)
+ */
+export function hasLuggageContext(activity: Activity, prevActivity?: Activity): boolean {
+  const activityText = `${activity.description} ${activity.name || ''} ${getLocationString(activity) || ''}`.toLowerCase();
+  const prevText = prevActivity
+    ? `${prevActivity.description} ${prevActivity.name || ''} ${getLocationString(prevActivity) || ''}`.toLowerCase()
+    : '';
+
+  // Check for lodging type with checkout keywords
+  if (activity.type === 'lodging' || activity.type === 'transport') {
+    if (LODGING_ACTIVITY_KEYWORDS.some(kw => activityText.includes(kw) || prevText.includes(kw))) {
+      return true;
+    }
+  }
+
+  // Check for airport/station keywords
+  if (LUGGAGE_KEYWORDS.some(kw => activityText.includes(kw) || prevText.includes(kw))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Get smart transport mode based on distance and activity context.
+ * Returns: { mode: string, time: string, realistic: boolean }
+ */
+export function getSmartTransportMode(
+  distanceKm: number | null,
+  activity: Activity,
+  prevActivity?: Activity
+): { mode: string; time: string; icon: string } {
+  // If no distance, return the activity's own transport mode or default
+  if (distanceKm === null || distanceKm === undefined) {
+    const mode = activity.transportMode || 'walk';
+    return { mode, time: '', icon: getTransportIconName(mode) };
+  }
+
+  const hasLuggage = hasLuggageContext(activity, prevActivity);
+
+  // Decision logic based on distance and context
+  if (hasLuggage) {
+    // Always suggest taxi/car when luggage is involved
+    if (distanceKm < 0.3) {
+      return { mode: 'walk', time: estimateWalkingTime(distanceKm), icon: 'walk' };
+    }
+    const taxiTime = Math.round((distanceKm / 30) * 60); // ~30 km/h avg in city
+    return {
+      mode: 'taxi',
+      time: taxiTime < 60 ? `${Math.max(5, taxiTime)} min` : `${Math.floor(taxiTime/60)}h ${taxiTime%60}m`,
+      icon: 'car'
+    };
+  }
+
+  // No luggage - base on distance
+  if (distanceKm < 1) {
+    // < 1km: Walk
+    return { mode: 'walk', time: estimateWalkingTime(distanceKm), icon: 'walk' };
+  } else if (distanceKm < 3) {
+    // 1-3km: Walk or metro
+    return { mode: 'walk', time: estimateWalkingTime(distanceKm), icon: 'walk' };
+  } else if (distanceKm < 10) {
+    // 3-10km: Metro/bus
+    const transitTime = Math.round((distanceKm / 25) * 60) + 10; // ~25km/h + wait time
+    return { mode: 'metro', time: `${transitTime} min`, icon: 'train' };
+  } else if (distanceKm < 50) {
+    // 10-50km: Taxi or train
+    const taxiTime = Math.round((distanceKm / 35) * 60);
+    return {
+      mode: 'taxi',
+      time: taxiTime < 60 ? `${taxiTime} min` : `${Math.floor(taxiTime/60)}h ${taxiTime%60}m`,
+      icon: 'car'
+    };
+  } else {
+    // > 50km: Likely intercity - train, bus, or flight
+    if (distanceKm > 300) {
+      const flightTime = Math.round(distanceKm / 500 * 60) + 90; // flight time + airport overhead
+      return { mode: 'flight', time: `${Math.floor(flightTime/60)}h`, icon: 'plane' };
+    }
+    const trainTime = Math.round((distanceKm / 80) * 60);
+    return {
+      mode: 'train',
+      time: trainTime < 60 ? `${trainTime} min` : `${Math.floor(trainTime/60)}h ${trainTime%60}m`,
+      icon: 'train'
+    };
+  }
+}
+
+/**
+ * Get transport icon name for a mode string
+ */
+function getTransportIconName(mode: string): string {
+  const m = mode.toLowerCase();
+  if (m.includes('walk')) return 'walk';
+  if (m.includes('metro') || m.includes('subway') || m.includes('mrt') || m.includes('bts')) return 'train';
+  if (m.includes('train')) return 'train';
+  if (m.includes('bus')) return 'bus';
+  if (m.includes('flight') || m.includes('fly') || m.includes('plane')) return 'plane';
+  if (m.includes('ferry') || m.includes('boat')) return 'boat';
+  return 'car';
+}
+
+// ============================================================================
 // CITY EXTRACTION
 // ============================================================================
 

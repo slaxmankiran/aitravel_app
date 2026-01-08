@@ -148,6 +148,7 @@ export function DayCard({
                 isHovered={hoveredActivityKey === activityKey}
                 showTransport={!isFirst}
                 distanceFromPrevious={distanceFromPrevious}
+                prevActivity={prevActivity}
                 showDistance={showDistances}
                 onClick={() => onActivityClick(activityKey)}
                 onMouseEnter={() => onActivityHover(activityKey)}

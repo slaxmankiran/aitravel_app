@@ -213,10 +213,29 @@ export function ActionItems({ trip, completedItems = [], onToggle }: ActionItems
     onToggle?.(id);
   };
 
+  // Group items by priority category
+  const requiredItems = items.filter(i => i.priority === 'urgent');
+  const recommendedItems = items.filter(i => i.priority === 'soon');
+  const optionalItems = items.filter(i => i.priority === 'later');
+
+  // Check if any urgent items exist
+  const hasUrgentItems = requiredItems.length > 0 && requiredItems.some(i => !i.completed);
+
   return (
-    <div className="space-y-2">
-      {/* Progress */}
-      <div className="flex items-center justify-between text-xs mb-3">
+    <div className="space-y-4">
+      {/* Reassurance message */}
+      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+        <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+        <p className="text-xs text-emerald-300/90 leading-relaxed">
+          {hasUrgentItems
+            ? "A few items need attention soon. We'll guide you step by step."
+            : "You have plenty of time. We'll guide you step by step."
+          }
+        </p>
+      </div>
+
+      {/* Progress bar */}
+      <div className="flex items-center justify-between text-xs">
         <span className="text-white/50">{completedCount} of {items.length} completed</span>
         <div className="flex-1 mx-3 h-1.5 bg-white/10 rounded-full overflow-hidden">
           <div
@@ -226,12 +245,50 @@ export function ActionItems({ trip, completedItems = [], onToggle }: ActionItems
         </div>
       </div>
 
-      {/* Items */}
-      <div className="space-y-1">
-        {items.map(item => (
-          <ActionItemRow key={item.id} item={item} onToggle={handleToggle} />
-        ))}
-      </div>
+      {/* Required items (urgent) */}
+      {requiredItems.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Required</span>
+            <div className="flex-1 h-px bg-red-500/20" />
+          </div>
+          <div className="space-y-1">
+            {requiredItems.map(item => (
+              <ActionItemRow key={item.id} item={item} onToggle={handleToggle} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recommended items (soon) */}
+      {recommendedItems.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-400">Recommended</span>
+            <div className="flex-1 h-px bg-amber-500/20" />
+          </div>
+          <div className="space-y-1">
+            {recommendedItems.map(item => (
+              <ActionItemRow key={item.id} item={item} onToggle={handleToggle} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Optional items (later) */}
+      {optionalItems.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">Optional</span>
+            <div className="flex-1 h-px bg-white/10" />
+          </div>
+          <div className="space-y-1">
+            {optionalItems.map(item => (
+              <ActionItemRow key={item.id} item={item} onToggle={handleToggle} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

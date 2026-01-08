@@ -171,11 +171,20 @@ export function TripChat({ tripId, destination, tripContext, onTripUpdate }: Tri
       if (data.pendingChanges) {
         setActivePendingChange(data.pendingChanges);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Chat error:', err);
+
+      // Determine specific error message
+      const isNetworkError = err?.message?.includes('fetch') || err?.message?.includes('network');
+      const isTimeout = err?.message?.includes('timeout') || err?.name === 'AbortError';
+
       toast({
-        title: 'Error',
-        description: 'Failed to send message. Please try again.',
+        title: isTimeout ? 'Request timed out' : isNetworkError ? 'Connection issue' : 'Message failed',
+        description: isTimeout
+          ? 'The AI is taking too long to respond. Try a simpler request.'
+          : isNetworkError
+          ? 'Check your internet connection and try again.'
+          : 'Something went wrong. Please try again.',
         variant: 'destructive',
       });
 
@@ -227,11 +236,17 @@ export function TripChat({ tripId, destination, tripContext, onTripUpdate }: Tri
       };
       setMessages(prev => [...prev, confirmMessage]);
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Confirm error:', err);
+
+      // Determine specific error message
+      const isNetworkError = err?.message?.includes('fetch') || err?.message?.includes('network');
+
       toast({
-        title: 'Error',
-        description: 'Failed to apply changes. Please try again.',
+        title: 'Changes not applied',
+        description: isNetworkError
+          ? 'Connection lost. Your itinerary is unchanged. Try again.'
+          : 'We couldn\'t save your changes. Your itinerary is unchanged.',
         variant: 'destructive',
       });
     } finally {

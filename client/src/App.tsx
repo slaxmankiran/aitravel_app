@@ -1,3 +1,4 @@
+import React from "react";
 import { Switch, Route, Redirect, useParams } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -24,13 +25,71 @@ function TripRedirect() {
   return <Redirect to={`/trips/${params.id}/results-v1`} />;
 }
 
+// Demo page - fetches demo trip from API with fallback
+function DemoTrip() {
+  const [demoTripData, setDemoTripData] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [tracked, setTracked] = React.useState(false);
+
+  React.useEffect(() => {
+    // Fetch demo trip from dedicated endpoint
+    fetch('/api/demo-trip')
+      .then(res => res.json())
+      .then(data => {
+        setDemoTripData(data);
+        setLoading(false);
+      })
+      .catch(() => {
+        // Fallback to trip 2 if endpoint fails
+        setDemoTripData({ id: 2 });
+        setLoading(false);
+      });
+  }, []);
+
+  // Track demo opened event once data is loaded
+  React.useEffect(() => {
+    if (demoTripData && !tracked) {
+      import('@/lib/analytics').then(({ trackTripEvent }) => {
+        trackTripEvent(
+          demoTripData.id > 0 ? demoTripData.id : 0,
+          'demo_opened',
+          { destination: demoTripData.destination },
+          undefined,
+          'demo'
+        );
+      });
+      setTracked(true);
+    }
+  }, [demoTripData, tracked]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // If fallback data (id === -1), pass the full data directly
+  // Otherwise use the trip ID to fetch from API
+  return (
+    <TripResultsV1
+      tripIdOverride={demoTripData?.id > 0 ? demoTripData.id : 2}
+      tripDataOverride={demoTripData?.id < 0 ? demoTripData : undefined}
+      isDemo={true}
+    />
+  );
+}
+
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/demo" component={DemoTrip} />
       <Route path="/create" component={CreateTrip} />
       <Route path="/chat" component={ChatTrip} />
       <Route path="/trips/:id/feasibility" component={FeasibilityResults} />
+      {/* @ts-expect-error - TripResultsV1 has optional props that are unused in this route */}
       <Route path="/trips/:id/results-v1" component={TripResultsV1} />
       <Route path="/trips/:id" component={TripRedirect} />
       <Route path="/trips" component={MyTrips} />

@@ -107,9 +107,9 @@ export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
             </div>
           </div>
 
-          {/* Right: Actions */}
-          <div className="flex items-center gap-1 md:gap-2">
-            {/* Edit Trip - Important escape hatch */}
+          {/* Right: Actions - Edit is prominent, others are subdued */}
+          <div className="flex items-center gap-1">
+            {/* Edit Trip - Important escape hatch, kept prominent */}
             <Link href={editUrl}>
               <Button
                 variant="ghost"
@@ -121,26 +121,30 @@ export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
               </Button>
             </Link>
 
-            {/* Share */}
+            {/* Divider */}
+            <div className="hidden sm:block w-px h-4 bg-white/10 mx-1" />
+
+            {/* Secondary actions - more subdued */}
             <Button
               variant="ghost"
               size="sm"
               onClick={handleShare}
-              className="text-white/70 hover:text-white hover:bg-white/10"
+              className="text-white/40 hover:text-white/70 hover:bg-white/5"
+              title="Share trip"
             >
-              <Share2 className="w-4 h-4" />
-              <span className="hidden md:inline ml-1">Share</span>
+              <Share2 className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline ml-1 text-xs">Share</span>
             </Button>
 
-            {/* Export PDF */}
             <Button
               variant="ghost"
               size="sm"
               onClick={handleExport}
-              className="text-white/70 hover:text-white hover:bg-white/10"
+              className="text-white/40 hover:text-white/70 hover:bg-white/5"
+              title="Export as PDF"
             >
-              <Download className="w-4 h-4" />
-              <span className="hidden md:inline ml-1">PDF</span>
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline ml-1 text-xs">PDF</span>
             </Button>
           </div>
         </div>

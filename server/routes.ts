@@ -57,6 +57,169 @@ const feasibilityAnalytics: FeasibilityAnalytics = {
   topCorridors: new Map(),
 };
 
+// ============================================================================
+// DEMO TRIP FALLBACK DATA - Used when no real demo trip exists
+// ============================================================================
+const DEMO_TRIP_FALLBACK = {
+  id: -1, // Negative ID indicates fallback
+  userId: null,
+  passport: "India",
+  residence: null,
+  origin: null,
+  destination: "Thailand",
+  dates: "2026-02-15 to 2026-02-22",
+  budget: 2000,
+  currency: "USD",
+  groupSize: 2,
+  adults: 2,
+  children: 0,
+  infants: 0,
+  travelStyle: "adventure",
+  accommodationType: null,
+  pacePreference: null,
+  interests: null,
+  feasibilityStatus: "yes",
+  feasibilityReport: {
+    score: 85,
+    overall: "yes",
+    summary: "Trip is possible with visa application required.",
+    breakdown: {
+      visa: { reason: "Visa required for Indian passport holders", status: "issue" },
+      budget: { reason: "Budget is adequate for this trip", status: "ok", estimatedCost: 858 },
+      safety: { reason: "Generally safe with normal precautions", status: "safe" },
+      accessibility: { reason: "Thailand fully open to tourists", status: "accessible" },
+    },
+    visaDetails: {
+      type: "embassy_visa",
+      name: "Tourist Visa",
+      required: true,
+      processingDays: { minimum: 5, maximum: 15 },
+      cost: { government: 50, service: 20, totalPerPerson: 70, currency: "USD" },
+      timing: { urgency: "ok", hasEnoughTime: true, recommendation: "Apply within the next week." },
+    },
+    schemaVersion: 2,
+    generatedAt: new Date().toISOString(),
+  },
+  itinerary: {
+    days: [
+      {
+        day: 1,
+        date: "2026-02-15",
+        title: "Bangkok Arrival & Riverside Serenity",
+        activities: [
+          { time: "14:00", type: "transport", location: "Suvarnabhumi Airport", description: "Arrive at Bangkok Airport", estimatedCost: 10, coordinates: { lat: 13.6811, lng: 100.747 } },
+          { time: "16:30", type: "activity", location: "Wat Pho (Temple of the Reclining Buddha)", description: "Explore Wat Pho", estimatedCost: 10, coordinates: { lat: 13.7466, lng: 100.493 } },
+          { time: "18:00", type: "activity", location: "Sanam Luang Park", description: "Evening stroll at Sanam Luang", estimatedCost: 0, coordinates: { lat: 13.7539, lng: 100.492 } },
+        ],
+        localFood: [
+          { meal: "lunch", name: "Thip Samai Pad Thai", cuisine: "Thai", estimatedCost: 8 },
+          { meal: "dinner", name: "Jay Fai Street Food", cuisine: "Thai", estimatedCost: 12 },
+        ],
+      },
+      {
+        day: 2,
+        date: "2026-02-16",
+        title: "Royal Grandeur & Market Marvels",
+        activities: [
+          { time: "09:00", type: "activity", location: "Grand Palace", description: "Visit Grand Palace", estimatedCost: 30, coordinates: { lat: 13.7501, lng: 100.491 } },
+          { time: "12:00", type: "activity", location: "Wat Arun", description: "Explore Temple of Dawn", estimatedCost: 6, coordinates: { lat: 13.7437, lng: 100.488 } },
+          { time: "16:00", type: "activity", location: "Chatuchak Market", description: "Shop at weekend market", estimatedCost: 20, coordinates: { lat: 13.7986, lng: 100.551 } },
+        ],
+        localFood: [
+          { meal: "breakfast", name: "On Lok Yun", cuisine: "Thai-Chinese", estimatedCost: 6 },
+          { meal: "lunch", name: "Krua Apsorn", cuisine: "Thai", estimatedCost: 10 },
+        ],
+      },
+      {
+        day: 3,
+        date: "2026-02-17",
+        title: "Ayutthaya Ancient Wonders",
+        activities: [
+          { time: "08:00", type: "transport", location: "Bangkok to Ayutthaya", description: "Train to Ayutthaya", estimatedCost: 6, coordinates: { lat: 13.7384, lng: 100.513 } },
+          { time: "10:00", type: "activity", location: "Wat Mahathat", description: "Famous Buddha head in tree roots", estimatedCost: 4, coordinates: { lat: 14.3572, lng: 100.567 } },
+          { time: "14:30", type: "activity", location: "Wat Chaiwatthanaram", description: "Stunning riverside temple", estimatedCost: 4, coordinates: { lat: 14.3422, lng: 100.543 } },
+        ],
+        localFood: [
+          { meal: "lunch", name: "Ayutthaya Floating Market", cuisine: "Thai", estimatedCost: 7 },
+        ],
+      },
+      {
+        day: 4,
+        date: "2026-02-18",
+        title: "Chiang Mai Temple Trails",
+        activities: [
+          { time: "08:00", type: "transport", location: "Bangkok to Chiang Mai", description: "Fly to Chiang Mai", estimatedCost: 80, coordinates: { lat: 13.6811, lng: 100.747 } },
+          { time: "12:00", type: "activity", location: "Wat Phra Singh", description: "Visit Wat Phra Singh", estimatedCost: 4, coordinates: { lat: 18.7889, lng: 98.9806 } },
+          { time: "14:00", type: "activity", location: "Wat Chedi Luang", description: "Ancient temple ruins", estimatedCost: 4, coordinates: { lat: 18.7875, lng: 98.9869 } },
+        ],
+        localFood: [
+          { meal: "lunch", name: "Khao Soi Islam", cuisine: "Northern Thai", estimatedCost: 6 },
+        ],
+      },
+      {
+        day: 5,
+        date: "2026-02-19",
+        title: "Mountain Temples & Night Bazaar",
+        activities: [
+          { time: "09:00", type: "activity", location: "Doi Suthep", description: "Visit Wat Phra That Doi Suthep", estimatedCost: 10, coordinates: { lat: 18.8056, lng: 98.9217 } },
+          { time: "15:00", type: "activity", location: "Wat Umong", description: "Forest temple with tunnels", estimatedCost: 20, coordinates: { lat: 18.7833, lng: 98.95 } },
+          { time: "17:30", type: "activity", location: "Night Bazaar", description: "Evening shopping and food", estimatedCost: 20, coordinates: { lat: 18.7833, lng: 98.9986 } },
+        ],
+        localFood: [
+          { meal: "dinner", name: "Night Bazaar Food Court", cuisine: "Thai", estimatedCost: 8 },
+        ],
+      },
+      {
+        day: 6,
+        date: "2026-02-20",
+        title: "Elephant Sanctuary & Cooking Class",
+        activities: [
+          { time: "08:00", type: "activity", location: "Elephant Nature Park", description: "Ethical elephant experience", estimatedCost: 80, coordinates: { lat: 19.1833, lng: 99.05 } },
+          { time: "16:00", type: "activity", location: "Thai Cooking Class", description: "Learn to cook Thai dishes", estimatedCost: 40, coordinates: { lat: 18.7883, lng: 98.9853 } },
+        ],
+        localFood: [
+          { meal: "dinner", name: "Your own cooking!", cuisine: "Thai", estimatedCost: 0 },
+        ],
+      },
+      {
+        day: 7,
+        date: "2026-02-21",
+        title: "Morning Markets & Farewell",
+        activities: [
+          { time: "08:00", type: "activity", location: "Warorot Market", description: "Local market experience", estimatedCost: 20, coordinates: { lat: 18.7889, lng: 99.0014 } },
+          { time: "11:00", type: "transport", location: "Chiang Mai Airport", description: "Depart from Chiang Mai", estimatedCost: 10, coordinates: { lat: 18.7667, lng: 98.9667 } },
+        ],
+        localFood: [
+          { meal: "breakfast", name: "Market food stalls", cuisine: "Thai", estimatedCost: 5 },
+        ],
+      },
+    ],
+    costBreakdown: {
+      flights: 160,
+      accommodation: 140,
+      activities: 358,
+      food: 120,
+      localTransport: 80,
+      total: 858,
+      grandTotal: 858,
+      perPerson: 429,
+      currency: "USD",
+    },
+  },
+  isPublic: false,
+  isTemplate: false,
+  templateName: null,
+  templateDescription: null,
+  templateCategory: null,
+  useCount: 0,
+  rating: null,
+  ratingCount: 0,
+  status: "draft",
+  checklistProgress: null,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+};
+
 function trackFeasibilityVerdict(verdict: string, score: number, passport: string, destination: string, blockerReasons?: string[]) {
   feasibilityAnalytics.totalChecks++;
 
@@ -4346,6 +4509,34 @@ export async function registerRoutes(
       return res.status(404).json({ message: 'Trip not found' });
     }
     res.json(trip);
+  });
+
+  // ============================================================================
+  // DEMO TRIP ENDPOINT - Returns a stable demo trip for /demo route
+  // ============================================================================
+  app.get('/api/demo-trip', async (req, res) => {
+    try {
+      // Try to find existing demo trip (trip ID 2 - Thailand)
+      let demoTrip = await storage.getTrip(2);
+
+      // If trip 2 doesn't exist or has no itinerary, try to find any trip with itinerary
+      if (!demoTrip || !(demoTrip.itinerary as any)?.days?.length) {
+        // Try to find any completed trip we can use as demo
+        const allTrips = await storage.listTrips();
+        demoTrip = allTrips.find(t => (t.itinerary as any)?.days?.length > 0) || null;
+      }
+
+      // If still no demo trip available, return fallback data
+      if (!demoTrip) {
+        return res.json(DEMO_TRIP_FALLBACK);
+      }
+
+      res.json(demoTrip);
+    } catch (error) {
+      console.error('[DemoTrip] Error fetching demo trip:', error);
+      // Return fallback on any error
+      res.json(DEMO_TRIP_FALLBACK);
+    }
   });
 
   // Progress endpoint - returns real-time processing status

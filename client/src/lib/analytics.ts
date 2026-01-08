@@ -25,8 +25,19 @@ export interface TripEventData {
 
 // Canonical event names for V1 funnel
 export type TripEventName =
-  | 'itinerary_generate_started'
-  | 'itinerary_generate_completed'
+  // Core funnel events
+  | 'landing_viewed'              // Home page loaded
+  | 'demo_opened'                 // Demo page opened
+  | 'create_started'              // CreateTrip form started
+  | 'feasibility_completed'       // Feasibility analysis done (with score + verdict)
+  | 'itinerary_generate_started'  // Itinerary generation started
+  | 'itinerary_generate_completed' // Itinerary ready
+  | 'itinerary_viewed'            // Results page fully loaded with itinerary
+  // Chat planning events
+  | 'chat_plan_clicked'           // User clicked Plan My Trip from chat
+  | 'chat_plan_success'           // Trip successfully created from chat
+  | 'chat_plan_failed'            // Trip creation failed from chat (include errorType)
+  // Engagement events
   | 'day_clicked'
   | 'activity_clicked'
   | 'map_marker_clicked'

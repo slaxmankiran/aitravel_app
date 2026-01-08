@@ -25,30 +25,33 @@ import {
   getActivityCost,
   hasCoordinates,
   formatDistance,
-  estimateWalkingTime,
+  getSmartTransportMode,
 } from "./itinerary-adapters";
 
 // ============================================================================
 // TRANSPORT ICON MAPPING
 // ============================================================================
 
-function getTransportIcon(transportMode?: string) {
-  const mode = (transportMode || "").toLowerCase();
-
-  if (mode.includes("walk")) return Footprints;
-  if (mode.includes("metro") || mode.includes("subway") || mode.includes("train")) return Train;
-  if (mode.includes("bus")) return Bus;
-  return Car;
+function getTransportIcon(iconName: string) {
+  switch (iconName) {
+    case "walk": return Footprints;
+    case "train": return Train;
+    case "bus": return Bus;
+    case "car": return Car;
+    case "plane": return Navigation; // Using Navigation as plane icon
+    default: return Car;
+  }
 }
 
-function getTransportColor(transportMode?: string): string {
-  const mode = (transportMode || "").toLowerCase();
-
-  if (mode.includes("walk")) return "text-green-400";
-  if (mode.includes("metro") || mode.includes("subway")) return "text-blue-400";
-  if (mode.includes("train")) return "text-purple-400";
-  if (mode.includes("bus")) return "text-orange-400";
-  return "text-white/40";
+function getTransportColor(iconName: string): string {
+  switch (iconName) {
+    case "walk": return "text-green-400";
+    case "train": return "text-blue-400";
+    case "bus": return "text-orange-400";
+    case "car": return "text-yellow-400";
+    case "plane": return "text-purple-400";
+    default: return "text-white/40";
+  }
 }
 
 // ============================================================================
@@ -90,6 +93,7 @@ interface ActivityRowProps {
   isHovered: boolean;
   showTransport: boolean;
   distanceFromPrevious?: number | null; // Distance in km from previous activity
+  prevActivity?: Activity | null; // Previous activity for context
   showDistance?: boolean;
   onClick: () => void;
   onMouseEnter: () => void;
@@ -104,6 +108,7 @@ export function ActivityRow({
   isHovered,
   showTransport,
   distanceFromPrevious,
+  prevActivity,
   showDistance = false,
   onClick,
   onMouseEnter,
@@ -115,28 +120,34 @@ export function ActivityRow({
   const hasLocation = hasCoordinates(activity);
   const colors = TYPE_COLORS[activity.type] || TYPE_COLORS.activity;
   const TypeIcon = getActivityTypeIcon(activity.type);
-  const TransportIcon = getTransportIcon(activity.transportMode);
-  const transportColor = getTransportColor(activity.transportMode);
+
+  // Get smart transport mode based on distance and context
+  const smartTransport = getSmartTransportMode(
+    distanceFromPrevious ?? null,
+    activity,
+    prevActivity ?? undefined
+  );
+  const TransportIcon = getTransportIcon(smartTransport.icon);
+  const transportColor = getTransportColor(smartTransport.icon);
+
+  // Show transport if we have distance or explicit transport mode
+  const shouldShowTransport = showTransport && (distanceFromPrevious !== null || activity.transportMode);
 
   return (
     <div className="relative">
-      {/* Transport indicator + Distance */}
-      {showTransport && (activity.transportMode || (showDistance && distanceFromPrevious)) && (
+      {/* Transport indicator + Distance - Smart mode */}
+      {shouldShowTransport && (
         <div className="flex items-center gap-2 ml-[3.75rem] mb-1">
           <div className="w-px h-3 bg-white/10" />
-          {activity.transportMode && (
-            <>
-              <TransportIcon className={cn("w-3.5 h-3.5", transportColor)} />
-              <span className="text-[11px] text-white/40 capitalize">
-                {activity.transportMode}
-              </span>
-            </>
-          )}
-          {/* Distance badge - only show walking time for walkable distances (<5km) */}
-          {showDistance && distanceFromPrevious !== null && distanceFromPrevious !== undefined && (
-            <span className="text-[10px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded-full">
+          <TransportIcon className={cn("w-3.5 h-3.5", transportColor)} />
+          <span className="text-[11px] text-white/40 capitalize">
+            {smartTransport.mode}
+          </span>
+          {/* Distance and time badge */}
+          {distanceFromPrevious !== null && distanceFromPrevious !== undefined && (
+            <span className="text-[10px] bg-white/10 text-white/60 px-1.5 py-0.5 rounded-full">
               {formatDistance(distanceFromPrevious)}
-              {distanceFromPrevious < 5 && ` • ${estimateWalkingTime(distanceFromPrevious)} walk`}
+              {smartTransport.time && ` • ${smartTransport.time}`}
             </span>
           )}
         </div>

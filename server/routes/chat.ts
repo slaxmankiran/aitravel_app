@@ -16,6 +16,7 @@ import {
   rejectPendingChanges,
   getPendingChanges,
   getCachedItinerary,
+  deduplicateItinerary,
 } from '../services/agentChat';
 
 const router = Router();
@@ -423,6 +424,46 @@ router.get('/:id/budget-breakdown', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('[Chat] Budget breakdown error:', err);
     res.status(500).json({ error: 'Failed to get budget breakdown' });
+  }
+});
+
+/**
+ * POST /api/trips/:id/cleanup-duplicates
+ * Remove duplicate activities from the trip itinerary
+ */
+router.post('/:id/cleanup-duplicates', async (req: Request, res: Response) => {
+  try {
+    const tripId = parseInt(req.params.id);
+
+    const trip = await storage.getTrip(tripId);
+    if (!trip) {
+      return res.status(404).json({ error: 'Trip not found' });
+    }
+
+    if (!trip.itinerary) {
+      return res.json({ success: true, removedCount: 0, message: 'No itinerary to clean' });
+    }
+
+    // Deduplicate the itinerary
+    const { itinerary: cleanedItinerary, removedCount } = deduplicateItinerary(trip.itinerary);
+
+    if (removedCount > 0) {
+      // Save the cleaned itinerary
+      await storage.updateTripItinerary(tripId, cleanedItinerary);
+      console.log(`[Chat] Cleaned up ${removedCount} duplicate(s) from trip ${tripId}`);
+    }
+
+    res.json({
+      success: true,
+      removedCount,
+      message: removedCount > 0
+        ? `Removed ${removedCount} duplicate activit${removedCount === 1 ? 'y' : 'ies'}`
+        : 'No duplicates found',
+      updatedItinerary: cleanedItinerary,
+    });
+  } catch (err) {
+    console.error('[Chat] Cleanup duplicates error:', err);
+    res.status(500).json({ error: 'Failed to cleanup duplicates' });
   }
 });
 

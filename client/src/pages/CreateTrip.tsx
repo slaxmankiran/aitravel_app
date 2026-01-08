@@ -11,11 +11,11 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Sidebar } from "@/components/Sidebar";
 import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight, AlertCircle } from "lucide-react";
 import { z } from "zod";
 import { format } from "date-fns";
 import { DateRange } from "react-day-picker";
+import { trackTripEvent } from "@/lib/analytics";
 
 // Major world cities for autocomplete
 const MAJOR_CITIES = [
@@ -1270,6 +1270,13 @@ export default function CreateTrip() {
 
   const createTrip = useCreateTrip();
 
+  // Track create_started event on initial mount (not edit mode)
+  useEffect(() => {
+    if (!isEditMode) {
+      trackTripEvent(0, 'create_started', { destination: urlDestination || undefined }, undefined, 'create_trip');
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Persist step to sessionStorage
   useEffect(() => {
     sessionStorage.setItem('createTrip_step', step.toString());
@@ -1348,11 +1355,8 @@ export default function CreateTrip() {
 
   return (
     <div className="min-h-screen flex bg-slate-50">
-      {/* Sidebar */}
-      <Sidebar />
-
       {/* Main Content - Split Layout */}
-      <main className="flex-1 md:ml-[240px] flex min-h-screen">
+      <main className="flex-1 flex min-h-screen">
         {/* Left Side - Destination Image */}
         <div className="hidden lg:block w-1/2 relative overflow-hidden">
           {/* Stunning Background Video */}

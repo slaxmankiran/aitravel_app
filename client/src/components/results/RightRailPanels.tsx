@@ -25,6 +25,7 @@ interface RightRailPanelsProps {
   hasLocalChanges: boolean;
   hasUndoableChange: boolean;
   onUndo: () => void;
+  isDemo?: boolean;
 }
 
 export function RightRailPanels({
@@ -34,7 +35,8 @@ export function RightRailPanels({
   onChatOpen,
   hasLocalChanges,
   hasUndoableChange,
-  onUndo
+  onUndo,
+  isDemo = false
 }: RightRailPanelsProps) {
   return (
     <div className="space-y-4">
@@ -43,13 +45,6 @@ export function RightRailPanels({
         title="True Cost"
         icon={<DollarSign className="w-4 h-4" />}
         defaultOpen={true}
-        badge={
-          costs?.grandTotal ? (
-            <span className="text-xs text-emerald-400 font-medium">
-              ${costs.grandTotal.toLocaleString()}
-            </span>
-          ) : null
-        }
         collapsedSummary={
           costs?.grandTotal
             ? `Est. ${costs.currency || 'USD'} ${costs.grandTotal.toLocaleString()}`
@@ -77,16 +72,31 @@ export function RightRailPanels({
         title="Modify with AI"
         icon={<MessageSquare className="w-4 h-4" />}
         defaultOpen={false}
-        collapsedSummary="Swap days, reduce cost, change pace"
+        collapsedSummary={isDemo ? "Available on your own trip" : "Swap days, reduce cost, change pace"}
         onToggle={(isOpen) => isOpen && onChatOpen?.()}
       >
-        <div className="h-[350px] -mx-4 -mb-4">
-          <TripChat
-            tripId={trip.id}
-            destination={trip.destination}
-            onTripUpdate={onTripUpdate}
-          />
-        </div>
+        {isDemo ? (
+          <div className="py-8 text-center">
+            <MessageSquare className="w-10 h-10 text-white/20 mx-auto mb-4" />
+            <p className="text-white/60 text-sm mb-4">
+              AI chat is available when you create your own trip.
+            </p>
+            <a
+              href="/create"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-semibold hover:from-emerald-700 hover:to-teal-700 transition-colors"
+            >
+              Plan your trip
+            </a>
+          </div>
+        ) : (
+          <div className="h-[350px] -mx-4 -mb-4">
+            <TripChat
+              tripId={trip.id}
+              destination={trip.destination}
+              onTripUpdate={onTripUpdate}
+            />
+          </div>
+        )}
       </PanelAccordion>
 
       {/* Local changes indicator with undo */}
