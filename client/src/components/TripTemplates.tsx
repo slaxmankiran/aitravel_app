@@ -117,7 +117,7 @@ export function TripTemplatesGrid() {
         description: 'Redirecting to your new trip...',
       });
 
-      setLocation(`/trips/${data.tripId}`);
+      setLocation(`/trips/${data.tripId}/results-v1`);
     } catch (err) {
       console.error('Use template error:', err);
       toast({

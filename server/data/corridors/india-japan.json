@@ -1,0 +1,110 @@
+{
+  "corridor": {
+    "passport": "India",
+    "passportCode": "IN",
+    "destination": "Japan",
+    "destinationCode": "JP"
+  },
+  "lastVerified": "2025-01-06",
+  "source": "Embassy of Japan in India / VFS Global",
+  "visa": {
+    "required": true,
+    "type": "embassy_visa",
+    "name": "Japan Tourist Visa (Single Entry)",
+    "processingDays": {
+      "minimum": 5,
+      "maximum": 7,
+      "expedited": 3,
+      "note": "Business days. Peak season (cherry blossom/autumn) may take longer."
+    },
+    "cost": {
+      "government": 440,
+      "service": 1260,
+      "expedited": 880,
+      "currency": "INR",
+      "note": "Government fee ~3,000 JPY converted. VFS service charge applies."
+    },
+    "documentsRequired": [
+      "Valid passport (6+ months validity, 2 blank pages)",
+      "Completed visa application form",
+      "Recent passport-size photo (4.5cm x 4.5cm, white background)",
+      "Confirmed round-trip flight itinerary",
+      "Hotel reservations for entire stay",
+      "Bank statements (last 6 months)",
+      "Income Tax Returns (last 2-3 years)",
+      "Employment letter / Business registration",
+      "Detailed day-by-day travel itinerary",
+      "Cover letter explaining purpose of visit"
+    ],
+    "applicationMethod": "vfs",
+    "applicationUrl": "https://visa.vfsglobal.com/ind/en/jpn",
+    "embassyUrl": "https://www.in.emb-japan.go.jp/itprtop_en/index.html",
+    "notes": [
+      "Japan does not offer e-visa for Indian nationals",
+      "Visa on arrival not available",
+      "Multiple entry visas available for frequent travelers with good travel history",
+      "Transit visa not required if staying in international zone under 24 hours"
+    ]
+  },
+  "entryRequirements": {
+    "passportValidity": "6 months beyond intended stay",
+    "blankPages": 2,
+    "returnTicket": true,
+    "proofOfAccommodation": true,
+    "proofOfFunds": true,
+    "travelInsurance": {
+      "required": false,
+      "recommended": true,
+      "minimumCoverage": 50000,
+      "currency": "USD"
+    }
+  },
+  "stayLimits": {
+    "maxStay": 15,
+    "extendable": true,
+    "extensionProcess": "Apply at Immigration Bureau in Japan before visa expires"
+  },
+  "costEstimates": {
+    "currency": "INR",
+    "budget": {
+      "daily": {
+        "accommodation": 3500,
+        "food": 2000,
+        "transport": 1500,
+        "activities": 1000
+      },
+      "total7Days": 56000
+    },
+    "mid": {
+      "daily": {
+        "accommodation": 8000,
+        "food": 4000,
+        "transport": 2500,
+        "activities": 2500
+      },
+      "total7Days": 119000
+    },
+    "luxury": {
+      "daily": {
+        "accommodation": 25000,
+        "food": 8000,
+        "transport": 5000,
+        "activities": 5000
+      },
+      "total7Days": 301000
+    },
+    "flights": {
+      "budget": 35000,
+      "average": 55000,
+      "premium": 150000,
+      "note": "Round-trip from major Indian metros. Book 6-8 weeks ahead for best prices."
+    }
+  },
+  "tips": [
+    "Apply at least 2-3 weeks before travel to account for processing delays",
+    "Cherry blossom season (late March-early April) sees higher visa volumes",
+    "Keep all original documents - photocopies may not be accepted",
+    "JR Pass must be purchased before arriving in Japan",
+    "Cash is still widely used - carry JPY"
+  ]
+}

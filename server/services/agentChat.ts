@@ -171,7 +171,7 @@ export async function getOrCreateSession(tripId: number): Promise<ChatSession> {
       messages: [],
       tripContext: extractTripContext(trip),
       lastUpdated: new Date(),
-      visaStatus: trip.feasibilityReport?.breakdown?.visa,
+      visaStatus: (trip.feasibilityReport as any)?.breakdown?.visa,
     };
 
     chatSessions.set(tripId, session);
@@ -209,12 +209,28 @@ function extractTripContext(trip: any): TripContext {
  */
 function buildSystemPrompt(context: TripContext): string {
   const currencySymbol = getCurrencySymbol(context.currency);
+
+  // Calculate current itinerary costs for accurate budget tracking
+  let totalItineraryCost = 0;
+  let activitiesCount = 0;
+
   const itinerarySummary = context.itinerary?.days?.map((day: any, idx: number) => {
-    const activities = day.activities?.map((a: any) => `  - ${a.name} (${currencySymbol}${a.cost || 0})`).join('\n') || '  (no activities)';
+    const activities = day.activities?.map((a: any) => {
+      const cost = a.cost || a.estimatedCost || 0;
+      totalItineraryCost += cost;
+      activitiesCount++;
+      return `  - ${a.name} (${currencySymbol}${cost})`;
+    }).join('\n') || '  (no activities)';
     return `Day ${idx + 1}: ${day.title}\n${activities}`;
   }).join('\n\n') || 'No itinerary yet';
 
   const budgetBreakdown = context.feasibilityReport?.breakdown?.budget;
+  const costBreakdown = context.itinerary?.costBreakdown;
+
+  // Use most accurate budget data available
+  const estimatedTotal = costBreakdown?.grandTotal || budgetBreakdown?.estimatedCost || totalItineraryCost;
+  const remainingBudget = context.budget - estimatedTotal;
+  const budgetPercentUsed = Math.round((estimatedTotal / context.budget) * 100);
 
   return `You are VoyageAI, an intelligent travel planning assistant. You help users plan and modify their trips.
 
@@ -222,29 +238,49 @@ function buildSystemPrompt(context: TripContext): string {
 - **Destination**: ${context.destination}
 - **Origin**: ${context.origin || 'Not specified'}
 - **Dates**: ${context.dates}
-- **Budget**: ${currencySymbol}${context.budget} ${context.currency}
+- **Total Budget**: ${currencySymbol}${context.budget.toLocaleString()} ${context.currency}
 - **Travelers**: ${context.travelers.adults} adults${context.travelers.children > 0 ? `, ${context.travelers.children} children` : ''}${context.travelers.infants > 0 ? `, ${context.travelers.infants} infants` : ''} (${context.travelers.total} total)
 - **Passport**: ${context.passport}
 
-## CURRENT ITINERARY
+## CURRENT ITINERARY (${activitiesCount} activities)
 ${itinerarySummary}
 
-## BUDGET STATUS
-${budgetBreakdown ? `Estimated Cost: ${currencySymbol}${budgetBreakdown.estimatedCost || 'N/A'}` : 'Budget analysis pending'}
+## BUDGET BREAKDOWN (IMPORTANT - Track this carefully!)
+- **Total Budget**: ${currencySymbol}${context.budget.toLocaleString()}
+- **Current Estimated Spend**: ${currencySymbol}${estimatedTotal.toLocaleString()} (${budgetPercentUsed}% used)
+- **Remaining Budget**: ${currencySymbol}${remainingBudget.toLocaleString()}
+- **Status**: ${remainingBudget < 0 ? '⚠️ OVER BUDGET' : remainingBudget < context.budget * 0.1 ? '⚠️ Budget is tight' : '✅ Within budget'}
+${costBreakdown ? `
+Cost Categories:
+- Activities: ${currencySymbol}${costBreakdown.activities?.total || 0}
+- Accommodation: ${currencySymbol}${costBreakdown.accommodation?.total || 0}
+- Flights/Transport: ${currencySymbol}${costBreakdown.flights?.total || 0}
+- Food (estimated): ${currencySymbol}${costBreakdown.food?.total || 0}` : ''}
 
 ## YOUR CAPABILITIES
 You can help users with:
 1. **Suggest attractions** - Recommend nearby places, restaurants, activities
-2. **Update itinerary** - Add, remove, or modify activities
+2. **Update itinerary** - Add, remove, or modify activities (ALWAYS include cost!)
 3. **Adjust schedule** - Change activity order, swap days
-4. **Budget advice** - Suggest cost-effective alternatives
+4. **Budget advice** - Suggest cost-effective alternatives, show budget breakdown
 5. **Local tips** - Provide insider knowledge about the destination
 6. **Answer questions** - About visa, weather, culture, transportation
+
+## CRITICAL: COST TRACKING
+When adding ANY activity, you MUST include a realistic cost estimate:
+- Free attractions: cost: 0
+- Museum/attraction entries: ${currencySymbol}10-50 per person
+- Tours/experiences: ${currencySymbol}30-150 per person
+- Restaurant meals: ${currencySymbol}15-80 per person
+- Transportation: ${currencySymbol}5-50
+
+If user asks to "update budget breakdown" or check their spending, summarize the current costs and how changes will affect the budget.
 
 ## RESPONSE FORMAT
 When the user asks you to make changes, respond with:
 1. A friendly confirmation of what you'll do
-2. The specific changes in a structured format
+2. The cost impact (e.g., "This will add ${currencySymbol}XX to your trip")
+3. The specific changes in a structured format
 
 When suggesting changes, use this format:
 [ACTION: action_type]
@@ -252,15 +288,19 @@ When suggesting changes, use this format:
 [/ACTION]
 
 Action types:
-- ADD_ACTIVITY: {"dayNumber": 1, "activity": {"name": "...", "time": "10:00", "duration": "2 hours", "cost": 50, "description": "...", "location": {"lat": 0, "lng": 0, "address": "..."}}}
+- ADD_ACTIVITY: {"dayNumber": 1, "activity": {"name": "...", "time": "10:00", "duration": "2 hours", "cost": 50, "type": "activity", "description": "...", "location": {"lat": 0, "lng": 0, "address": "..."}}}
 - REMOVE_ACTIVITY: {"dayNumber": 1, "activityIndex": 0}
 - UPDATE_ACTIVITY: {"dayNumber": 1, "activityIndex": 0, "updates": {...}}
 - REORDER_ACTIVITIES: {"dayNumber": 1, "newOrder": [2, 0, 1]}
 - UPDATE_DAY_TITLE: {"dayNumber": 1, "title": "New Title"}
 
-Always include realistic costs in ${context.currency} and coordinates when adding activities.
-Remember: All costs should be in ${context.currency} (${currencySymbol}).
-Be conversational and helpful while being precise about changes.`;
+IMPORTANT RULES:
+1. ALL activities MUST have a "cost" field with a realistic ${context.currency} amount
+2. Include "type": "activity" for attractions, "type": "meal" for food, "type": "transport" for travel
+3. Always mention how changes affect the total budget
+4. Currency is ${context.currency} (${currencySymbol}) - do not use other currencies
+
+Be conversational and helpful while being precise about changes and costs.`;
 }
 
 /**
@@ -465,9 +505,11 @@ export async function processChat(
     // Build messages for AI
     const systemPrompt = buildSystemPrompt(session.tripContext);
 
+    // Keep more message history for better context retention (20 messages = ~10 exchanges)
+    // The system prompt already contains full trip context, so we don't need unlimited history
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
-      ...session.messages.slice(-10), // Keep last 10 messages for context
+      ...session.messages.slice(-20), // Keep last 20 messages for better context
       { role: 'user', content: userMessage },
     ];
 

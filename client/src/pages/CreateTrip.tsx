@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLocation, useSearch, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Sidebar } from "@/components/Sidebar";
 import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight, AlertCircle } from "lucide-react";
 import { z } from "zod";
 import { format } from "date-fns";
@@ -472,9 +473,14 @@ const TRAVEL_STYLES = [
 type TravelStyleValue = 'budget' | 'standard' | 'luxury' | 'custom';
 
 // Custom step3 schema that treats empty/NaN children/infants as 0
+// Budget is only required when travelStyle is 'custom'
 const step3Schema = z.object({
   travelStyle: z.enum(['budget', 'standard', 'luxury', 'custom']).default('standard'),
-  budget: z.number().min(1, "Budget is required"),
+  budget: z.preprocess((val) => {
+    // Convert undefined/null/NaN to 1 (placeholder for non-custom styles)
+    if (val === "" || val === null || val === undefined || Number.isNaN(val)) return 1;
+    return Number(val);
+  }, z.number().min(0).default(1)),
   groupSize: z.number().min(1).default(1),
   adults: z.number().min(1, "At least 1 adult is required").default(1),
   children: z.preprocess((val) => {
@@ -485,6 +491,15 @@ const step3Schema = z.object({
     if (val === "" || val === null || val === undefined || Number.isNaN(val)) return 0;
     return Number(val);
   }, z.number().min(0).default(0)),
+}).refine((data) => {
+  // Only require budget >= 1 when travelStyle is 'custom'
+  if (data.travelStyle === 'custom' && data.budget < 1) {
+    return false;
+  }
+  return true;
+}, {
+  message: "Budget is required for custom travel style",
+  path: ["budget"],
 });
 
 // Detect if origin and destination are in the same country/region for domestic pricing
@@ -852,7 +867,15 @@ function CountrySelect({
   );
 }
 
-// City Autocomplete Component
+// City Autocomplete Component - Hybrid: Local + Nominatim API
+interface NominatimResult {
+  city: string;
+  country: string;
+  code: string;
+  displayName: string;
+  source: 'local' | 'api';
+}
+
 function CityAutocomplete({
   value,
   onChange,
@@ -864,17 +887,88 @@ function CityAutocomplete({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState(value || "");
+  const [apiResults, setApiResults] = useState<NominatimResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const filteredCities = useMemo(() => {
+  // Fast local filtering (instant)
+  const localResults = useMemo(() => {
     if (!search || search.length < 2) return [];
     const searchLower = search.toLowerCase();
     return MAJOR_CITIES.filter(c =>
       c.city.toLowerCase().includes(searchLower) ||
       c.country.toLowerCase().includes(searchLower)
-    ).slice(0, 10);
+    ).slice(0, 8).map(c => ({
+      city: c.city,
+      country: c.country,
+      code: c.code,
+      displayName: `${c.city}, ${c.country}`,
+      source: 'local' as const
+    }));
   }, [search]);
+
+  // Merge local and API results, deduplicating by display name
+  const allResults = useMemo(() => {
+    const localNames = new Set(localResults.map(r => r.displayName.toLowerCase()));
+    const uniqueApiResults = apiResults.filter(
+      r => !localNames.has(r.displayName.toLowerCase())
+    );
+    return [...localResults, ...uniqueApiResults].slice(0, 10);
+  }, [localResults, apiResults]);
+
+  // Nominatim API search (debounced, for unknown cities)
+  const searchNominatim = useCallback(async (query: string) => {
+    if (query.length < 3) return;
+
+    // Only search API if local results are insufficient
+    const localCount = MAJOR_CITIES.filter(c =>
+      c.city.toLowerCase().includes(query.toLowerCase()) ||
+      c.country.toLowerCase().includes(query.toLowerCase())
+    ).length;
+
+    if (localCount >= 5) {
+      setApiResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&featuretype=city&addressdetails=1`,
+        {
+          headers: { 'User-Agent': 'VoyageAI Travel Planner' }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const results: NominatimResult[] = data
+          .filter((item: any) => item.address?.city || item.address?.town || item.address?.village || item.name)
+          .map((item: any) => {
+            const cityName = item.address?.city || item.address?.town || item.address?.village || item.name;
+            const country = item.address?.country || '';
+            const countryCode = item.address?.country_code?.toUpperCase() || '';
+            return {
+              city: cityName,
+              country,
+              code: countryCode,
+              displayName: `${cityName}, ${country}`,
+              source: 'api' as const
+            };
+          })
+          .filter((r: NominatimResult) => r.city && r.country);
+
+        setApiResults(results);
+      }
+    } catch (error) {
+      console.log('Nominatim search failed:', error);
+      setApiResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -893,6 +987,27 @@ function CityAutocomplete({
     }
   }, [value]);
 
+  // Debounced API search
+  useEffect(() => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    if (search.length >= 3) {
+      searchTimeoutRef.current = setTimeout(() => {
+        searchNominatim(search);
+      }, 300); // 300ms debounce
+    } else {
+      setApiResults([]);
+    }
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [search, searchNominatim]);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
     setSearch(newValue);
@@ -900,10 +1015,9 @@ function CityAutocomplete({
     setIsOpen(newValue.length >= 2);
   };
 
-  const handleCitySelect = (city: typeof MAJOR_CITIES[0]) => {
-    const fullName = `${city.city}, ${city.country}`;
-    setSearch(fullName);
-    onChange(fullName);
+  const handleCitySelect = (result: NominatimResult) => {
+    setSearch(result.displayName);
+    onChange(result.displayName);
     setIsOpen(false);
   };
 
@@ -920,10 +1034,13 @@ function CityAutocomplete({
           placeholder={placeholder}
           className="w-full h-12 pl-10 pr-3 bg-white border border-slate-200 rounded-md hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
         />
+        {isSearching && (
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary animate-spin" />
+        )}
       </div>
 
       <AnimatePresence>
-        {isOpen && filteredCities.length > 0 && (
+        {isOpen && (allResults.length > 0 || isSearching) && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -931,23 +1048,34 @@ function CityAutocomplete({
             className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden"
           >
             <div className="max-h-60 overflow-y-auto">
-              {filteredCities.map((city, idx) => (
+              {allResults.map((result, idx) => (
                 <button
-                  key={`${city.city}-${city.country}-${idx}`}
+                  key={`${result.city}-${result.country}-${idx}`}
                   type="button"
-                  onClick={() => handleCitySelect(city)}
+                  onClick={() => handleCitySelect(result)}
                   className="w-full px-3 py-3 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0"
                 >
-                  <MapPin className="h-4 w-4 text-slate-400 flex-shrink-0" />
-                  <div>
-                    <span className="font-medium">{city.city}</span>
-                    <span className="text-slate-500">, {city.country}</span>
+                  <MapPin className={`h-4 w-4 flex-shrink-0 ${result.source === 'api' ? 'text-emerald-500' : 'text-slate-400'}`} />
+                  <div className="flex-1">
+                    <span className="font-medium">{result.city}</span>
+                    <span className="text-slate-500">, {result.country}</span>
+                    {result.source === 'api' && (
+                      <span className="ml-2 text-xs text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">Dynamic</span>
+                    )}
                   </div>
                 </button>
               ))}
+              {isSearching && allResults.length === 0 && (
+                <div className="px-4 py-3 text-center text-slate-500 text-sm flex items-center justify-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Searching cities worldwide...
+                </div>
+              )}
             </div>
             <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-500">
-              Only major cities are available
+              {apiResults.length > 0
+                ? "💡 Search any city worldwide"
+                : "Type 3+ characters to search more cities"}
             </div>
           </motion.div>
         )}
@@ -1091,6 +1219,7 @@ export default function CreateTrip() {
     adults: urlParams.get("adults") ? Number(urlParams.get("adults")) : 1,
     children: urlParams.get("children") ? Number(urlParams.get("children")) : 0,
     infants: urlParams.get("infants") ? Number(urlParams.get("infants")) : 0,
+    travelStyle: (urlParams.get("travelStyle") as 'budget' | 'standard' | 'luxury' | 'custom') || "standard",
   } : null;
 
   // Initialize state - URL params take priority over sessionStorage
@@ -1126,6 +1255,7 @@ export default function CreateTrip() {
         children: editData.children,
         infants: editData.infants,
         groupSize: editData.adults + editData.children + editData.infants,
+        travelStyle: editData.travelStyle,
       };
     }
     // If URL has destination only (from explore page), use it
@@ -1149,6 +1279,31 @@ export default function CreateTrip() {
   useEffect(() => {
     sessionStorage.setItem('createTrip_formData', JSON.stringify(formData));
   }, [formData]);
+
+  // PRELOAD DESTINATION IMAGE: Start fetching as soon as user enters destination
+  // This ensures the image is cached and ready when they reach the TripDetails page
+  useEffect(() => {
+    const destination = formData.destination;
+    if (!destination || destination.length < 3) return;
+
+    // Debounce the API call to avoid too many requests while typing
+    const timer = setTimeout(() => {
+      console.log(`[Preload] Starting AI image fetch for: ${destination}`);
+      fetch(`/api/destination-image?destination=${encodeURIComponent(destination)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.imageUrl) {
+            console.log(`[Preload] Cached image for ${destination}: ${data.landmark}`);
+            // Preload the actual image into browser cache
+            const img = new Image();
+            img.src = data.imageUrl;
+          }
+        })
+        .catch(err => console.log('[Preload] Image prefetch failed:', err));
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [formData.destination]);
 
   // Clear sessionStorage on successful submission (will be called from handleNext)
   const clearFormStorage = () => {
@@ -1179,7 +1334,8 @@ export default function CreateTrip() {
         onSuccess: (response) => {
           console.log("Trip created successfully:", response);
           clearFormStorage(); // Clear saved form data on success
-          setLocation(`/trips/${response.id}`);
+          // Navigate to feasibility check page FIRST (before itinerary generation)
+          setLocation(`/trips/${response.id}/feasibility`);
         },
         onError: (error) => {
           console.error("Trip creation failed:", error);
@@ -1191,69 +1347,85 @@ export default function CreateTrip() {
   };
 
   return (
-    <div className="min-h-screen relative flex flex-col items-center justify-center p-4 overflow-hidden">
-      {/* Clean Navigation - No border */}
-      <nav className="fixed top-0 w-full z-50 bg-black/10 backdrop-blur-sm">
-        <div className="container mx-auto px-4 h-14 flex items-center justify-between">
-          <Link href="/">
-            <div className="flex items-center gap-2 cursor-pointer group">
-              <div className="w-8 h-8 rounded-lg bg-white/20 backdrop-blur-md flex items-center justify-center text-white font-bold font-display shadow-lg group-hover:bg-white/30 transition-colors">
-                V
-              </div>
-              <span className="font-display font-semibold text-lg tracking-tight text-white/90 group-hover:text-white transition-colors">VoyageAI</span>
-            </div>
-          </Link>
-        </div>
-      </nav>
+    <div className="min-h-screen flex bg-slate-50">
+      {/* Sidebar */}
+      <Sidebar />
 
-      {/* Stunning Timelapse Video Background */}
-      <div className="absolute inset-0 overflow-hidden">
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          className="absolute w-full h-full object-cover"
-          poster="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920&q=80"
-        >
-          {/* Stunning aerial timelapse - mountains and clouds */}
-          <source src="https://videos.pexels.com/video-files/3571264/3571264-uhd_2560_1440_30fps.mp4" type="video/mp4" />
-        </video>
-        {/* Subtle dark overlay for readability - minimal color tint */}
-        <div className="absolute inset-0 bg-black/30" />
-      </div>
+      {/* Main Content - Split Layout */}
+      <main className="flex-1 md:ml-[240px] flex min-h-screen">
+        {/* Left Side - Destination Image */}
+        <div className="hidden lg:block w-1/2 relative overflow-hidden">
+          {/* Stunning Background Video */}
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="absolute w-full h-full object-cover"
+            poster="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920&q=80"
+          >
+            <source src="https://videos.pexels.com/video-files/3571264/3571264-uhd_2560_1440_30fps.mp4" type="video/mp4" />
+          </video>
+          <div className="absolute inset-0 bg-gradient-to-r from-black/30 to-black/10" />
 
-      <div className="w-full max-w-lg relative z-10">
-        {/* Progress Bar */}
-        <div className="mb-8">
-          <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-white/70 mb-2">
-            <span className={step >= 1 ? "text-cyan-300" : ""}>Profile</span>
-            <span className={step >= 2 ? "text-cyan-300" : ""}>Destination</span>
-            <span className={step >= 3 ? "text-cyan-300" : ""}>Budget</span>
-          </div>
-          <div className="h-2 bg-white/20 rounded-full overflow-hidden backdrop-blur-sm">
+          {/* Inspirational Text Overlay */}
+          <div className="absolute inset-0 flex flex-col justify-end p-12">
             <motion.div
-              className="h-full bg-gradient-to-r from-cyan-400 to-primary"
-              initial={{ width: "33%" }}
-              animate={{ width: `${(step / 3) * 100}%` }}
-              transition={{ duration: 0.3 }}
-            />
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <h1 className="text-5xl font-display font-bold text-white leading-tight mb-4">
+                Where to
+                <br />
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-300 to-orange-400">
+                  next?
+                </span>
+              </h1>
+              <p className="text-lg text-white/80 max-w-md">
+                Tell us your dream destination and we'll analyze visa requirements, safety, and create your perfect itinerary.
+              </p>
+            </motion.div>
           </div>
         </div>
 
-        <Card className="shadow-2xl border-0 overflow-hidden backdrop-blur-xl bg-white/95 rounded-2xl">
-          <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-5 text-white">
-            <h2 className="text-xl font-display font-bold">
-              {step === 1 && "Traveler Profile"}
-              {step === 2 && "Trip Details"}
-              {step === 3 && "Budget & Travelers"}
-            </h2>
-            <p className="text-slate-400 text-sm mt-1">
-              {step === 1 && "Tell us about your citizenship for visa checks."}
-              {step === 2 && "Where and when do you want to go?"}
-              {step === 3 && "Set your budget and group size for the perfect trip."}
-            </p>
-          </div>
+        {/* Right Side - Form */}
+        <div className="flex-1 flex items-center justify-center p-8 bg-white">
+          <div className="w-full max-w-lg">
+            {/* Progress Bar */}
+            <div className="mb-8">
+              <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                <span className={step >= 1 ? "text-amber-600" : ""}>Profile</span>
+                <span className={step >= 2 ? "text-amber-600" : ""}>Destination</span>
+                <span className={step >= 3 ? "text-amber-600" : ""}>Budget</span>
+              </div>
+              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-gradient-to-r from-amber-400 to-orange-500"
+                  initial={{ width: "33%" }}
+                  animate={{ width: `${(step / 3) * 100}%` }}
+                  transition={{ duration: 0.3 }}
+                />
+              </div>
+            </div>
+
+            {/* Form Header */}
+            <div className="mb-6">
+              <h2 className="text-2xl font-display font-bold text-slate-900">
+                {step === 1 && "Traveler Profile"}
+                {step === 2 && "Trip Details"}
+                {step === 3 && "Budget & Travelers"}
+              </h2>
+              <p className="text-slate-500 text-sm mt-1">
+                {step === 1 && "Tell us about your citizenship for visa checks."}
+                {step === 2 && "Where and when do you want to go?"}
+                {step === 3 && "Set your budget and group size for the perfect trip."}
+              </p>
+            </div>
+
+            {/* Form Card */}
+            <Card className="shadow-lg border border-slate-100 overflow-hidden rounded-2xl">
+              <div className="h-1 bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500" />
           
           <CardContent className="p-6 pt-8">
             <AnimatePresence mode="wait">
@@ -1286,8 +1458,10 @@ export default function CreateTrip() {
               )}
             </AnimatePresence>
           </CardContent>
-        </Card>
-      </div>
+            </Card>
+          </div>
+        </div>
+      </main>
     </div>
   );
 }
@@ -1405,19 +1579,45 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
   }, [dateRange, form]);
 
   const [dateError, setDateError] = useState<string | null>(null);
+  const [dateWarning, setDateWarning] = useState<string | null>(null);
+
+  // Calculate trip duration for display
+  const tripDuration = dateRange?.from && dateRange?.to
+    ? Math.ceil((dateRange.to.getTime() - dateRange.from.getTime()) / (1000 * 60 * 60 * 24)) + 1
+    : 0;
 
   // Custom submit handler with date validation
   const handleSubmit = (data: Step2Data) => {
     // Validate dates are not in the past
     if (areDatesInPast(data.dates)) {
       setDateError("Travel dates must be in the future. Please select upcoming dates.");
+      setDateWarning(null);
       return;
     }
     // Validate end date is selected
     if (!dateRange?.to) {
       setDateError("Please select both start and end dates for your trip.");
+      setDateWarning(null);
       return;
     }
+
+    // Calculate trip duration (dateRange.from is guaranteed to exist if dateRange.to exists)
+    const duration = Math.ceil((dateRange.to.getTime() - dateRange.from!.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+    // Block extremely unrealistic trips (60+ days)
+    if (duration > 60) {
+      setDateError(`A ${duration}-day trip is too long for detailed planning. Please select 60 days or less.`);
+      setDateWarning(null);
+      return;
+    }
+
+    // Warn for very long trips (21-60 days) but allow proceeding
+    if (duration > 21) {
+      setDateWarning(`${duration} days is a long trip! The AI will generate a varied itinerary, but consider breaking it into multiple shorter trips for better planning.`);
+    } else {
+      setDateWarning(null);
+    }
+
     setDateError(null);
     onSubmit(data);
   };
@@ -1515,10 +1715,24 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
         </Popover>
         <input type="hidden" {...form.register("dates")} />
         {form.formState.errors.dates && <p className="text-destructive text-sm">{form.formState.errors.dates.message}</p>}
+        {/* Trip duration display */}
+        {tripDuration > 0 && (
+          <p className={`text-sm ${tripDuration > 21 ? 'text-amber-600' : 'text-muted-foreground'}`}>
+            {tripDuration} day{tripDuration > 1 ? 's' : ''} trip
+            {tripDuration > 14 && tripDuration <= 21 && ' (extended trip)'}
+            {tripDuration > 21 && tripDuration <= 60 && ' (very long trip)'}
+          </p>
+        )}
         {dateError && (
           <p className="text-destructive text-sm flex items-center gap-1">
             <span className="inline-block w-4 h-4 rounded-full bg-destructive/20 text-destructive text-xs flex items-center justify-center">!</span>
             {dateError}
+          </p>
+        )}
+        {dateWarning && !dateError && (
+          <p className="text-amber-600 text-sm flex items-center gap-1 bg-amber-50 p-2 rounded-lg">
+            <span className="inline-block w-4 h-4 rounded-full bg-amber-100 text-amber-600 text-xs flex items-center justify-center">!</span>
+            {dateWarning}
           </p>
         )}
       </div>

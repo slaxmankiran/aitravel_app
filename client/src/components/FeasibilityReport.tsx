@@ -45,6 +45,63 @@ export function FeasibilityReportView({ trip }: Props) {
     }
   };
 
+  // Convert visa status to user-friendly display
+  // Also check reason text for "require" as fallback when AI returns wrong status
+  const getVisaDisplayText = (status: string, reason?: string) => {
+    // Check if reason mentions "require" or "visa" needed - override status if so
+    const reasonLower = (reason || '').toLowerCase();
+    const visaRequired = reasonLower.includes('require') || reasonLower.includes('must obtain') ||
+                         reasonLower.includes('need a visa') || reasonLower.includes('visa needed');
+
+    if (visaRequired && (status === "ok" || status === "yes" || status === "safe")) {
+      return "Required"; // Override incorrect status
+    }
+
+    switch(status) {
+      case "ok": case "yes": case "safe": return "Not Required";
+      case "warning": case "caution": return "Visa on Arrival";
+      case "issue": case "no": case "danger": return "Required";
+      default: return "Check Required";
+    }
+  };
+
+  const getVisaStatusColor = (status: string, reason?: string) => {
+    // Check if reason mentions visa requirement - override status if so
+    const reasonLower = (reason || '').toLowerCase();
+    const visaRequired = reasonLower.includes('require') || reasonLower.includes('must obtain') ||
+                         reasonLower.includes('need a visa') || reasonLower.includes('visa needed');
+
+    if (visaRequired && (status === "ok" || status === "yes" || status === "safe")) {
+      return "text-amber-600 bg-amber-50 border border-amber-200"; // Show as warning
+    }
+
+    switch(status) {
+      case "ok": case "yes": case "safe": return "text-emerald-600 bg-emerald-50 border border-emerald-200";
+      case "warning": case "caution": return "text-amber-600 bg-amber-50 border border-amber-200";
+      case "issue": case "no": case "danger": return "text-amber-600 bg-amber-50 border border-amber-200"; // Changed from red to amber - visa required is a warning, not a blocker
+      default: return "text-slate-600 bg-slate-50 border border-slate-200";
+    }
+  };
+
+  // Separate icon logic for visa - "Required" should show warning, not X
+  const getVisaIcon = (status: string, reason?: string) => {
+    const reasonLower = (reason || '').toLowerCase();
+    const visaRequired = reasonLower.includes('require') || reasonLower.includes('must obtain') ||
+                         reasonLower.includes('need a visa') || reasonLower.includes('visa needed');
+
+    // Visa required = warning (action needed), not X (blocked)
+    if (visaRequired || status === "issue") {
+      return <AlertTriangle className="w-6 h-6" />; // ⚠️ Warning - action needed
+    }
+
+    switch(status) {
+      case "ok": case "yes": case "safe": return <CheckCircle className="w-6 h-6" />; // ✓ No visa needed
+      case "warning": case "caution": return <AlertTriangle className="w-6 h-6" />; // ⚠️ VOA available
+      case "no": case "danger": return <XCircle className="w-6 h-6" />; // ❌ Visa not available
+      default: return <AlertTriangle className="w-6 h-6" />;
+    }
+  };
+
   // Check if accessibility data exists in the report
   const hasAccessibility = report.breakdown && 'accessibility' in report.breakdown;
   const accessibility = hasAccessibility ? (report.breakdown as any).accessibility : null;
@@ -145,9 +202,9 @@ export function FeasibilityReportView({ trip }: Props) {
               </div>
             </CardHeader>
             <CardContent>
-              <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold mb-4 ${getStatusColor(report.breakdown.visa.status)}`}>
-                {getStatusIcon(report.breakdown.visa.status)}
-                <span className="capitalize">{report.breakdown.visa.status.replace('-', ' ')}</span>
+              <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold mb-4 ${getVisaStatusColor(report.breakdown.visa.status, report.breakdown.visa.reason)}`}>
+                {getVisaIcon(report.breakdown.visa.status, report.breakdown.visa.reason)}
+                <span>{getVisaDisplayText(report.breakdown.visa.status, report.breakdown.visa.reason)}</span>
               </div>
               <p className="text-slate-600 text-sm">{report.breakdown.visa.reason}</p>
             </CardContent>

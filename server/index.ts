@@ -4,6 +4,7 @@ import compression from "compression";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { validateCorridorData } from "./services/corridorData";
 
 const app = express();
 const httpServer = createServer(app);
@@ -73,6 +74,12 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Validate corridor JSON files at startup
+  const corridorValidation = validateCorridorData();
+  if (!corridorValidation.valid) {
+    console.warn('[Startup] Corridor validation had errors - continuing with available data');
+  }
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

@@ -279,8 +279,30 @@ function BookingButton({
   );
 }
 
+// Booking app interface from AI-generated data
+interface BookingApp {
+  name: string;
+  url: string;
+  note: string;
+}
+
+interface BookingAppsGroup {
+  mode: string;
+  apps: BookingApp[];
+}
+
 // Inline booking buttons for cost breakdown
-export function InlineBookingButtons({ trip, type }: { trip: Trip; type: 'flights' | 'hotels' | 'activities' }) {
+export function InlineBookingButtons({
+  trip,
+  type,
+  bookingApps,
+  selectedMode
+}: {
+  trip: Trip;
+  type: 'flights' | 'hotels' | 'activities';
+  bookingApps?: BookingAppsGroup[];
+  selectedMode?: string;
+}) {
   const tripParams: TripParams = {
     origin: trip.origin || '',
     destination: trip.destination,
@@ -297,6 +319,36 @@ export function InlineBookingButtons({ trip, type }: { trip: Trip; type: 'flight
     openAffiliateLink(url, trip.id, linkType, provider);
   };
 
+  // For travel/flights: use AI-generated booking apps based on selected transport mode
+  if (type === 'flights' && bookingApps && selectedMode) {
+    // Find booking apps for the selected transport mode
+    const modeApps = bookingApps.find(group =>
+      group.mode.toLowerCase() === selectedMode.toLowerCase()
+    );
+
+    if (modeApps && modeApps.apps.length > 0) {
+      return (
+        <div className="flex flex-wrap gap-2 mt-3">
+          {modeApps.apps.slice(0, 3).map((app, idx) => (
+            <Button
+              key={app.name}
+              size="sm"
+              className={idx === 0
+                ? "bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-8"
+                : "bg-slate-700 hover:bg-slate-800 text-white text-xs h-8"
+              }
+              onClick={() => window.open(app.url, '_blank')}
+              title={app.note}
+            >
+              <ExternalLink className="w-3 h-3 mr-1" /> {app.name}
+            </Button>
+          ))}
+        </div>
+      );
+    }
+  }
+
+  // Default flight booking links
   if (type === 'flights') {
     return (
       <div className="flex flex-wrap gap-2 mt-3">

@@ -11,7 +11,8 @@ export interface IStorage {
   // Trip operations
   createTrip(trip: InsertTrip): Promise<Trip>;
   getTrip(id: number): Promise<Trip | undefined>;
-  updateTripFeasibility(id: number, status: string, report: FeasibilityReport): Promise<Trip>;
+  updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip>;
+  setTripFeasibilityPending(id: number): Promise<Trip>; // Sets pending status with timestamp
   updateTripItinerary(id: number, itinerary: any): Promise<Trip>;
 }
 
@@ -41,12 +42,26 @@ export class DatabaseStorage implements IStorage {
     return trip;
   }
 
-  async updateTripFeasibility(id: number, status: string, report: FeasibilityReport): Promise<Trip> {
+  async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {
     const [updatedTrip] = await db
       .update(trips)
       .set({
         feasibilityStatus: status,
-        feasibilityReport: report
+        feasibilityReport: report,
+        feasibilityError: error || null,
+      })
+      .where(eq(trips.id, id))
+      .returning();
+    return updatedTrip;
+  }
+
+  async setTripFeasibilityPending(id: number): Promise<Trip> {
+    const [updatedTrip] = await db
+      .update(trips)
+      .set({
+        feasibilityStatus: 'pending',
+        feasibilityError: null,
+        feasibilityLastRunAt: new Date(),
       })
       .where(eq(trips.id, id))
       .returning();
@@ -101,11 +116,21 @@ export class InMemoryStorage implements IStorage {
     return this.trips.find(t => t.id === id);
   }
 
-  async updateTripFeasibility(id: number, status: string, report: FeasibilityReport): Promise<Trip> {
+  async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {
     const trip = this.trips.find(t => t.id === id) as any;
     if (!trip) throw new Error("Trip not found");
     trip.feasibilityStatus = status;
     trip.feasibilityReport = report;
+    trip.feasibilityError = error || null;
+    return trip;
+  }
+
+  async setTripFeasibilityPending(id: number): Promise<Trip> {
+    const trip = this.trips.find(t => t.id === id) as any;
+    if (!trip) throw new Error("Trip not found");
+    trip.feasibilityStatus = 'pending';
+    trip.feasibilityError = null;
+    trip.feasibilityLastRunAt = new Date();
     return trip;
   }
 

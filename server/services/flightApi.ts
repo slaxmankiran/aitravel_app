@@ -1,7 +1,29 @@
 /**
  * Flight API Integration
  * Uses SerpAPI Google Flights or falls back to estimates
+ * Features AI-powered airport code lookup for any city
  */
+
+import OpenAI from 'openai';
+
+// Initialize OpenAI client for airport lookups
+let openaiClient: OpenAI | null = null;
+
+function getOpenAIClient(): OpenAI | null {
+  if (!openaiClient) {
+    const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+    if (apiKey) {
+      openaiClient = new OpenAI({
+        apiKey,
+        baseURL: process.env.DEEPSEEK_API_KEY ? 'https://api.deepseek.com' : undefined,
+      });
+    }
+  }
+  return openaiClient;
+}
+
+// Cache for AI airport lookups (persists during server runtime)
+const airportCache = new Map<string, string>();
 
 export interface FlightSearchParams {
   origin: string;        // City name or airport code
@@ -44,6 +66,19 @@ const CITY_TO_AIRPORT: Record<string, string> = {
   'hong kong': 'HKG', 'seoul': 'ICN', 'bangkok': 'BKK', 'kuala lumpur': 'KUL',
   'manila': 'MNL', 'jakarta': 'CGK', 'bali': 'DPS', 'hanoi': 'HAN',
   'ho chi minh': 'SGN', 'taipei': 'TPE', 'beijing': 'PEK', 'shanghai': 'PVG',
+  // Thailand - all use Bangkok (BKK) as main hub
+  'pattaya': 'BKK', 'chiang mai': 'CNX', 'phuket': 'HKT', 'krabi': 'KBV',
+  'koh samui': 'USM', 'chiang rai': 'CEI', 'hua hin': 'BKK', 'ayutthaya': 'BKK',
+  // Malaysia - additional cities
+  'penang': 'PEN', 'langkawi': 'LGK', 'kota kinabalu': 'BKI', 'johor': 'JHB',
+  // Indonesia - additional cities
+  'yogyakarta': 'JOG', 'lombok': 'LOP', 'surabaya': 'SUB',
+  // Vietnam - additional cities
+  'da nang': 'DAD', 'nha trang': 'CXR', 'hoi an': 'DAD', 'sapa': 'HAN',
+  // Philippines - additional cities
+  'cebu': 'CEB', 'boracay': 'KLO', 'palawan': 'PPS',
+  // Cambodia/Laos
+  'siem reap': 'REP', 'phnom penh': 'PNH', 'vientiane': 'VTE', 'luang prabang': 'LPQ',
   // Middle East
   'dubai': 'DXB', 'abu dhabi': 'AUH', 'doha': 'DOH', 'tel aviv': 'TLV',
   'istanbul': 'IST', 'riyadh': 'RUH', 'amman': 'AMM',
@@ -62,13 +97,87 @@ const CITY_TO_AIRPORT: Record<string, string> = {
   'cancun': 'CUN',
 };
 
-function getAirportCode(city: string): string {
-  const cityLower = city.toLowerCase();
-  for (const [name, code] of Object.entries(CITY_TO_AIRPORT)) {
-    if (cityLower.includes(name)) return code;
+/**
+ * AI-powered airport code lookup
+ * Uses DeepSeek/OpenAI to find the nearest major international airport for any city
+ */
+async function getAirportCodeFromAI(city: string): Promise<string | null> {
+  const client = getOpenAIClient();
+  if (!client) return null;
+
+  try {
+    const response = await client.chat.completions.create({
+      model: process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: `You are an airport expert. Given a city or location, return ONLY the 3-letter IATA code of the nearest major international airport. No explanation, just the code. If the city has its own airport, use it. If not, use the nearest major hub. Examples:
+- "Pattaya, Thailand" → BKK (Bangkok is nearest major hub)
+- "Paris, France" → CDG
+- "Hua Hin, Thailand" → BKK
+- "Hoi An, Vietnam" → DAD`
+        },
+        {
+          role: 'user',
+          content: `What is the IATA airport code for: ${city}`
+        }
+      ],
+      temperature: 0,
+      max_tokens: 10,
+    });
+
+    const code = response.choices[0]?.message?.content?.trim().toUpperCase();
+
+    // Validate it looks like an IATA code (3 letters)
+    if (code && /^[A-Z]{3}$/.test(code)) {
+      console.log(`[FlightAPI] AI found airport for "${city}": ${code}`);
+      return code;
+    }
+
+    console.log(`[FlightAPI] AI returned invalid code for "${city}": ${code}`);
+    return null;
+  } catch (error) {
+    console.log(`[FlightAPI] AI airport lookup failed for "${city}":`, error);
+    return null;
   }
-  // Return first 3 letters as fallback (might work for some cities)
-  return city.substring(0, 3).toUpperCase();
+}
+
+/**
+ * Get airport code for a city - uses cache, hardcoded mapping, then AI
+ * Priority: 1) Cache 2) Hardcoded mapping 3) AI lookup 4) Fallback
+ */
+async function getAirportCode(city: string): Promise<string> {
+  const cityLower = city.toLowerCase();
+  const cacheKey = cityLower.replace(/[^a-z0-9]/g, '');
+
+  // 1) Check cache first (includes previous AI lookups)
+  if (airportCache.has(cacheKey)) {
+    const cached = airportCache.get(cacheKey)!;
+    console.log(`[FlightAPI] Cache hit for "${city}": ${cached}`);
+    return cached;
+  }
+
+  // 2) Check hardcoded mapping (instant, for common cities)
+  for (const [name, code] of Object.entries(CITY_TO_AIRPORT)) {
+    if (cityLower.includes(name)) {
+      airportCache.set(cacheKey, code);
+      return code;
+    }
+  }
+
+  // 3) Use AI to find the nearest airport
+  console.log(`[FlightAPI] City "${city}" not in mapping, asking AI...`);
+  const aiCode = await getAirportCodeFromAI(city);
+  if (aiCode) {
+    airportCache.set(cacheKey, aiCode);
+    return aiCode;
+  }
+
+  // 4) Last resort fallback - use first 3 letters
+  console.log(`[FlightAPI] Warning: All lookups failed for "${city}", using fallback`);
+  const fallback = city.substring(0, 3).toUpperCase();
+  airportCache.set(cacheKey, fallback);
+  return fallback;
 }
 
 // Estimated flight prices based on route (fallback when no API)
@@ -143,8 +252,11 @@ export async function searchFlights(params: FlightSearchParams): Promise<FlightR
   }
 
   try {
-    const originCode = getAirportCode(origin);
-    const destCode = getAirportCode(destination);
+    // AI-powered airport code lookup (with caching)
+    const [originCode, destCode] = await Promise.all([
+      getAirportCode(origin),
+      getAirportCode(destination)
+    ]);
 
     // Google Flights API limits passengers to 9 max
     // If more passengers, we'll search for 1 and multiply the price

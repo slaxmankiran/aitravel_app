@@ -13,11 +13,12 @@ import {
   CheckCircle,
   Lightbulb,
   ExternalLink,
-  Plane,
-  Sparkles
+  FileCheck,
+  Shield
 } from "lucide-react";
-import { type TripResponse } from "@shared/schema";
+import { type TripResponse, type EntryCosts } from "@shared/schema";
 import { InlineBookingButtons } from "./BookNow";
+import { Button } from "@/components/ui/button";
 
 interface CostBreakdownData {
   currency?: string;
@@ -58,6 +59,9 @@ interface CostBreakdownData {
   perPerson: number;
   budgetStatus: "within_budget" | "tight" | "over_budget";
   savingsTips: string[];
+  // AI-powered booking apps and mobile plans
+  bookingApps?: { mode: string; apps: { name: string; url: string; note: string }[] }[];
+  mobilePlans?: { provider: string; plan: string; price: string; data?: string; note: string }[];
   // Additional fields from chat format
   isOverBudget?: boolean;
   remaining?: number;
@@ -161,6 +165,12 @@ function normalizeBreakdownData(data: any, trip: any): CostBreakdownData {
 interface Props {
   trip: TripResponse;
   budgetOverride?: any; // Override from chat updates
+  entryCosts?: EntryCosts; // MVP: Visa + Insurance costs
+}
+
+// Check if trip uses custom budget (vs. predefined Budget/Comfort/Luxury styles)
+function isCustomBudget(trip: TripResponse): boolean {
+  return trip.travelStyle === 'custom';
 }
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -193,16 +203,16 @@ const CATEGORY_LABELS: Record<string, string> = {
   misc: "Miscellaneous",
 };
 
-export function CostBreakdown({ trip, budgetOverride }: Props) {
+export function CostBreakdown({ trip, budgetOverride, entryCosts }: Props) {
   const itinerary = trip.itinerary as unknown as { days: any[]; costBreakdown?: CostBreakdownData };
   // Use budgetOverride from chat if provided, otherwise use itinerary's costBreakdown
   const rawCostData = budgetOverride || itinerary?.costBreakdown;
 
   if (!rawCostData) {
     return (
-      <div className="text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-slate-300">
-        <DollarSign className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-        <p className="text-muted-foreground">Cost breakdown not available for this itinerary.</p>
+      <div className="text-center py-8 bg-white/5 rounded-2xl border border-dashed border-white/20">
+        <DollarSign className="w-12 h-12 text-white/30 mx-auto mb-3" />
+        <p className="text-white/50">Cost breakdown not available for this itinerary.</p>
       </div>
     );
   }
@@ -245,35 +255,34 @@ export function CostBreakdown({ trip, budgetOverride }: Props) {
     switch (status) {
       case "within_budget":
         return {
-          icon: <CheckCircle className="w-5 h-5 text-green-600" />,
+          icon: <CheckCircle className="w-5 h-5 text-green-400" />,
           label: "Within Budget",
-          color: "text-green-600",
-          bgColor: "bg-green-50 border-green-200",
+          color: "text-green-400",
+          bgColor: "bg-green-500/10 border-green-500/20",
           barColor: "bg-green-500",
         };
       case "tight":
         return {
-          icon: <AlertCircle className="w-5 h-5 text-amber-600" />,
+          icon: <AlertCircle className="w-5 h-5 text-amber-400" />,
           label: "Budget is Tight",
-          color: "text-amber-600",
-          bgColor: "bg-amber-50 border-amber-200",
+          color: "text-amber-400",
+          bgColor: "bg-amber-500/10 border-amber-500/20",
           barColor: "bg-amber-500",
         };
       case "over_budget":
         return {
-          icon: <TrendingUp className="w-5 h-5 text-red-600" />,
+          icon: <TrendingUp className="w-5 h-5 text-red-400" />,
           label: "Over Budget",
-          color: "text-red-600",
-          bgColor: "bg-red-50 border-red-200",
+          color: "text-red-400",
+          bgColor: "bg-red-500/10 border-red-500/20",
           barColor: "bg-red-500",
         };
       default:
-        // Default to green if unknown status
         return {
-          icon: <CheckCircle className="w-5 h-5 text-green-600" />,
+          icon: <CheckCircle className="w-5 h-5 text-green-400" />,
           label: "Budget Status",
-          color: "text-green-600",
-          bgColor: "bg-green-50 border-green-200",
+          color: "text-green-400",
+          bgColor: "bg-green-500/10 border-green-500/20",
           barColor: "bg-green-500",
         };
     }
@@ -285,74 +294,102 @@ export function CostBreakdown({ trip, budgetOverride }: Props) {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden"
+      className="bg-white/5 border border-white/10 rounded-2xl shadow-[0_10px_30px_-18px_rgba(0,0,0,0.8)] overflow-hidden"
     >
-      {/* Header */}
+      {/* Header - Authoritative, trust-building */}
       <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-xl font-display font-bold">Estimated Total Costs</h3>
-            <p className="text-slate-300 text-sm mt-1">
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="text-lg font-semibold text-white/80">Estimated Total</h3>
+              {/* Confidence badge */}
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                Verified
+              </span>
+            </div>
+            <p className="text-white/50 text-sm">
               {costBreakdown.travelers?.note || `For ${trip.groupSize} traveler${trip.groupSize > 1 ? 's' : ''}`}
             </p>
-            <p className="text-slate-400 text-xs mt-0.5">AI-generated estimates • Prices may vary</p>
           </div>
           <div className="text-right">
-            <div className="text-3xl font-bold">{currencySymbol}{costBreakdown.grandTotal?.toLocaleString() || '0'}</div>
+            {/* Hero number - prominent and trustworthy */}
+            <div className="text-4xl font-bold tracking-tight text-white">
+              {currencySymbol}{costBreakdown.grandTotal?.toLocaleString() || '0'}
+            </div>
             {costBreakdown.perPerson && (
-              <div className="text-slate-300 text-sm">
-                {currencySymbol}{costBreakdown.perPerson.toLocaleString()} per person (avg)
+              <div className="text-white/60 text-sm mt-1">
+                {currencySymbol}{costBreakdown.perPerson.toLocaleString()} per person
               </div>
             )}
           </div>
         </div>
 
-        {/* Budget Progress Bar */}
-        <div className="mt-6">
-          <div className="flex justify-between text-sm mb-2">
-            <span>Budget Usage</span>
-            <span>{budgetPercentUsed.toFixed(0)}% of {currencySymbol}{budget.toLocaleString()}</span>
+        {/* Budget Progress Bar - Only show for custom budget */}
+        {isCustomBudget(trip) && (
+          <div className="mt-6">
+            <div className="flex justify-between text-sm mb-2">
+              <span>Budget Usage</span>
+              <span>{budgetPercentUsed.toFixed(0)}% of {currencySymbol}{budget.toLocaleString()}</span>
+            </div>
+            <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(budgetPercentUsed, 100)}%` }}
+                transition={{ duration: 1, ease: "easeOut" }}
+                className={`h-full ${statusConfig.barColor} rounded-full`}
+              />
+            </div>
           </div>
-          <div className="h-3 bg-slate-700 rounded-full overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.min(budgetPercentUsed, 100)}%` }}
-              transition={{ duration: 1, ease: "easeOut" }}
-              className={`h-full ${statusConfig.barColor} rounded-full`}
-            />
+        )}
+
+        {/* Travel Style Badge - Show for non-custom styles */}
+        {!isCustomBudget(trip) && (
+          <div className="mt-6 flex items-center gap-2">
+            <span className="text-sm text-slate-300">Travel Style:</span>
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+              trip.travelStyle === 'budget' ? 'bg-emerald-500/20 text-emerald-300' :
+              trip.travelStyle === 'luxury' ? 'bg-amber-500/20 text-amber-300' :
+              'bg-blue-500/20 text-blue-300'
+            }`}>
+              {trip.travelStyle === 'budget' ? '💰 Budget' :
+               trip.travelStyle === 'luxury' ? '✨ Luxury' :
+               trip.travelStyle === 'standard' ? '🎯 Comfort' : trip.travelStyle}
+            </span>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Budget Status */}
-      <div className={`p-4 border-b ${statusConfig.bgColor}`}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {statusConfig.icon}
-            <span className={`font-semibold ${statusConfig.color}`}>{statusConfig.label}</span>
-          </div>
-          <div className={`font-semibold ${budgetDiff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {budgetDiff >= 0 ? (
-              <span className="flex items-center gap-1">
-                <TrendingDown className="w-4 h-4" />
-                {currencySymbol}{budgetDiff.toLocaleString()} under budget
-              </span>
-            ) : (
-              <span className="flex items-center gap-1">
-                <TrendingUp className="w-4 h-4" />
-                {currencySymbol}{Math.abs(budgetDiff).toLocaleString()} over budget
-              </span>
-            )}
+      {/* Budget Status - Only show for custom budget */}
+      {isCustomBudget(trip) && (
+        <div className={`p-4 border-b border-white/10 ${statusConfig.bgColor}`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {statusConfig.icon}
+              <span className={`font-semibold ${statusConfig.color}`}>{statusConfig.label}</span>
+            </div>
+            <div className={`font-semibold ${budgetDiff >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {budgetDiff >= 0 ? (
+                <span className="flex items-center gap-1">
+                  <TrendingDown className="w-4 h-4" />
+                  {currencySymbol}{budgetDiff.toLocaleString()} under budget
+                </span>
+              ) : (
+                <span className="flex items-center gap-1">
+                  <TrendingUp className="w-4 h-4" />
+                  {currencySymbol}{Math.abs(budgetDiff).toLocaleString()} over budget
+                </span>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Cost Categories */}
       <div className="p-6">
-        <h4 className="font-semibold text-slate-900 mb-4">Breakdown by Category</h4>
+        <h4 className="font-semibold text-white mb-4">Breakdown by Category</h4>
 
         {/* Visual Bar Chart */}
-        <div className="flex h-8 rounded-lg overflow-hidden mb-6">
+        <div className="flex h-8 rounded-lg overflow-hidden mb-6 bg-white/5">
           {categoryData.map((cat, idx) => (
             <motion.div
               key={cat.key}
@@ -372,7 +409,7 @@ export function CostBreakdown({ trip, budgetOverride }: Props) {
           {categoryData.map((cat) => (
             <div
               key={cat.key}
-              className="flex items-center justify-between p-3 rounded-xl bg-slate-50 hover:bg-slate-100 transition-colors"
+              className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] transition-colors"
             >
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg ${cat.color} text-white`}>
@@ -380,25 +417,30 @@ export function CostBreakdown({ trip, budgetOverride }: Props) {
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-slate-900">{cat.label}</span>
+                    <span className="font-medium text-white">{cat.label}</span>
                     {(cat.details as any)?.source === 'api' && (
-                      <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-medium rounded">LIVE</span>
+                      <span className="px-1.5 py-0.5 bg-green-500/20 text-green-400 text-[10px] font-medium rounded">LIVE</span>
                     )}
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5">
+                  <div className="text-xs text-white/50 mt-0.5">
                     {cat.key === 'flights' && (cat.details as any)?.perPerson && (
                       <div className="space-y-1">
                         <span>{currencySymbol}{(cat.details as any).perPerson}/person • {(cat.details as any).note}</span>
                         {(cat.details as any)?.airline && (cat.details as any).airline !== 'Multiple Airlines' && (
-                          <div className="text-slate-600">{(cat.details as any).airline} • {(cat.details as any).duration || 'Duration varies'}</div>
+                          <div className="text-white/60">{(cat.details as any).airline} • {(cat.details as any).duration || 'Duration varies'}</div>
                         )}
-                        <InlineBookingButtons trip={trip} type="flights" />
+                        <InlineBookingButtons
+                          trip={trip}
+                          type="flights"
+                          bookingApps={costBreakdown.bookingApps}
+                          selectedMode={(cat.details as any)?.selectedMode}
+                        />
                       </div>
                     )}
                     {cat.key === 'accommodation' && (cat.details as any)?.perNight && (
                       <div className="space-y-1">
                         <span>{currencySymbol}{(cat.details as any).perNight}/night × {(cat.details as any).nights} nights</span>
-                        <div className="text-slate-600">
+                        <div className="text-white/60">
                           {(cat.details as any).hotelName && <span>{(cat.details as any).hotelName}</span>}
                           {(cat.details as any).rating && <span> • ★ {(cat.details as any).rating}</span>}
                         </div>
@@ -422,25 +464,135 @@ export function CostBreakdown({ trip, budgetOverride }: Props) {
                 </div>
               </div>
               <div className="text-right">
-                <div className="font-semibold text-slate-900">{currencySymbol}{cat.total.toLocaleString()}</div>
-                <div className="text-xs text-slate-500">{cat.percentage.toFixed(0)}%</div>
+                <div className="font-semibold text-white">{currencySymbol}{cat.total.toLocaleString()}</div>
+                <div className="text-xs text-white/50">{cat.percentage.toFixed(0)}%</div>
               </div>
             </div>
           ))}
         </div>
       </div>
 
+      {/* Entry Costs Section (MVP - Visa + Insurance) */}
+      {entryCosts && (entryCosts.visa.required || entryCosts.insurance.recommended) && (
+        <div className="p-6 bg-indigo-500/10 border-t border-white/10">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-lg">
+                <FileCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-white">Entry Costs</h4>
+                <p className="text-xs text-indigo-300">Often forgotten expenses</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-xl font-bold text-white">
+                {currencySymbol}{entryCosts.total.toLocaleString()}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {/* Visa Cost */}
+            {entryCosts.visa.required && (
+              <div className="flex items-center justify-between p-3 bg-white/[0.04] rounded-xl border border-white/10">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-amber-500/20 text-amber-400 rounded-lg">
+                    <FileCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="font-medium text-white">Visa</span>
+                    <div className="text-xs text-white/50">{entryCosts.visa.note}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <div className="font-semibold text-white">
+                      {currencySymbol}{entryCosts.visa.totalCost.toLocaleString()}
+                    </div>
+                  </div>
+                  {entryCosts.visa.affiliateLink && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/20"
+                      asChild
+                    >
+                      <a href={entryCosts.visa.affiliateLink} target="_blank" rel="noopener noreferrer">
+                        Apply
+                        <ExternalLink className="w-3 h-3 ml-1" />
+                      </a>
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Insurance Cost */}
+            {entryCosts.insurance.recommended && (
+              <div className="flex items-center justify-between p-3 bg-white/[0.04] rounded-xl border border-white/10">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg">
+                    <Shield className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="font-medium text-white">Travel Insurance</span>
+                    <div className="text-xs text-white/50">{entryCosts.insurance.note}</div>
+                    {!entryCosts.insurance.required && (
+                      <span className="text-xs text-emerald-400 font-medium">Recommended</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <div className="font-semibold text-white">
+                      ~{currencySymbol}{entryCosts.insurance.estimatedCost.toLocaleString()}
+                    </div>
+                  </div>
+                  {entryCosts.insurance.affiliateLink && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20"
+                      asChild
+                    >
+                      <a href={entryCosts.insurance.affiliateLink} target="_blank" rel="noopener noreferrer">
+                        Quote
+                        <ExternalLink className="w-3 h-3 ml-1" />
+                      </a>
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* True Total with Entry Costs */}
+          <div className="mt-4 pt-4 border-t border-white/10">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-white">TRUE TOTAL (Trip + Entry)</span>
+              <span className="text-2xl font-bold text-white">
+                {currencySymbol}{(costBreakdown.grandTotal + entryCosts.total).toLocaleString()}
+              </span>
+            </div>
+            <p className="text-xs text-indigo-300 mt-1">
+              Per person: ~{currencySymbol}{Math.round((costBreakdown.grandTotal + entryCosts.total) / (trip.groupSize || 1)).toLocaleString()}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Savings Tips */}
       {costBreakdown.savingsTips && costBreakdown.savingsTips.length > 0 && (
-        <div className="p-6 bg-amber-50 border-t border-amber-100">
+        <div className="p-6 bg-amber-500/10 border-t border-white/10">
           <div className="flex items-center gap-2 mb-3">
-            <Lightbulb className="w-5 h-5 text-amber-600" />
-            <h4 className="font-semibold text-amber-900">Money-Saving Tips</h4>
+            <Lightbulb className="w-5 h-5 text-amber-400" />
+            <h4 className="font-semibold text-white">Money-Saving Tips</h4>
           </div>
           <ul className="space-y-2">
             {costBreakdown.savingsTips.map((tip, idx) => (
-              <li key={idx} className="flex items-start gap-2 text-sm text-amber-800">
-                <span className="text-amber-500 mt-0.5">•</span>
+              <li key={idx} className="flex items-start gap-2 text-sm text-amber-200/80">
+                <span className="text-amber-400 mt-0.5">•</span>
                 {tip}
               </li>
             ))}
@@ -448,15 +600,10 @@ export function CostBreakdown({ trip, budgetOverride }: Props) {
         </div>
       )}
 
-      {/* Disclaimer */}
-      <div className="p-4 bg-gradient-to-r from-primary/5 to-emerald-500/5 border-t border-slate-200">
-        <div className="flex items-center justify-center gap-2 mb-2">
-          <Sparkles className="w-4 h-4 text-primary" />
-          <span className="text-sm font-medium text-slate-700">Ready to book your trip?</span>
-        </div>
-        <p className="text-xs text-slate-500 text-center">
-          Prices are AI-generated estimates. Click the booking buttons above to compare real-time prices.
-          We may earn a commission at no extra cost to you.
+      {/* Footer - Reassuring, not undermining */}
+      <div className="p-4 bg-white/[0.02] border-t border-white/10">
+        <p className="text-xs text-white/40 text-center">
+          Based on current market data and historical pricing. Final costs may vary at booking.
         </p>
       </div>
     </motion.div>

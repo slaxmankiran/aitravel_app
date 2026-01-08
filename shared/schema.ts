@@ -94,8 +94,10 @@ export const trips = pgTable("trips", {
   interests: text("interests").array(), // ['museums', 'beaches', 'nightlife', 'food']
 
   // AI Outputs
-  feasibilityStatus: text("feasibility_status").default("pending"),
+  feasibilityStatus: text("feasibility_status").default("pending"), // 'pending' | 'yes' | 'no' | 'warning' | 'error'
   feasibilityReport: jsonb("feasibility_report"),
+  feasibilityError: text("feasibility_error"), // Error message if feasibilityStatus === 'error'
+  feasibilityLastRunAt: timestamp("feasibility_last_run_at"), // When the last feasibility check started
   itinerary: jsonb("itinerary"),
 
   // Template/Sharing
@@ -392,6 +394,7 @@ export type WeatherCache = typeof weatherCache.$inferSelect;
 // ============================================================================
 
 export interface FeasibilityReport {
+  schemaVersion: number; // Current: 2. Prevents silent breakage when fields change.
   overall: "yes" | "no" | "warning";
   score: number;
   breakdown: {
@@ -401,7 +404,183 @@ export interface FeasibilityReport {
     safety: { status: "safe" | "caution" | "danger"; reason: string };
   };
   summary: string;
+  visaDetails?: VisaDetails; // Server-generated visa details (single source of truth)
+  generatedAt: string; // ISO date when this analysis was run
+  expiresAt?: string; // ISO date when this analysis should be refreshed (e.g., +7 days)
 }
+
+// Current feasibility report schema version
+export const FEASIBILITY_SCHEMA_VERSION = 2;
+
+// Alternative destination (shown when HARD_BLOCKER)
+export interface Alternative {
+  destination: string;
+  destinationCode: string;
+  city: string;
+  flag: string;
+  visaType: 'visa_free' | 'voa' | 'e_visa' | 'embassy';  // Internal enum for logic/analytics
+  visaStatus: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa';  // User-facing display
+  visaLabel: string;
+  processingDays: number;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+  // Curation metadata - controls product behavior
+  isCurated: boolean;                              // First-class product switch
+  curationLevel?: 'manual' | 'auto';               // How curation was determined
+  lastReviewedAt?: string;                         // ISO date of last human review
+  // Behavior tied to isCurated:
+  // - Non-curated: rough cost range, short explanation, certainty cap ≤75, affiliate optional
+  // - Curated: tight cost range, rich explanation, certainty cap ≤90, affiliate yes
+}
+
+// Legacy alias for backward compatibility
+export type { Alternative as AlternativeDestination };
+
+// ============================================================================
+// MVP CERTAINTY ENGINE TYPES
+// ============================================================================
+
+export interface VisaTiming {
+  daysUntilTrip: number;
+  businessDaysUntilTrip: number;
+  processingDaysNeeded: number;
+  hasEnoughTime: boolean;
+  urgency: 'ok' | 'tight' | 'risky' | 'impossible';
+  recommendation: string;
+}
+
+export interface VisaDetails {
+  required: boolean;
+  type: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa' | 'not_allowed';
+  name?: string;
+  processingDays: {
+    minimum: number;
+    maximum: number;
+    expedited?: number;
+  };
+  cost: {
+    government: number;
+    service?: number;
+    expedited?: number;
+    currency: string;
+    totalPerPerson: number;
+    breakdownLabel?: string; // e.g., "Gov't fee + service charge"
+    accuracy: 'curated' | 'estimated';
+  };
+  documentsRequired: string[];
+  applicationMethod: 'online' | 'embassy' | 'vfs' | 'on_arrival';
+  applicationUrl?: string;
+  timing?: VisaTiming;
+  affiliateLink?: string;
+  lastVerified?: string; // ISO date string when data was last verified
+  sources?: Array<{ title: string; url: string }>;
+  confidenceLevel: 'high' | 'medium' | 'low';
+}
+
+export interface CertaintyScoreBreakdown {
+  accessibility: {
+    score: number; // 0-25
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+  };
+  visa: {
+    score: number; // 0-30
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+    timingOk: boolean;
+  };
+  safety: {
+    score: number; // 0-25
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+  };
+  budget: {
+    score: number; // 0-20
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+  };
+}
+
+export interface CertaintyScore {
+  score: number; // 0-100
+  verdict: 'GO' | 'POSSIBLE' | 'DIFFICULT' | 'NO';
+  summary: string;
+  breakdown: CertaintyScoreBreakdown;
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface EntryCosts {
+  visa: {
+    required: boolean;
+    costPerPerson: number;
+    totalCost: number;
+    note: string;
+    affiliateLink?: string;
+  };
+  insurance: {
+    required: boolean;
+    recommended: boolean;
+    estimatedCost: number;
+    note: string;
+    affiliateLink?: string;
+  };
+  total: number;
+}
+
+export interface ActionItem {
+  id: string;
+  title: string;
+  description: string;
+  priority: 'high' | 'medium' | 'low';
+  dueInfo?: string; // "5-7 days processing"
+  estimatedCost?: string; // "₹3,500/person"
+  affiliateLink?: string;
+  affiliateLabel?: string;
+  completed: boolean;
+}
+
+export interface TrueCostBreakdown {
+  currency: string;
+  currencySymbol: string;
+  tripCosts: {
+    flights: { total: number; perPerson: number; note: string };
+    accommodation: { total: number; perNight: number; nights: number };
+    activities: { total: number; note: string };
+    food: { total: number; perDay: number };
+    localTransport: { total: number; note: string };
+    subtotal: number;
+  };
+  entryCosts: EntryCosts;
+  grandTotal: number;
+  perPerson: number;
+  budgetStatus: 'under' | 'on_track' | 'over';
+  budgetDifference?: number;
+}
+
+// Affiliate links configuration
+export const AFFILIATE_LINKS = {
+  visa: {
+    ivisa: 'https://www.ivisa.com/?utm_source=voyageai&utm_medium=affiliate',
+    visaHQ: 'https://www.visahq.com/?utm_source=voyageai',
+  },
+  insurance: {
+    safetywing: 'https://safetywing.com/nomad-insurance/?referenceID=voyageai',
+    worldNomads: 'https://www.worldnomads.com/?affiliate=voyageai',
+  },
+  flights: {
+    skyscanner: 'https://www.skyscanner.com/?associate=voyageai',
+    googleFlights: 'https://www.google.com/travel/flights',
+  },
+  hotels: {
+    booking: 'https://www.booking.com/?aid=voyageai',
+    agoda: 'https://www.agoda.com/?cid=voyageai',
+  },
+  activities: {
+    viator: 'https://www.viator.com/?pid=voyageai',
+    getYourGuide: 'https://www.getyourguide.com/?partner_id=voyageai',
+  }
+} as const;
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
