@@ -1228,6 +1228,41 @@ export default function CreateTrip() {
   const [editTripData, setEditTripData] = useState<any>(null);
   const [isLoadingTrip, setIsLoadingTrip] = useState(!!editTripId);
 
+  // Store original trip snapshot for diff calculation (edit mode only)
+  const originalTripRef = useRef<{
+    destination?: string;
+    dates?: string;
+    groupSize?: number;
+    travelStyle?: string;
+    budget?: number;
+    passport?: string;
+    origin?: string;
+  } | null>(null);
+
+  // Helper: Pick only comparable fields from trip
+  const pickComparableFields = (trip: any) => ({
+    destination: trip.destination,
+    dates: trip.dates,
+    groupSize: trip.groupSize,
+    travelStyle: trip.travelStyle,
+    budget: trip.budget,
+    passport: trip.passport,
+    origin: trip.origin,
+  });
+
+  // Helper: Calculate which fields changed
+  const diffTrip = (original: typeof originalTripRef.current, updated: any): string[] => {
+    if (!original) return [];
+    const changes: string[] = [];
+    const keys = ['destination', 'dates', 'groupSize', 'travelStyle', 'budget', 'passport', 'origin'] as const;
+    for (const key of keys) {
+      if (original[key] !== updated[key]) {
+        changes.push(key);
+      }
+    }
+    return changes;
+  };
+
   useEffect(() => {
     if (editTripId) {
       setIsLoadingTrip(true);
@@ -1235,6 +1270,10 @@ export default function CreateTrip() {
         .then(res => res.json())
         .then(trip => {
           setEditTripData(trip);
+          // Store original snapshot for diff (only on first load)
+          if (!originalTripRef.current) {
+            originalTripRef.current = pickComparableFields(trip);
+          }
           setFormData({
             passport: trip.passport || "",
             residence: trip.origin || "",
@@ -1420,8 +1459,15 @@ export default function CreateTrip() {
           // If returnTo is specified (edit mode), go back there after re-checking feasibility
           // Otherwise navigate to feasibility page for new trips
           if (returnTo) {
+            // Calculate what changed for the "What Changed?" banner
+            const changes = diffTrip(originalTripRef.current, updatedData);
+            const changesParam = changes.length > 0 ? `&changes=${encodeURIComponent(JSON.stringify(changes))}` : '';
+
+            // Build returnTo with updated flag and changes
+            const updatedReturnTo = `${decodeURIComponent(returnTo)}?updated=1${changesParam}`;
+
             // In edit mode, go through feasibility first then back to results
-            setLocation(`/trips/${response.id}/feasibility?returnTo=${encodeURIComponent(returnTo)}`);
+            setLocation(`/trips/${response.id}/feasibility?returnTo=${encodeURIComponent(updatedReturnTo)}`);
           } else {
             setLocation(`/trips/${response.id}/feasibility`);
           }
@@ -1501,24 +1547,26 @@ export default function CreateTrip() {
               </div>
             )}
 
-            {/* Progress Bar */}
-            {!isLoadingTrip && <div className="mb-8">
-              <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                <span className={step >= 1 ? "text-amber-600" : ""}>Profile</span>
-                <span className={step >= 2 ? "text-amber-600" : ""}>Destination</span>
-                <span className={step >= 3 ? "text-amber-600" : ""}>Budget</span>
-              </div>
-              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                <motion.div
-                  className="h-full bg-gradient-to-r from-amber-400 to-orange-500"
-                  initial={{ width: "33%" }}
-                  animate={{ width: `${(step / 3) * 100}%` }}
-                  transition={{ duration: 0.3 }}
-                />
-              </div>
-            </div>
+            {/* Progress Bar + Form (hidden while loading trip data) */}
+            {!isLoadingTrip && (
+              <>
+                <div className="mb-8">
+                  <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                    <span className={step >= 1 ? "text-amber-600" : ""}>Profile</span>
+                    <span className={step >= 2 ? "text-amber-600" : ""}>Destination</span>
+                    <span className={step >= 3 ? "text-amber-600" : ""}>Budget</span>
+                  </div>
+                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-amber-400 to-orange-500"
+                      initial={{ width: "33%" }}
+                      animate={{ width: `${(step / 3) * 100}%` }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  </div>
+                </div>
 
-            {/* Form Header */}
+                {/* Form Header */}
             <div className="mb-6">
               <h2 className="text-2xl font-display font-bold text-slate-900">
                 {step === 1 && "Traveler Profile"}
@@ -1569,7 +1617,8 @@ export default function CreateTrip() {
             </AnimatePresence>
           </CardContent>
             </Card>
-            </div>}
+              </>
+            )}
           </div>
         </div>
       </main>

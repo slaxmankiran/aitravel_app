@@ -471,19 +471,36 @@ export function generateEstimatedVisaDetails(
     processingMin = 0;
     processingMax = 0;
   } else if (visaType === 'embassy_visa') {
-    processingMin = 5;
-    processingMax = 15;
+    processingMin = 10;
+    processingMax = 30; // Embassy visas can take a month
   }
 
-  // Estimate costs (conservative defaults)
-  let governmentFee = 50;
-  let serviceFee = 20;
+  // Estimate costs (conservative - based on real 2025 data)
+  // Schengen: €90 (~$100) + VFS (~$25) = $125
+  // USA B1/B2: $185
+  // UK: £100+ ($125+)
+  // E-visa typical: $50-80
+  // VOA typical: $30-40
+  let governmentFee = 100; // Higher default to avoid underestimating
+  let serviceFee = 25;
   if (visaType === 'visa_on_arrival') {
-    governmentFee = 30;
+    governmentFee = 35;
     serviceFee = 0;
   } else if (visaType === 'e_visa') {
-    governmentFee = 40;
+    governmentFee = 50;
     serviceFee = 15;
+  }
+
+  // Schengen countries get higher fee (€90 + service)
+  const SCHENGEN_COUNTRIES = [
+    'austria', 'belgium', 'czech republic', 'czechia', 'denmark', 'estonia',
+    'finland', 'france', 'germany', 'greece', 'hungary', 'iceland', 'italy',
+    'latvia', 'liechtenstein', 'lithuania', 'luxembourg', 'malta', 'netherlands',
+    'norway', 'poland', 'portugal', 'slovakia', 'slovenia', 'spain', 'sweden', 'switzerland'
+  ];
+  if (SCHENGEN_COUNTRIES.some(c => destination.toLowerCase().includes(c))) {
+    governmentFee = 100; // €90 ≈ $100
+    serviceFee = 25; // VFS/service center
   }
 
   const totalPerPerson = governmentFee + serviceFee;

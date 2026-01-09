@@ -1,14 +1,19 @@
 import { motion } from "framer-motion";
-import { CheckCircle, AlertTriangle, XCircle, Plane, FileCheck, ShieldCheck, Wallet } from "lucide-react";
+import { CheckCircle, AlertTriangle, XCircle, Plane, FileCheck, ShieldCheck, Wallet, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import type { CertaintyScore as CertaintyScoreType } from "@shared/schema";
 
 interface Props {
   certaintyScore: CertaintyScoreType;
+  travelStyle?: 'budget' | 'standard' | 'luxury' | 'custom';
 }
 
-export function CertaintyScoreDisplay({ certaintyScore }: Props) {
+export function CertaintyScoreDisplay({ certaintyScore, travelStyle }: Props) {
   const { score, verdict, summary, breakdown, blockers, warnings } = certaintyScore;
+
+  // For travel style trips (budget/standard/luxury), budget scoring is meaningless
+  // since there's no user-specified budget to compare against
+  const isCustomBudget = travelStyle === 'custom';
 
   const getVerdictColor = () => {
     switch (verdict) {
@@ -56,12 +61,31 @@ export function CertaintyScoreDisplay({ certaintyScore }: Props) {
     }
   };
 
-  const categories = [
-    { key: 'accessibility', label: 'Accessible', maxScore: 25, data: breakdown.accessibility },
-    { key: 'visa', label: 'Visa', maxScore: 30, data: breakdown.visa },
-    { key: 'safety', label: 'Safe', maxScore: 25, data: breakdown.safety },
-    { key: 'budget', label: 'Budget', maxScore: 20, data: breakdown.budget },
-  ];
+  // Build categories based on travel style
+  // For custom budget: show all 4 categories including budget comparison
+  // For travel styles (budget/comfort/luxury): skip budget bar since it's meaningless
+  const categories = isCustomBudget
+    ? [
+        { key: 'accessibility', label: 'Accessible', maxScore: 25, data: breakdown.accessibility },
+        { key: 'visa', label: 'Visa', maxScore: 30, data: breakdown.visa },
+        { key: 'safety', label: 'Safe', maxScore: 25, data: breakdown.safety },
+        { key: 'budget', label: 'Budget', maxScore: 20, data: breakdown.budget },
+      ]
+    : [
+        { key: 'accessibility', label: 'Accessible', maxScore: 25, data: breakdown.accessibility },
+        { key: 'visa', label: 'Visa', maxScore: 30, data: breakdown.visa },
+        { key: 'safety', label: 'Safe', maxScore: 25, data: breakdown.safety },
+      ];
+
+  // Get travel style display label
+  const getTravelStyleLabel = () => {
+    switch (travelStyle) {
+      case 'budget': return 'Budget Travel';
+      case 'standard': return 'Comfort Travel';
+      case 'luxury': return 'Luxury Travel';
+      default: return null;
+    }
+  };
 
   return (
     <motion.div
@@ -161,6 +185,35 @@ export function CertaintyScoreDisplay({ certaintyScore }: Props) {
                 </span>
               </motion.div>
             ))}
+
+            {/* Travel Style indicator (shown for non-custom budget trips) */}
+            {!isCustomBudget && getTravelStyleLabel() && (
+              <motion.div
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.5 }}
+                className="flex items-center gap-3 pt-2 border-t border-slate-200"
+              >
+                <div className="flex items-center gap-2 w-28 shrink-0">
+                  <Sparkles className={`w-4 h-4 ${
+                    travelStyle === 'luxury' ? 'text-amber-500' :
+                    travelStyle === 'budget' ? 'text-emerald-500' :
+                    'text-blue-500'
+                  }`} />
+                  <span className="text-sm font-medium text-slate-600">Style</span>
+                </div>
+                <div className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  travelStyle === 'luxury' ? 'bg-amber-100 text-amber-700' :
+                  travelStyle === 'budget' ? 'bg-emerald-100 text-emerald-700' :
+                  'bg-blue-100 text-blue-700'
+                }`}>
+                  {getTravelStyleLabel()}
+                </div>
+                <span className="text-xs text-slate-400 italic ml-auto">
+                  AI will optimize for this style
+                </span>
+              </motion.div>
+            )}
           </div>
 
           {/* Blockers */}

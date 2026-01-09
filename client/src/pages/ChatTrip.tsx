@@ -6,7 +6,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { apiRequest } from "@/lib/queryClient";
 import { useCreateTrip } from "@/hooks/use-trips";
 import { type CreateTripRequest } from "@shared/schema";
-import { trackTripEvent } from "@/lib/analytics";
+import { trackTripEvent, startNewFlow } from "@/lib/analytics";
 import {
   Send,
   Sparkles,
@@ -263,8 +263,13 @@ function getDefaultDatesString(isFlexible: boolean, preferredMonth?: string): st
 
 export default function ChatTrip() {
   const [, setLocation] = useLocation();
+  const searchString = useSearch();
   const createTrip = useCreateTrip(); // Hook to submit trip
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Parse URL params for destination prefill
+  const urlParams = new URLSearchParams(searchString);
+  const prefillDestination = urlParams.get('destination');
 
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -294,6 +299,8 @@ export default function ChatTrip() {
   const [showPassportPicker, setShowPassportPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const prefillAppliedRef = useRef(false); // Track if prefill was already applied
+  const flowCompletedRef = useRef(false); // Track if user completed the flow (submitted trip)
 
   // =========================================================================
   // EDGE-CASE FIX 1 & 2: Deduplication for emitStepConfirm
@@ -522,6 +529,88 @@ export default function ChatTrip() {
     const dests = tripData.destinations || [];
     return dests.slice(1);
   };
+
+  // Start a new analytics flow when chat page loads
+  useEffect(() => {
+    startNewFlow();
+    trackTripEvent(0, 'create_started', {}, {}, 'chat');
+  }, []);
+
+  // Track abandonment when user leaves without completing
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!flowCompletedRef.current) {
+        // Use sendBeacon for reliable delivery on page unload
+        const payload = JSON.stringify({
+          event: 'planning_mode_abandoned',
+          ts: new Date().toISOString(),
+          tripId: 0,
+          page: 'chat',
+          data: {
+            mode: 'chat',
+            lastStage: chatStage,
+            hadDestination: (tripData.destinations?.length || 0) > 0,
+          }
+        });
+        navigator.sendBeacon('/api/analytics/trip-events', new Blob([payload], { type: 'application/json' }));
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    // Also track on component unmount (SPA navigation)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (!flowCompletedRef.current) {
+        trackTripEvent(0, 'planning_mode_abandoned', {
+          mode: 'chat',
+          lastStage: chatStage,
+          hadDestination: (tripData.destinations?.length || 0) > 0,
+        }, {}, 'chat');
+      }
+    };
+  }, [chatStage, tripData.destinations]);
+
+  // Handle destination prefill from URL params (e.g., from Home page)
+  useEffect(() => {
+    if (!prefillDestination || prefillAppliedRef.current) return;
+    prefillAppliedRef.current = true;
+
+    // Parse destination - expected format: "Tokyo, Japan" or just "Tokyo"
+    const parts = prefillDestination.split(',').map(s => s.trim());
+    const city = parts[0] || '';
+    const country = parts[1] || '';
+
+    if (!city) return;
+
+    // Add the destination
+    setTripData(prev => ({
+      ...prev,
+      destinations: [{ city, country }],
+    }));
+    setRecentlyUpdated(new Set(['destinations']));
+
+    // Update initial message to acknowledge the destination
+    const destDisplay = country ? `${city}, ${country}` : city;
+    setMessages([
+      {
+        id: '1',
+        type: 'assistant',
+        content: `**${destDisplay}** - great choice! Let me help you plan this trip.\n\nWhen are you planning to travel?`,
+        timestamp: new Date(),
+        suggestions: ["I'm flexible with dates", "Traveling next month", "I have specific dates"],
+      }
+    ]);
+
+    // Advance to the next stage
+    setChatStage('collect_dates');
+
+    // Track analytics
+    trackTripEvent(0, 'destination_prefilled', {
+      destination: destDisplay,
+      source: 'url_param'
+    });
+  }, [prefillDestination]);
 
   // Clear "recently updated" indicator after 2 seconds
   useEffect(() => {
@@ -1401,6 +1490,9 @@ export default function ChatTrip() {
     // -------------------------------------------------------------------
     createTrip.mutate(tripRequest, {
       onSuccess: (response) => {
+        // Mark flow as completed to prevent abandoned tracking
+        flowCompletedRef.current = true;
+
         // Analytics: track success
         trackTripEvent(response.id, 'chat_plan_success', {
           destination: destString,

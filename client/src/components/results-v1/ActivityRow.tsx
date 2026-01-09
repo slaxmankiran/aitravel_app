@@ -3,8 +3,11 @@
  *
  * Single activity row within a DayCard.
  * Shows time, name, location, cost, and transport icon.
+ *
+ * Performance: Memoized component for scroll/hover performance.
  */
 
+import React from "react";
 import {
   MapPin,
   Coins,
@@ -100,7 +103,7 @@ interface ActivityRowProps {
   onMouseLeave: () => void;
 }
 
-export function ActivityRow({
+function ActivityRowComponent({
   activity,
   activityKey,
   currencySymbol,
@@ -247,3 +250,6 @@ export function ActivityRow({
     </div>
   );
 }
+
+// Memoize for scroll and hover performance
+export const ActivityRow = React.memo(ActivityRowComponent);

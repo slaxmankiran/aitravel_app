@@ -9,12 +9,13 @@
  * - Verification status
  *
  * This is what makes VoyageAI unique.
+ *
+ * Performance: Memoized to prevent page-wide cascades.
  */
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Shield,
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
@@ -28,10 +29,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TripResponse, VisaDetails } from "@shared/schema";
+import { CertaintyTimeline } from "./CertaintyTimeline";
+import type { CertaintyPoint } from "@/pages/TripResultsV1";
 
 interface CertaintyBarProps {
   trip: TripResponse;
   className?: string;
+  onExplainCertainty?: () => void;
+  certaintyHistory?: CertaintyPoint[];
 }
 
 // Get visa badge styling
@@ -83,11 +88,11 @@ function getCertaintyColor(score: number) {
   return { bg: 'bg-red-500/20', text: 'text-red-400', ring: 'ring-red-500/30' };
 }
 
-export function CertaintyBar({ trip, className = '' }: CertaintyBarProps) {
+function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certaintyHistory = [] }: CertaintyBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const feasibility = trip.feasibilityReport as any;
-  const score = feasibility?.score || 0;
+  const score = Number(feasibility?.score) || 0;
   const visaDetails = feasibility?.visaDetails as VisaDetails | undefined;
   const overall = feasibility?.overall;
 
@@ -109,17 +114,29 @@ export function CertaintyBar({ trip, className = '' }: CertaintyBarProps) {
             {/* Left: Certainty + Visa info */}
             <div className="flex items-center gap-4 md:gap-6 overflow-x-auto scrollbar-hide">
               {/* Certainty Score */}
-              <div className="flex items-center gap-2.5 shrink-0">
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ring-2 ${certaintyColor.bg} ${certaintyColor.text} ${certaintyColor.ring}`}>
+              <button
+                onClick={onExplainCertainty}
+                disabled={!onExplainCertainty}
+                className={`flex items-center gap-2.5 shrink-0 group ${onExplainCertainty ? "cursor-pointer" : "cursor-default opacity-80"}`}
+                aria-label="Why this score?"
+              >
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ring-2 transition-all ${onExplainCertainty ? "group-hover:ring-white/30" : ""} ${certaintyColor.bg} ${certaintyColor.text} ${certaintyColor.ring}`}>
                   {score}
                 </div>
-                <div className="hidden sm:block">
+                <div className="hidden sm:block text-left">
                   <p className="text-[10px] text-white/40 uppercase tracking-wider">Certainty</p>
-                  <p className={`text-sm font-medium ${certaintyColor.text}`}>
-                    {score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low'}
-                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <p className={`text-sm font-medium ${certaintyColor.text}`}>
+                      {score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low'}
+                    </p>
+                    {onExplainCertainty && (
+                      <span className="text-[10px] text-white/40 group-hover:text-white/60 transition-colors">
+                        Why?
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </button>
 
               {/* Divider */}
               <div className="w-px h-8 bg-white/10 hidden sm:block" />
@@ -173,6 +190,8 @@ export function CertaintyBar({ trip, className = '' }: CertaintyBarProps) {
                   size="sm"
                   onClick={() => setIsExpanded(!isExpanded)}
                   className="text-white/60 hover:text-white hover:bg-white/10 h-8 px-2"
+                  aria-expanded={isExpanded}
+                  aria-controls="certaintybar-expanded"
                 >
                   <span className="text-xs mr-1 hidden sm:inline">Details</span>
                   {isExpanded ? (
@@ -191,6 +210,7 @@ export function CertaintyBar({ trip, className = '' }: CertaintyBarProps) {
       <AnimatePresence>
         {isExpanded && visaDetails && (
           <motion.div
+            id="certaintybar-expanded"
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
@@ -198,6 +218,16 @@ export function CertaintyBar({ trip, className = '' }: CertaintyBarProps) {
             className="overflow-hidden bg-slate-900 border-b border-white/10 shadow-xl"
           >
             <div className="max-w-7xl mx-auto px-4 md:px-6 py-4">
+              {/* Certainty Timeline - shows evolution across changes */}
+              {certaintyHistory.length > 1 && (
+                <div className="mb-4 p-3 bg-white/5 rounded-lg">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <span className="text-xs text-white/50 uppercase tracking-wider">Score History</span>
+                    <CertaintyTimeline history={certaintyHistory} />
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Visa Requirements */}
                 <div className="bg-white/5 rounded-lg p-4">
@@ -299,3 +329,6 @@ export function CertaintyBar({ trip, className = '' }: CertaintyBarProps) {
     </div>
   );
 }
+
+// Memoize to prevent page-wide rerenders
+export const CertaintyBar = React.memo(CertaintyBarComponent);

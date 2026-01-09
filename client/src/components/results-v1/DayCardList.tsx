@@ -3,9 +3,11 @@
  *
  * Container component for all day cards.
  * Handles state coordination and analytics events.
+ *
+ * Performance: Memoized component, precomputed cities, throttled hover.
  */
 
-import { useCallback, useRef, useEffect } from "react";
+import React, { useCallback, useRef, useEffect, useMemo } from "react";
 import { DayCard } from "./DayCard";
 import { type Itinerary, getCurrencySymbol, extractCityFromTitle } from "./itinerary-adapters";
 import { trackTripEvent } from "@/lib/analytics";
@@ -19,6 +21,7 @@ interface DayCardListProps {
   tripId: number;
   itinerary: Itinerary;
   currency?: string;
+  tripStartDate?: string; // Trip start date for calculating actual day dates
   activeDayIndex: number | null;
   activeActivityKey: string | null;
   allExpanded?: boolean;
@@ -33,10 +36,11 @@ interface DayCardListProps {
 // COMPONENT
 // ============================================================================
 
-export function DayCardList({
+function DayCardListComponent({
   tripId,
   itinerary,
   currency,
+  tripStartDate,
   activeDayIndex,
   activeActivityKey,
   allExpanded = true,
@@ -49,9 +53,55 @@ export function DayCardList({
   // Hover state for visual feedback (separate from map sync)
   const hoveredRef = useRef<string | null>(null);
 
-  // Get currency symbol
-  const currencySymbol = itinerary.costBreakdown?.currencySymbol
-    || getCurrencySymbol(itinerary.costBreakdown?.currency || currency);
+  // Memoize currency symbol to avoid recalculating
+  const currencySymbol = useMemo(() => {
+    return (
+      itinerary.costBreakdown?.currencySymbol ||
+      getCurrencySymbol(itinerary.costBreakdown?.currency || currency)
+    );
+  }, [itinerary.costBreakdown?.currencySymbol, itinerary.costBreakdown?.currency, currency]);
+
+  // Precompute day cities once to avoid repeated extractCityFromTitle calls
+  const dayCities = useMemo(() => {
+    return itinerary.days.map(d => extractCityFromTitle(d.title));
+  }, [itinerary.days]);
+
+  // Calculate actual dates for each day based on trip start date
+  const dayDates = useMemo(() => {
+    if (!tripStartDate) return null;
+
+    // Parse start date - handle multiple formats:
+    // "2026-03-04 to 2026-03-09" or "Mar 4, 2026 - Mar 9, 2026" or just "2026-03-04"
+    let startDateStr = tripStartDate.trim();
+
+    // Try splitting by common separators
+    if (startDateStr.includes(' to ')) {
+      startDateStr = startDateStr.split(' to ')[0].trim();
+    } else if (startDateStr.includes(' - ')) {
+      startDateStr = startDateStr.split(' - ')[0].trim();
+    }
+
+    // Parse the date - use noon UTC to avoid timezone issues
+    const startDate = new Date(startDateStr + 'T12:00:00Z');
+    if (isNaN(startDate.getTime())) {
+      // Fallback: try parsing without time suffix
+      const fallbackDate = new Date(startDateStr);
+      if (isNaN(fallbackDate.getTime())) return null;
+      // Adjust for timezone by using local noon
+      fallbackDate.setHours(12, 0, 0, 0);
+      return itinerary.days.map((_, idx) => {
+        const dayDate = new Date(fallbackDate);
+        dayDate.setDate(fallbackDate.getDate() + idx);
+        return dayDate.toISOString();
+      });
+    }
+
+    return itinerary.days.map((_, idx) => {
+      const dayDate = new Date(startDate);
+      dayDate.setUTCDate(startDate.getUTCDate() + idx);
+      return dayDate.toISOString();
+    });
+  }, [tripStartDate, itinerary.days.length]);
 
   // Track day click
   const handleDayClick = useCallback((dayIndex: number) => {
@@ -99,10 +149,12 @@ export function DayCardList({
       clearTimeout(hoverTimeoutRef.current);
     }
 
-    // Debounce hover changes
+    // Debounce hover changes and prevent redundant updates
     hoverTimeoutRef.current = setTimeout(() => {
-      hoveredRef.current = activityKey;
-      onActivityHover(activityKey);
+      if (hoveredRef.current !== activityKey) {
+        hoveredRef.current = activityKey;
+        onActivityHover(activityKey);
+      }
     }, 50);
   }, [onActivityHover]);
 
@@ -128,8 +180,10 @@ export function DayCardList({
   return (
     <div className="space-y-4">
       {itinerary.days.map((day, idx) => {
-        // Use shared city extraction - returns null if city can't be determined
-        const previousDayCity = idx > 0 ? extractCityFromTitle(itinerary.days[idx - 1].title) : undefined;
+        // Use precomputed city from dayCities array
+        const previousDayCity = idx > 0 ? dayCities[idx - 1] : undefined;
+        // Use calculated date if available, fallback to AI-generated date
+        const actualDate = dayDates?.[idx] || day.date;
 
         return (
           <DayCard
@@ -138,6 +192,7 @@ export function DayCardList({
             dayIndex={idx}
             totalDays={totalDays}
             currencySymbol={currencySymbol}
+            actualDate={actualDate}
             isActiveDay={activeDayIndex === idx}
             activeActivityKey={activeActivityKey}
             hoveredActivityKey={hoveredRef.current}
@@ -174,6 +229,9 @@ export function DayCardList({
     </div>
   );
 }
+
+// Memoize to prevent rerenders when unrelated state changes
+export const DayCardList = React.memo(DayCardListComponent);
 
 // ============================================================================
 // EXPORTS

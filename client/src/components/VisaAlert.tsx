@@ -23,25 +23,31 @@ export function VisaAlert({ visaDetails, passport, destination, currencySymbol, 
   const timing = visaDetails.timing;
   const totalVisaCost = (visaDetails.cost.government + (visaDetails.cost.service || 0)) * totalTravelers;
 
-  const getUrgencyColor = () => {
-    if (!timing) return 'border-amber-300 bg-amber-50';
-    switch (timing.urgency) {
-      case 'ok': return 'border-emerald-300 bg-emerald-50';
-      case 'tight': return 'border-amber-300 bg-amber-50';
-      case 'risky': return 'border-orange-300 bg-orange-50';
-      case 'impossible': return 'border-red-300 bg-red-50';
-      default: return 'border-amber-300 bg-amber-50';
+  // Color based on VISA TYPE (action required), not timing
+  // Embassy visa = red (most action needed)
+  // E-visa = amber (some action needed)
+  // Visa on arrival = yellow-green (minimal action)
+  const getVisaTypeColor = () => {
+    switch (visaDetails.type) {
+      case 'visa_on_arrival':
+        return 'border-amber-300 bg-amber-50';
+      case 'e_visa':
+        return 'border-orange-300 bg-orange-50';
+      case 'embassy_visa':
+      default:
+        return 'border-red-300 bg-red-50';
     }
   };
 
-  const getUrgencyIcon = () => {
-    if (!timing) return <AlertTriangle className="w-5 h-5 text-amber-600" />;
-    switch (timing.urgency) {
-      case 'ok': return <CheckCircle className="w-5 h-5 text-emerald-600" />;
-      case 'tight': return <AlertTriangle className="w-5 h-5 text-amber-600" />;
-      case 'risky': return <AlertCircle className="w-5 h-5 text-orange-600" />;
-      case 'impossible': return <AlertCircle className="w-5 h-5 text-red-600" />;
-      default: return <AlertTriangle className="w-5 h-5 text-amber-600" />;
+  const getVisaTypeIcon = () => {
+    switch (visaDetails.type) {
+      case 'visa_on_arrival':
+        return <AlertTriangle className="w-5 h-5 text-amber-600" />;
+      case 'e_visa':
+        return <AlertCircle className="w-5 h-5 text-orange-600" />;
+      case 'embassy_visa':
+      default:
+        return <AlertCircle className="w-5 h-5 text-red-600" />;
     }
   };
 
@@ -84,11 +90,11 @@ export function VisaAlert({ visaDetails, passport, destination, currencySymbol, 
         exit={{ opacity: 0, y: -10, height: 0 }}
         transition={{ duration: 0.3 }}
       >
-        <Card className={`border-2 ${getUrgencyColor()} shadow-md overflow-hidden`}>
+        <Card className={`border-2 ${getVisaTypeColor()} shadow-md overflow-hidden`}>
           <CardHeader className="pb-3">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                {getUrgencyIcon()}
+                {getVisaTypeIcon()}
                 <div>
                   <h3 className="font-semibold text-lg">Visa Required</h3>
                   <p className="text-sm text-slate-600">
@@ -115,7 +121,11 @@ export function VisaAlert({ visaDetails, passport, destination, currencySymbol, 
                 <div>
                   <p className="text-xs text-slate-500 uppercase">Processing</p>
                   <p className="font-medium">
-                    {visaDetails.processingDays.minimum}-{visaDetails.processingDays.maximum} days
+                    {visaDetails.type === 'visa_on_arrival' ||
+                     (visaDetails.processingDays.minimum === 0 && visaDetails.processingDays.maximum === 0)
+                      ? 'On Arrival'
+                      : `${visaDetails.processingDays.minimum}-${visaDetails.processingDays.maximum} days`
+                    }
                   </p>
                 </div>
               </div>

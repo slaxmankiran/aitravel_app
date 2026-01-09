@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { type TripResponse } from "@shared/schema";
 import { Maximize2, Map, Satellite, X, ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -93,7 +93,7 @@ function getWalkingTime(distanceKm: number): string {
   return `${hours}h ${mins}m walk`;
 }
 
-export function ItineraryMap({ trip, highlightedLocation, activeDayIndex, onLocationSelect, isExpanded, onExpandToggle }: Props) {
+function ItineraryMapComponent({ trip, highlightedLocation, activeDayIndex, onLocationSelect, isExpanded, onExpandToggle }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
 
@@ -138,60 +138,66 @@ export function ItineraryMap({ trip, highlightedLocation, activeDayIndex, onLoca
 
   const itinerary = trip.itinerary as unknown as { days: DayPlan[] };
 
-  // Collect all locations with coordinates using day-based IDs
-  const allLocations: LocationData[] = [];
-  const dayNumbers: number[] = [];
+  // Memoize location extraction - only recompute when itinerary days change
+  const { allLocations, dayNumbers } = useMemo(() => {
+    const locations: LocationData[] = [];
+    const days: number[] = [];
 
-  if (itinerary && itinerary.days) {
-    itinerary.days.forEach((day) => {
-      if (!dayNumbers.includes(day.day)) {
-        dayNumbers.push(day.day);
-      }
-      let activityIndexInDay = 0;
-      day.activities.forEach((activity) => {
-        activityIndexInDay++; // Always increment for each activity in the day
-
-        // Get coordinates from either coordinates field or location object
-        let lat: number | undefined;
-        let lng: number | undefined;
-
-        if (activity.coordinates?.lat && activity.coordinates?.lng) {
-          lat = activity.coordinates.lat;
-          lng = activity.coordinates.lng;
-        } else if (typeof activity.location === 'object' && activity.location?.lat && activity.location?.lng) {
-          lat = activity.location.lat;
-          lng = activity.location.lng;
+    if (itinerary?.days) {
+      itinerary.days.forEach((day) => {
+        if (!days.includes(day.day)) {
+          days.push(day.day);
         }
+        let activityIndexInDay = 0;
+        day.activities.forEach((activity) => {
+          activityIndexInDay++; // Always increment for each activity in the day
 
-        if (lat && lng) {
-          // Get location name string
-          const locationName = typeof activity.location === 'string'
-            ? activity.location
-            : (typeof activity.location === 'object' && activity.location?.address)
-              ? activity.location.address
-              : (activity as any).name || activity.description || "Unknown";
+          // Get coordinates from either coordinates field or location object
+          let lat: number | undefined;
+          let lng: number | undefined;
 
-          allLocations.push({
-            id: `${day.day}-${activityIndexInDay}`, // Day-based ID like "1-1", "1-2", "2-1"
-            position: [lat, lng],
-            name: locationName,
-            description: (activity as any).name || activity.description,
-            time: activity.time,
-            day: day.day,
-            activityIndex: activityIndexInDay,
-            type: activity.type,
-          });
-        }
+          if (activity.coordinates?.lat && activity.coordinates?.lng) {
+            lat = activity.coordinates.lat;
+            lng = activity.coordinates.lng;
+          } else if (typeof activity.location === 'object' && activity.location?.lat && activity.location?.lng) {
+            lat = activity.location.lat;
+            lng = activity.location.lng;
+          }
+
+          if (lat && lng) {
+            // Get location name string
+            const locationName = typeof activity.location === 'string'
+              ? activity.location
+              : (typeof activity.location === 'object' && activity.location?.address)
+                ? activity.location.address
+                : (activity as any).name || activity.description || "Unknown";
+
+            locations.push({
+              id: `${day.day}-${activityIndexInDay}`, // Day-based ID like "1-1", "1-2", "2-1"
+              position: [lat, lng],
+              name: locationName,
+              description: (activity as any).name || activity.description,
+              time: activity.time,
+              day: day.day,
+              activityIndex: activityIndexInDay,
+              type: activity.type,
+            });
+          }
+        });
       });
-    });
-  }
+    }
 
-  // Filter locations based on active filters
-  const filteredLocations = allLocations.filter((loc) => {
-    const typeMatch = activeTypes.has(loc.type as ActivityType);
-    const dayMatch = selectedDay === null || loc.day === selectedDay;
-    return typeMatch && dayMatch;
-  });
+    return { allLocations: locations, dayNumbers: days };
+  }, [itinerary?.days]);
+
+  // Memoize filtered locations - only recompute when filters or locations change
+  const filteredLocations = useMemo(() => {
+    return allLocations.filter((loc) => {
+      const typeMatch = activeTypes.has(loc.type as ActivityType);
+      const dayMatch = selectedDay === null || loc.day === selectedDay;
+      return typeMatch && dayMatch;
+    });
+  }, [allLocations, activeTypes, selectedDay]);
 
   // Toggle type filter
   const toggleType = (type: ActivityType) => {
@@ -367,12 +373,17 @@ export function ItineraryMap({ trip, highlightedLocation, activeDayIndex, onLoca
     }
   }, [activeDayIndex]);
 
-  // Initialize map
+  // Initialize map - use trip.id as dep so map reinits when trip changes
   useEffect(() => {
     if (!mapRef.current || allLocations.length === 0) return;
 
     const initMap = async () => {
-      if (mapInstanceRef.current) return;
+      // Clean up existing map if trip changed
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        leafletRef.current = null;
+      }
 
       const L = (await import("leaflet")).default;
       leafletRef.current = L;
@@ -385,7 +396,7 @@ export function ItineraryMap({ trip, highlightedLocation, activeDayIndex, onLoca
         shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
       });
 
-      // Calculate center
+      // Calculate center from current locations
       const centerLat = allLocations.reduce((sum, loc) => sum + loc.position[0], 0) / allLocations.length;
       const centerLng = allLocations.reduce((sum, loc) => sum + loc.position[1], 0) / allLocations.length;
 
@@ -423,7 +434,7 @@ export function ItineraryMap({ trip, highlightedLocation, activeDayIndex, onLoca
         leafletRef.current = null;
       }
     };
-  }, [allLocations.length]);
+  }, [trip.id, allLocations]);
 
   // Update markers when filters change
   useEffect(() => {
@@ -649,3 +660,6 @@ export function ItineraryMap({ trip, highlightedLocation, activeDayIndex, onLoca
     </div>
   );
 }
+
+// Memoize to prevent expensive Leaflet rerenders
+export const ItineraryMap = React.memo(ItineraryMapComponent);

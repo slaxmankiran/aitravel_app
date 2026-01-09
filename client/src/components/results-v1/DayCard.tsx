@@ -3,8 +3,11 @@
  *
  * Single day card with morning/afternoon/evening sections.
  * Renders activities grouped by time slot.
+ *
+ * Performance: Memoized component for scroll/hover performance.
  */
 
+import React from "react";
 import { Calendar, ChevronDown } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { cn } from "@/lib/utils";
@@ -29,6 +32,7 @@ interface DayCardProps {
   dayIndex: number;
   totalDays: number;
   currencySymbol: string;
+  actualDate?: string; // Calculated from trip start date (overrides day.date)
   isActiveDay: boolean;
   activeActivityKey: string | null;
   hoveredActivityKey: string | null;
@@ -44,11 +48,12 @@ interface DayCardProps {
 // COMPONENT
 // ============================================================================
 
-export function DayCard({
+function DayCardComponent({
   day,
   dayIndex,
   totalDays,
   currencySymbol,
+  actualDate,
   isActiveDay,
   activeActivityKey,
   hoveredActivityKey,
@@ -95,18 +100,19 @@ export function DayCard({
     return null; // No label for regular days
   }, [isFirstDay, isLastDay, isCityTransition, currentCity]);
 
-  // Format date for display
+  // Format date for display - use actualDate (calculated from trip start) if provided
   const formattedDate = useMemo(() => {
+    const dateToFormat = actualDate || day.date;
     try {
-      return new Date(day.date).toLocaleDateString("en-US", {
+      return new Date(dateToFormat).toLocaleDateString("en-US", {
         weekday: "short",
         month: "short",
         day: "numeric",
       });
     } catch {
-      return day.date;
+      return dateToFormat;
     }
-  }, [day.date]);
+  }, [actualDate, day.date]);
 
   // Render a time slot section
   const renderTimeSlot = (slot: TimeSlot, activities: typeof day.activities) => {
@@ -284,3 +290,6 @@ export function DayCard({
     </div>
   );
 }
+
+// Memoize for scroll and hover performance
+export const DayCard = React.memo(DayCardComponent);

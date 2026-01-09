@@ -10,8 +10,8 @@ import { MobileNav } from "@/components/MobileNav";
 import Home from "@/pages/Home";
 import CreateTrip from "@/pages/CreateTrip";
 import ChatTrip from "@/pages/ChatTrip";
+import ChatTripV2 from "@/pages/ChatTripV2";
 import TripResultsV1 from "@/pages/TripResultsV1";
-// Note: TripDetails is deprecated in favor of TripResultsV1
 import FeasibilityResults from "@/pages/FeasibilityResults";
 import MyTrips from "@/pages/MyTrips";
 import Explore from "@/pages/Explore";
@@ -87,7 +87,8 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/demo" component={DemoTrip} />
       <Route path="/create" component={CreateTrip} />
-      <Route path="/chat" component={ChatTrip} />
+      <Route path="/chat" component={ChatTripV2} />
+      <Route path="/chat-legacy" component={ChatTrip} />
       <Route path="/trips/:id/feasibility" component={FeasibilityResults} />
       {/* @ts-expect-error - TripResultsV1 has optional props that are unused in this route */}
       <Route path="/trips/:id/results-v1" component={TripResultsV1} />

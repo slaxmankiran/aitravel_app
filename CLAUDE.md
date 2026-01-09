@@ -431,6 +431,169 @@ Results Page → [Edit trip details] → /create?editTripId=2&returnTo=...
 
 ---
 
+## "What Changed?" Banner (2026-01-09)
+
+### Status: Implemented and Tested
+
+Shows a subtle confirmation banner when user returns from the edit flow, indicating what changed and that feasibility was rechecked.
+
+### Component
+
+**`client/src/components/results/TripUpdateBanner.tsx`**
+
+```tsx
+const CHANGE_LABELS: Record<string, string> = {
+  destination: "Destination updated",
+  dates: "Dates changed",
+  groupSize: "Travelers updated",
+  travelStyle: "Style adjusted",
+  budget: "Budget adjusted",
+  passport: "Passport changed",
+  origin: "Origin updated",
+};
+```
+
+### Behavior
+
+- **Placement**: Below HeaderBar, above CertaintyBar
+- **Format**: "Trip updated · Dates changed · Budget adjusted · Feasibility rechecked"
+- **Auto-dismiss**: After 5 seconds
+- **Manual dismiss**: Click X button
+- **No reappear**: Controlled by parent state (not URL persist)
+
+### Data Flow
+
+1. **CreateTrip.tsx**: Stores original trip snapshot on load via `originalTripRef`
+2. **On submit**: Calculates diff between original and updated fields
+3. **URL params**: Passes `?updated=1&changes=["dates","budget"]` to returnTo
+4. **TripResultsV1.tsx**: Parses params, shows banner if `updated=1`
+
+```
+CreateTrip (Edit Mode)
+  ↓ stores originalTripRef
+  ↓ user modifies fields
+  ↓ submit → diffTrip() → ["dates", "budget"]
+  ↓
+FeasibilityResults?returnTo=/trips/2/results-v1?updated=1&changes=...
+  ↓
+TripResultsV1
+  ↓ parses URL params
+  ↓ shows TripUpdateBanner
+  ↓ auto-dismisses after 5s
+```
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `TripUpdateBanner.tsx` | New component with auto-dismiss, motion animation |
+| `CreateTrip.tsx` | `originalTripRef`, `pickComparableFields`, `diffTrip`, URL encoding |
+| `TripResultsV1.tsx` | URL param parsing, `showUpdateBanner` state, banner render |
+
+---
+
+## Action Items: Required vs Recommended (2026-01-09)
+
+### Status: Implemented and Tested
+
+Split Action Items into blocking (Required) vs nice-to-have (Recommended) sections to improve trust in the Certainty Engine.
+
+### Classification Rules
+
+**Required (blocking - affects eligibility):**
+- Visa application (if visa required)
+- Passport validity (if expiring within 6 months)
+- Mandatory vaccinations (if required for entry)
+- Entry restrictions (health declarations, testing)
+
+**Recommended (nice-to-have - improves trip):**
+- Book flights
+- Reserve accommodation
+- Travel insurance
+- Payment methods (notify bank, travel card)
+- Mobile data (eSIM, local SIM)
+- Packing
+
+### UI Changes
+
+- Header counts: "Required (2)", "Recommended (6)"
+- "No blockers found" message with green checkmark when Required is empty
+- Contextual status message:
+  - Blockers present: Amber alert "2 items need attention before your trip"
+  - No blockers: Green success "No blockers found. You're all set for planning!"
+- Category-based sorting (required first, then by priority within category)
+
+### Analytics Events
+
+| Event | Data | When |
+|-------|------|------|
+| `action_items_viewed` | `requiredCount`, `recommendedCount`, `hasBlockers` | Panel mount |
+| `action_item_clicked` | `key`, `type: required\|recommended`, `wasCompleted` | Item click |
+
+### File Modified
+
+| File | Changes |
+|------|---------|
+| `ActionItems.tsx` | Added `category` field, classification logic, header counts, analytics |
+
+---
+
+## Change Planner Agent (2026-01-09)
+
+### Status: Design Spec Complete (Not Yet Implemented)
+
+**Full Specification:** [`docs/CHANGE_PLANNER_AGENT_SPEC.md`](docs/CHANGE_PLANNER_AGENT_SPEC.md)
+
+### Overview
+
+Smart agent that detects user changes after seeing results, recomputes only impacted modules, and explains deltas in plain language.
+
+### Core Capabilities
+
+1. **Detect** what changed and what it breaks
+2. **Recompute** only impacted parts (not the whole trip)
+3. **Explain** delta in plain language (cost, visa, itinerary, certainty)
+4. **Update** Action Items, Cost Breakdown, Itinerary with minimal UI churn
+5. **Log** analytics for "change friction" and "replan success"
+
+### Entry Points
+
+| Entry Point | Description |
+|-------------|-------------|
+| Inline Edit | Edit in Results header → "Replanning…" → apply |
+| Quick Chips | One-tap: "+3 days", "Cheaper options", "Add beach day" |
+| Fix Blocker | "Fix blockers" CTA → smallest change to resolve |
+
+### TypeScript Types (shared/schema.ts)
+
+```typescript
+// Core types added:
+- ChangePlannerResponse     // Main agent output
+- UserTripInput            // User's trip parameters
+- DetectedChange           // Single change with impact
+- RecomputePlan            // What to recompute
+- DeltaSummary             // Before/after deltas
+- UIInstructions           // How to render results
+- FixOption                // Blocker fix suggestion
+
+// Analytics types:
+- TripChangeStartedEvent
+- TripChangePlannedEvent
+- TripChangeAppliedEvent
+- TripChangeFailedEvent
+- FixOptionEvent
+```
+
+### Implementation Plan
+
+| Phase | Description | Files |
+|-------|-------------|-------|
+| 1 | Client hook | `client/src/hooks/useChangePlanner.ts` |
+| 2 | Server endpoint | `server/routes/changePlan.ts` (`POST /api/change-plan`) |
+| 3 | UI integration | `ChangePlanBanner.tsx`, section highlights, chips |
+
+---
+
 ## Features & Functionalities Overview
 
 ### Core Value Proposition: "Certainty Engine"
@@ -638,3 +801,394 @@ Results Page → [Edit trip details] → /create?editTripId=2&returnTo=...
 | AI       | Deepseek API (OpenAI SDK compatible)       |
 | State    | React Query                                |
 | Routing  | Wouter (client), Express (server)          |
+
+---
+
+## Performance Optimizations (2026-01-09)
+
+### Status: Implemented
+
+Comprehensive performance pass on the TripResults component tree to reduce unnecessary rerenders.
+
+### Changes Implemented
+
+| Component | Optimization |
+|-----------|-------------|
+| `TripResultsV1.tsx` | Memoized `costs` and `narrativeSubtitle` with `useMemo`; throttled map marker scroll |
+| `RightRailPanels.tsx` | Lazy load `TripChat` with `React.lazy()`; wrapped in `Suspense`; `React.memo()` |
+| `DayCardList.tsx` | Memoized `currencySymbol` and `dayCities`; redundant hover prevention; `React.memo()` |
+| `DayCard.tsx` | `React.memo()` |
+| `ActivityRow.tsx` | `React.memo()` |
+| `HeaderBar.tsx` | `React.memo()` |
+| `CertaintyBar.tsx` | `React.memo()` |
+| `TripUpdateBanner.tsx` | `React.memo()` |
+| `ItineraryMap.tsx` | `React.memo()` (prevents expensive Leaflet rerenders) |
+| `ActionItems.tsx` | `React.memo()` |
+
+### Key Patterns
+
+**Lazy Loading Named Exports:**
+```tsx
+const TripChat = lazy(() =>
+  import("@/components/TripChat").then(mod => ({ default: mod.TripChat }))
+);
+```
+
+**Redundant Hover Prevention:**
+```tsx
+const hoveredRef = useRef<string | null>(null);
+const handleHover = (key: string | null) => {
+  if (hoveredRef.current !== key) {
+    hoveredRef.current = key;
+    onActivityHover(key);
+  }
+};
+```
+
+**Throttled Scroll:**
+```tsx
+const scrollTimeoutRef = useRef<number | null>(null);
+const handleScroll = () => {
+  if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current);
+  scrollTimeoutRef.current = window.setTimeout(() => { /* scroll */ }, 80);
+};
+```
+
+### Regression Checklist (Verified)
+- Results page loads normally (no blank screen from lazy import)
+- Chat panel: Closed by default, loads with fallback, opens on demand
+- Hover behavior: Map highlights change, no jitter
+- Expand/Collapse all works
+- Distances toggle works
+- Map marker click scroll works
+
+---
+
+## Change Planner Agent - Full Implementation (2026-01-09)
+
+### Status: Implemented and Tested
+
+The Change Planner Agent is now fully implemented, enabling smart detection of user changes, selective recomputation, and delta explanation.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `client/src/hooks/useChangePlanner.ts` | Client hook for change planning flow |
+| `client/src/lib/tripInput.ts` | Build `UserTripInput` from `TripResponse` |
+| `client/src/lib/uiEvents.ts` | Pub/sub for fix-blocker events |
+| `client/src/lib/blockerDeltas.ts` | Compute resolved/new blockers from plan |
+| `client/src/components/results/ChangePlanBanner.tsx` | Collapsible delta summary banner |
+| `client/src/components/results/FixBlockersCTA.tsx` | "Fix blockers" button in ActionItems |
+| `client/src/components/results/FixBlockersController.tsx` | Listens for fix events, calls planner |
+| `server/routes/changePlan.ts` | `POST /api/change-plan` endpoint |
+| `server/routes/fixOptions.ts` | `POST /api/trips/:id/fix-options` endpoint |
+| `server/routes/appliedPlans.ts` | Persist/retrieve applied plans for sharing |
+
+### Client Hook: useChangePlanner
+
+```typescript
+const { isReplanning, planChanges, applyChanges, resetPlan } = useChangePlanner();
+
+// Plan a change
+const plan = await planChanges({
+  tripId,
+  prevInput,
+  nextInput,
+  currentResults: workingTrip,
+  source: "fix_blocker",
+});
+
+// Apply the plan (patches workingTrip, shows banner)
+applyChanges({
+  tripId,
+  plan,
+  setWorkingTrip,
+  setBannerPlan,
+  source: "fix_blocker",
+});
+```
+
+### Change Plan Banner
+
+Shows after any change is applied:
+- Certainty delta: "+8% certainty" (green) or "-5% certainty" (red)
+- Cost delta: "+$150" or "-$200"
+- Blocker chips: "2 resolved", "1 new"
+- Actions: Undo, Compare, Share, Dismiss
+
+### Undo Support
+
+- `UndoContext` stores `prevInput`/`nextInput` for 60 seconds
+- Undo swaps inputs and re-runs change planner
+- Certainty history updated on each change
+
+### Shareable Links
+
+- Applied plans persisted to `/api/trips/:id/applied-plans`
+- URL format: `/trips/2/results-v1?plan=chg_abc123`
+- Shared link restores banner on page load
+
+### Analytics Events
+
+| Event | When |
+|-------|------|
+| `trip_change_started` | Change initiated |
+| `trip_change_planned` | Plan computed |
+| `trip_change_applied` | Plan applied to UI |
+| `trip_change_failed` | Error during planning |
+| `trip_change_undo_clicked` | User clicks Undo |
+| `trip_change_undo_applied` | Undo completed |
+
+---
+
+## Compare Plans Feature - Item 15 (2026-01-09)
+
+### Status: Implemented and Tested
+
+Side-by-side comparison modal showing original vs updated trip after changes.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `client/src/lib/comparePlans.ts` | Compute `PlanComparison` from two trips |
+| `client/src/components/results/ComparePlansModal.tsx` | Modal with side-by-side comparison |
+
+### Comparison Data
+
+```typescript
+interface PlanComparison {
+  isComparable: boolean;
+  incomparableReason?: string;
+  totalCostDelta: { before, after, delta, direction };
+  certaintyDelta: {
+    before, after, delta, direction,
+    visaRiskBefore, visaRiskAfter,
+    bufferDaysBefore, bufferDaysAfter
+  };
+  costDeltas: Array<{ category, before, after, delta, direction }>;
+  planA: { tripId, dates, budget, destination };
+  planB: { tripId, dates, budget, destination };
+}
+```
+
+### Modal Features
+
+- **Header**: "Compare Plans" with close button
+- **Two columns**: Plan A (Original) vs Plan B (Current)
+- **Sections**:
+  - Trip details (dates, budget, destination)
+  - Certainty score with delta badge
+  - Cost breakdown by category
+  - Visa risk indicator
+- **Actions**: "Keep Updated" (default), "Revert to Original"
+
+### Accessibility
+
+- Focus trapped inside modal
+- Escape key closes
+- Focus returns to trigger button on close
+
+---
+
+## Auto-suggest Next Fix - Item 16 (2026-01-09)
+
+### Status: Implemented and Tested
+
+Deterministic rule engine that suggests the next improvement action after a plan change.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `client/src/lib/nextFix.ts` | Rule engine for suggestions |
+| `client/src/lib/applyFix.ts` | Dispatcher for fix actions |
+
+### Rule Priority (First Match Wins)
+
+1. **Visa risk high** or **buffer days < 5** → ADD_BUFFER_DAYS
+2. **Cost increased > $150** → REDUCE_COST (with dominant category)
+3. **Certainty dropped > 5%** → IMPROVE_CERTAINTY
+4. **Missing cost data** → REFRESH_PRICING
+5. **All stable** → SAVE_VERSION
+
+### Suggestion Types
+
+```typescript
+type FixId =
+  | "ADD_BUFFER_DAYS"    // APPLY_PATCH: extend dates
+  | "REDUCE_COST"        // OPEN_EDITOR: budget/hotels
+  | "LOWER_VISA_RISK"    // OPEN_EDITOR: visa_docs
+  | "SIMPLIFY_ITINERARY" // OPEN_EDITOR: itinerary
+  | "IMPROVE_CERTAINTY"  // OPEN_EDITOR: itinerary
+  | "REFRESH_PRICING"    // TRIGGER_FLOW: refetch
+  | "SAVE_VERSION"       // TRIGGER_FLOW: save_trip
+  | "REVERT_CHANGE";     // TRIGGER_FLOW: undo_change
+```
+
+### Confidence Levels
+
+| Level | Trigger |
+|-------|---------|
+| High | Visa risk high, buffer < 3 days, cost > $300, certainty drop > 10% |
+| Medium | Visa risk medium, buffer < 5 days, cost > $150, certainty drop > 5% |
+| Low | Neutral suggestions, generic fixes |
+
+### UI in ChangePlanBanner
+
+- Lightbulb icon with suggestion title
+- Impact chips: "+3 days", "-$200"
+- "Apply" button (disabled while applying)
+- "Snooze" button (hides until next change)
+- "Why?" tooltip with reason
+
+### Sanity Checks
+
+- **Dedupe events**: Track last shown suggestion key in ref
+- **Idempotent apply**: `isApplyingFix` state prevents double-clicks
+- **Snooze for session**: Resets on new changeId
+
+---
+
+## Apply Fix Dispatcher - Item 16B (2026-01-09)
+
+### Status: Implemented and Tested
+
+Dispatcher that routes fix suggestions to their implementations.
+
+### Action Types
+
+| Type | Behavior |
+|------|----------|
+| `APPLY_PATCH` | Routes through change planner for undo support |
+| `OPEN_EDITOR` | Scrolls to relevant section |
+| `TRIGGER_FLOW` | Executes flow (undo, refresh, save) |
+
+### ApplyFixContext
+
+```typescript
+interface ApplyFixContext {
+  tripId: number;
+  trip: TripResponse;
+  planChanges: (...) => Promise<ChangePlannerResponse>;
+  applyChanges: (...) => void;
+  setWorkingTrip: (...) => void;
+  setBannerPlan: (...) => void;
+  handleUndo?: () => Promise<void>;
+  refetchTrip?: () => Promise<void>;
+  openEditor?: (target: EditorTarget) => void;
+  showToast?: (message, type) => void;
+}
+```
+
+### Implemented Flows
+
+| FixId | Implementation |
+|-------|----------------|
+| `ADD_BUFFER_DAYS` | `buildBufferDaysPatch()` → change planner |
+| `REDUCE_COST` | Scroll to cost-breakdown section |
+| `LOWER_VISA_RISK` | Scroll to action-items section |
+| `REFRESH_PRICING` | `queryClient.invalidateQueries()` |
+| `SAVE_VERSION` | Toast "Trip saved" |
+| `REVERT_CHANGE` | Call `handleUndo()` |
+
+### Production Hardening
+
+1. **Query key fix**: Uses `[api.trips.get.path, tripId]` (matches use-trips.ts)
+2. **Certainty from planner**: `result.newCertaintyScore` from `plan.deltaSummary.certainty.after`
+3. **data-section attributes**: Added to HeaderBar, RightRailPanels, DayCardList for scroll targeting
+
+### data-section Attributes
+
+| Section | Selector |
+|---------|----------|
+| Header | `data-section="header-bar"` |
+| Cost Breakdown | `data-section="cost-breakdown"` |
+| Action Items | `data-section="action-items"` |
+| Itinerary | `data-section="day-card-list"` |
+
+---
+
+## Certainty Explanation Drawer (2026-01-09)
+
+### Status: Implemented
+
+Expandable drawer showing detailed certainty score breakdown.
+
+### File Created
+
+`client/src/components/results/CertaintyExplanationDrawer.tsx`
+
+### Features
+
+- Triggered from CertaintyBar score click
+- Shows breakdown by category (Visa, Safety, Budget, Accessibility)
+- Displays change deltas when plan is applied
+- Animated slide-up from bottom
+
+---
+
+## Certainty Timeline (2026-01-09)
+
+### Status: Implemented
+
+Visual timeline showing certainty score evolution across changes.
+
+### File Created
+
+`client/src/components/results/CertaintyTimeline.tsx`
+
+### Features
+
+- Shows up to 5 most recent certainty points
+- Color-coded: green (increase), red (decrease), gray (neutral)
+- Labels: "Initial", "Undo", change source
+- Displayed in CertaintyBar on hover/click
+
+---
+
+## Files Summary (Today's Session)
+
+### New Files Created
+
+```
+client/src/lib/
+  applyFix.ts           # Fix dispatcher
+  nextFix.ts            # Rule engine
+  comparePlans.ts       # Plan comparison
+  blockerDeltas.ts      # Blocker diff
+  tripInput.ts          # Build UserTripInput
+  uiEvents.ts           # Pub/sub events
+  certaintyExplain.ts   # Certainty breakdown
+  actionItems.ts        # Action item helpers
+
+client/src/components/results/
+  ChangePlanBanner.tsx         # Delta banner with suggestions
+  ComparePlansModal.tsx        # Side-by-side comparison
+  CertaintyExplanationDrawer.tsx
+  CertaintyTimeline.tsx
+  FixBlockersCTA.tsx
+  FixBlockersController.tsx
+  TripUpdateBanner.tsx
+
+client/src/hooks/
+  useChangePlanner.ts
+  usePlanningMode.ts
+
+server/routes/
+  changePlan.ts         # POST /api/change-plan
+  fixOptions.ts         # POST /api/trips/:id/fix-options
+  appliedPlans.ts       # GET/POST /api/trips/:id/applied-plans
+```
+
+### Modified Files
+
+```
+client/src/pages/TripResultsV1.tsx    # Main integration
+client/src/components/results/RightRailPanels.tsx  # data-section
+client/src/components/results/HeaderBar.tsx        # data-section
+client/src/components/results/ActionItems.tsx      # FixBlockersCTA
+shared/schema.ts                                   # Change planner types
+server/routes.ts                                   # Analytics, routes
+```

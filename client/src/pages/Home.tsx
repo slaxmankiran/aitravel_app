@@ -6,19 +6,20 @@ import { UserMenu } from "@/components/UserMenu";
 import { NewsletterCapture } from "@/components/NewsletterCapture";
 import { SearchAutocomplete } from "@/components/SearchAutocomplete";
 import { trackTripEvent } from "@/lib/analytics";
+import { usePlanningMode, getPlanningRoute } from "@/hooks/usePlanningMode";
 import {
   MapPin,
   Calendar,
   ChevronRight,
-  Globe,
   Star,
   ArrowRight,
   ShieldCheck,
   CheckCircle,
-  Users,
   DollarSign,
   Clock,
-  FileText
+  FileText,
+  MessageSquare,
+  ClipboardList
 } from "lucide-react";
 
 // Landmark images for artistic collage
@@ -135,14 +136,36 @@ const POPULAR_DESTINATIONS = [
 
 export default function Home() {
   const [, setLocation] = useLocation();
+  const { mode, setMode, isLoaded } = usePlanningMode("chat"); // Default to chat for new users
 
   // Track landing page view
   useEffect(() => {
-    trackTripEvent(0, 'landing_viewed', {}, undefined, 'home');
+    trackTripEvent(0, 'landing_viewed', {}, undefined, 'landing');
   }, []);
 
   const handleDestinationClick = (destination: string) => {
-    setLocation(`/create?destination=${encodeURIComponent(destination)}`);
+    // For destination cards, default to chat for new users (guided experience)
+    // If user has a preference, use that instead
+    const preferredMode = isLoaded && mode ? mode : "chat";
+    const route = getPlanningRoute(preferredMode, destination);
+    trackTripEvent(0, 'planning_mode_selected', {
+      mode: preferredMode,
+      destination,
+      source: 'destination_card',
+      isFirstTime: !isLoaded || mode === "form" // track if this was defaulted
+    });
+    setMode(preferredMode); // Remember preference
+    setLocation(route);
+  };
+
+  const handlePlanningChoice = (selectedMode: "chat" | "form") => {
+    const route = getPlanningRoute(selectedMode);
+    trackTripEvent(0, 'planning_mode_selected', {
+      mode: selectedMode,
+      source: 'hero_cta'
+    });
+    setMode(selectedMode); // Remember preference
+    setLocation(route);
   };
 
   return (
@@ -273,30 +296,50 @@ export default function Home() {
               <div className="flex-1 h-px bg-slate-300" />
             </motion.div>
 
-            {/* CTA Buttons */}
+            {/* Split CTA Buttons - Planning Mode Choice */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.65 }}
-              className="flex flex-col sm:flex-row items-center justify-center gap-4"
+              className="flex flex-col items-center"
             >
-              <Link href="/create">
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-3">
+                {/* Chat-first */}
                 <Button
                   size="lg"
-                  className="min-w-[240px] text-lg px-8 h-14 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-xl shadow-emerald-600/30 font-semibold"
+                  onClick={() => handlePlanningChoice("chat")}
+                  className="min-w-[220px] text-lg px-8 h-14 rounded-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-xl shadow-emerald-600/30 font-semibold"
                 >
-                  <ShieldCheck className="mr-2 w-5 h-5" />
-                  Check Trip Feasibility
+                  <MessageSquare className="mr-2 w-5 h-5" />
+                  Plan with Chat
                 </Button>
-              </Link>
-              <Link href="/demo">
+
+                {/* Form-first */}
                 <Button
                   size="lg"
                   variant="outline"
+                  onClick={() => handlePlanningChoice("form")}
                   className="min-w-[220px] text-lg px-8 h-14 rounded-full bg-white/80 backdrop-blur-sm border-2 border-slate-200 text-slate-700 hover:bg-white hover:border-slate-300 shadow-lg font-semibold"
                 >
+                  <ClipboardList className="mr-2 w-5 h-5" />
+                  Plan with Form
+                </Button>
+              </div>
+
+              {/* Microcopy explaining the choice */}
+              <p className="text-slate-500 text-sm text-center max-w-md">
+                Chat guides you step by step. Form is faster if you know your details.
+              </p>
+
+              {/* Demo link - secondary */}
+              <Link href="/demo" className="mt-4">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-slate-500 hover:text-slate-700"
+                >
                   See Example Trip
-                  <ArrowRight className="ml-2 w-5 h-5" />
+                  <ArrowRight className="ml-1 w-4 h-4" />
                 </Button>
               </Link>
             </motion.div>
@@ -594,15 +637,24 @@ export default function Home() {
             <p className="text-xl text-white/80 mb-10">
               Find out in 30 seconds. Enter your trip details and get instant feasibility results.
             </p>
-            <Link href="/create">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <Button
                 size="lg"
-                className="text-lg px-10 h-16 rounded-full bg-white text-slate-900 hover:bg-white/90 shadow-xl font-semibold"
+                onClick={() => handlePlanningChoice("chat")}
+                className="text-lg px-8 h-14 rounded-full bg-white text-slate-900 hover:bg-white/90 shadow-xl font-semibold"
               >
-                <ShieldCheck className="mr-2 w-5 h-5" />
-                Check Trip Feasibility
+                <MessageSquare className="mr-2 w-5 h-5" />
+                Plan with Chat
               </Button>
-            </Link>
+              <Button
+                size="lg"
+                onClick={() => handlePlanningChoice("form")}
+                className="text-lg px-8 h-14 rounded-full bg-white/20 backdrop-blur-sm border-2 border-white/40 text-white hover:bg-white/30 font-semibold"
+              >
+                <ClipboardList className="mr-2 w-5 h-5" />
+                Plan with Form
+              </Button>
+            </div>
           </motion.div>
         </div>
       </section>

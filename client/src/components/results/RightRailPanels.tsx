@@ -3,8 +3,11 @@
  *
  * Right column panels for Trip Results V1.
  * Contains: True Cost, Action Items, Modify with AI (Chat)
+ *
+ * Performance: TripChat is lazy loaded, component is memoized.
  */
 
+import React, { lazy, Suspense } from "react";
 import { DollarSign, CheckCircle, MessageSquare, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PanelAccordion } from "./PanelAccordion";
@@ -12,10 +15,15 @@ import { ActionItems } from "./ActionItems";
 
 // Use existing CostBreakdown component
 import { CostBreakdown } from "@/components/CostBreakdown";
-import { TripChat } from "@/components/TripChat";
+
+// Lazy load TripChat - only loads when user opens the panel
+const TripChat = lazy(() =>
+  import("@/components/TripChat").then(mod => ({ default: mod.TripChat }))
+);
 
 import type { TripResponse } from "@shared/schema";
 import type { CostViewModel } from "@/hooks/useTripViewModel";
+import type { BlockerDeltaUI } from "@/lib/blockerDeltas";
 
 interface RightRailPanelsProps {
   trip: TripResponse;
@@ -26,9 +34,10 @@ interface RightRailPanelsProps {
   hasUndoableChange: boolean;
   onUndo: () => void;
   isDemo?: boolean;
+  blockerDelta?: BlockerDeltaUI | null;
 }
 
-export function RightRailPanels({
+function RightRailPanelsComponent({
   trip,
   costs,
   onTripUpdate,
@@ -36,36 +45,41 @@ export function RightRailPanels({
   hasLocalChanges,
   hasUndoableChange,
   onUndo,
-  isDemo = false
+  isDemo = false,
+  blockerDelta
 }: RightRailPanelsProps) {
   return (
     <div className="space-y-4">
       {/* True Cost Panel - Default OPEN */}
-      <PanelAccordion
-        title="True Cost"
-        icon={<DollarSign className="w-4 h-4" />}
-        defaultOpen={true}
-        collapsedSummary={
-          costs?.grandTotal
-            ? `Est. ${costs.currency || 'USD'} ${costs.grandTotal.toLocaleString()}`
-            : undefined
-        }
-      >
-        {/* Use existing CostBreakdown component */}
-        <div className="-mx-4 -mb-4">
-          <CostBreakdown trip={trip} />
-        </div>
-      </PanelAccordion>
+      <div data-section="cost-breakdown">
+        <PanelAccordion
+          title="True Cost"
+          icon={<DollarSign className="w-4 h-4" />}
+          defaultOpen={true}
+          collapsedSummary={
+            costs?.grandTotal
+              ? `Est. ${costs.currency || 'USD'} ${costs.grandTotal.toLocaleString()}`
+              : undefined
+          }
+        >
+          {/* Use existing CostBreakdown component */}
+          <div className="-mx-4 -mb-4">
+            <CostBreakdown trip={trip} />
+          </div>
+        </PanelAccordion>
+      </div>
 
       {/* Action Items Panel - Default OPEN */}
-      <PanelAccordion
-        title="Action Items"
-        icon={<CheckCircle className="w-4 h-4" />}
-        defaultOpen={true}
-        collapsedSummary="Checklist for your trip"
-      >
-        <ActionItems trip={trip} />
-      </PanelAccordion>
+      <div data-section="action-items">
+        <PanelAccordion
+          title="Action Items"
+          icon={<CheckCircle className="w-4 h-4" />}
+          defaultOpen={true}
+          collapsedSummary="Checklist for your trip"
+        >
+          <ActionItems trip={trip} blockerDelta={blockerDelta} />
+        </PanelAccordion>
+      </div>
 
       {/* Modify with AI Panel - Default CLOSED */}
       <PanelAccordion
@@ -90,11 +104,19 @@ export function RightRailPanels({
           </div>
         ) : (
           <div className="h-[350px] -mx-4 -mb-4">
-            <TripChat
-              tripId={trip.id}
-              destination={trip.destination}
-              onTripUpdate={onTripUpdate}
-            />
+            <Suspense
+              fallback={
+                <div className="h-full flex items-center justify-center text-white/40 text-sm">
+                  Loading assistant…
+                </div>
+              }
+            >
+              <TripChat
+                tripId={trip.id}
+                destination={trip.destination}
+                onTripUpdate={onTripUpdate}
+              />
+            </Suspense>
           </div>
         )}
       </PanelAccordion>
@@ -121,3 +143,6 @@ export function RightRailPanels({
     </div>
   );
 }
+
+// Memoize to prevent rerenders when left column state changes
+export const RightRailPanels = React.memo(RightRailPanelsComponent);

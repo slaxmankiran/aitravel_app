@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, varchar, real, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, varchar, real, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql, relations } from "drizzle-orm";
@@ -172,6 +172,37 @@ export const tripConversations = pgTable("trip_conversations", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// ============================================================================
+// APPLIED PLANS (for shareable change plan links)
+// ============================================================================
+
+/**
+ * Stores applied plan summaries for shareable links.
+ * When a user applies a change plan, we persist a compact summary.
+ * Shared links can restore the banner state from this table.
+ */
+export const tripAppliedPlans = pgTable("trip_applied_plans", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }).notNull(),
+  changeId: text("change_id").notNull(),
+  source: text("source").notNull(), // "fix_blocker" | "edit_trip" | "undo" | "quick_chip"
+  appliedAt: timestamp("applied_at").defaultNow().notNull(),
+
+  // Plan summary (compact, no full trip snapshot)
+  detectedChanges: jsonb("detected_changes").notNull().default([]),
+  deltaSummary: jsonb("delta_summary").notNull(),
+  failures: jsonb("failures"), // nullable
+  uiInstructions: jsonb("ui_instructions"), // nullable
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  // Unique constraint: one plan per tripId + changeId
+  tripChangeUnique: uniqueIndex("trip_applied_plans_trip_change_uniq").on(table.tripId, table.changeId),
+  // Index for recent plans queries
+  tripAppliedIdx: index("trip_applied_plans_trip_applied_idx").on(table.tripId, table.appliedAt),
+}));
 
 // ============================================================================
 // PRICE ALERTS
@@ -663,3 +694,270 @@ export const SUBSCRIPTION_TIERS = {
     }
   }
 } as const;
+
+// ============================================================================
+// CHANGE PLANNER AGENT TYPES
+// See: docs/CHANGE_PLANNER_AGENT_SPEC.md for full specification
+// ============================================================================
+
+/**
+ * Fields that can be changed by the user after seeing results
+ */
+export type ChangeableField =
+  | "dates"
+  | "budget"
+  | "origin"
+  | "destination"
+  | "passport"
+  | "travelers"
+  | "preferences"
+  | "constraints";
+
+/**
+ * Modules that can be recomputed based on changes
+ */
+export type RecomputableModule =
+  | "visa"
+  | "flights"
+  | "hotels"
+  | "itinerary"
+  | "certainty"
+  | "action_items";
+
+/**
+ * Severity of a detected change
+ */
+export type ChangeSeverity = "low" | "medium" | "high";
+
+/**
+ * UI sections that can be highlighted after changes
+ */
+export type HighlightableSection = "ActionItems" | "CostBreakdown" | "Itinerary" | "VisaCard";
+
+/**
+ * Toast notification tones
+ */
+export type ToastTone = "success" | "warning" | "error";
+
+/**
+ * Banner tones for change results
+ */
+export type BannerTone = "green" | "amber" | "red";
+
+/**
+ * User trip input for change detection
+ */
+export interface UserTripInput {
+  dates: {
+    start: string;  // ISO date
+    end: string;    // ISO date
+    duration: number;
+  };
+  budget: {
+    total: number;
+    perPerson?: number;
+    currency: string;
+  };
+  origin: {
+    city: string;
+    airport?: string;
+    country: string;
+  };
+  destination: {
+    city: string;
+    country: string;
+  };
+  passport: string;  // Country code
+  travelers: {
+    total: number;
+    adults: number;
+    children: number;
+    infants: number;
+  };
+  preferences: {
+    pace: "relaxed" | "moderate" | "packed";
+    interests: string[];
+    hotelClass: "budget" | "mid" | "luxury";
+  };
+  constraints: string[];
+}
+
+/**
+ * A single detected change between previous and current input
+ */
+export interface DetectedChange {
+  field: ChangeableField;
+  before: any;
+  after: any;
+  impact: RecomputableModule[];
+  severity: ChangeSeverity;
+}
+
+/**
+ * Plan for what to recompute
+ */
+export interface RecomputePlan {
+  modulesToRecompute: RecomputableModule[];
+  cacheKeysToInvalidate: string[];
+  apiCalls: Array<{
+    name: string;
+    endpointKey: string;
+    dependsOn?: string[];
+    priority: 1 | 2 | 3;
+  }>;
+}
+
+/**
+ * Summary of deltas between before and after states
+ */
+export interface DeltaSummary {
+  certainty: {
+    before: number;
+    after: number;
+    reason: string;
+  };
+  totalCost: {
+    before: number;
+    after: number;
+    delta: number;
+    notes: string[];
+  };
+  blockers: {
+    before: number;
+    after: number;
+    resolved: string[];
+    new: string[];
+  };
+  itinerary: {
+    dayCountBefore: number;
+    dayCountAfter: number;
+    majorDiffs: string[];
+  };
+}
+
+/**
+ * Instructions for the UI on how to render the change results
+ */
+export interface UIInstructions {
+  banner: {
+    tone: BannerTone;
+    title: string;
+    subtitle?: string;
+  };
+  highlightSections: HighlightableSection[];
+  toasts?: Array<{
+    tone: ToastTone;
+    message: string;
+  }>;
+}
+
+/**
+ * Updated action item from change planner
+ */
+export interface ChangePlannerActionItem {
+  key: string;
+  label: string;
+  category: "required" | "recommended";
+  type: string;
+  completed: boolean;
+  reason?: string;
+}
+
+/**
+ * Updated data from the change planner
+ */
+export interface UpdatedData {
+  visa?: any;
+  flights?: any;
+  hotels?: any;
+  itinerary?: any;
+  actionItems: ChangePlannerActionItem[];
+  costBreakdown?: any;
+}
+
+/**
+ * Fix option suggestion when blockers exist
+ */
+export interface FixOption {
+  title: string;
+  changePatch: Partial<UserTripInput>;
+  expectedOutcome: {
+    certaintyAfter: number;
+    blockersAfter: number;
+    costDelta: number;
+  };
+  confidence: "high" | "medium" | "low";
+}
+
+/**
+ * Main response from the Change Planner Agent
+ */
+export interface ChangePlannerResponse {
+  changeId: string;
+  detectedChanges: DetectedChange[];
+  recomputePlan: RecomputePlan;
+  deltaSummary: DeltaSummary;
+  uiInstructions: UIInstructions;
+  updatedData: UpdatedData;
+  fixOptions?: FixOption[];
+  failures?: ModuleFailure[];
+}
+
+/**
+ * Partial failure information when some modules fail
+ */
+export interface ModuleFailure {
+  module: RecomputableModule;
+  errorCode: string;
+  errorMessage: string;
+  retryable: boolean;
+}
+
+/**
+ * Response with partial failures
+ */
+export interface ChangePlannerResponseWithFailures extends ChangePlannerResponse {
+  failures: ModuleFailure[];
+}
+
+/**
+ * Analytics event payloads for change tracking
+ */
+export interface TripChangeStartedEvent {
+  changeFields: ChangeableField[];
+  source: "edit_trip" | "quick_chip" | "fix_blocker";
+  currentCertainty: number;
+}
+
+export interface TripChangePlannedEvent {
+  modulesToRecompute: RecomputableModule[];
+  severityMax: ChangeSeverity;
+  predictedBlockerDelta: number;
+  predictedCostDelta: number;
+}
+
+export interface TripChangeAppliedEvent {
+  certaintyBefore: number;
+  certaintyAfter: number;
+  blockersBefore: number;
+  blockersAfter: number;
+  costBefore: number;
+  costAfter: number;
+  durationMs: number;
+}
+
+export interface TripChangeFailedEvent {
+  moduleFailed: RecomputableModule;
+  errorCode: string;
+  partialApplied: boolean;
+}
+
+export interface FixOptionEvent {
+  optionTitle: string;
+  confidence: "high" | "medium" | "low";
+  outcomeDeltas: {
+    certainty: number;
+    blockers: number;
+    cost: number;
+  };
+}

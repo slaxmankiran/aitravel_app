@@ -13,7 +13,7 @@
  * - Right column: Sticky Map + Accordion Panels
  */
 
-import { useParams } from "wouter";
+import { useParams, useSearch } from "wouter";
 import { useTrip } from "@/hooks/use-trips";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
@@ -23,6 +23,9 @@ import { Loader2, X, ChevronDown, ChevronUp, Route } from "lucide-react";
 import { HeaderBar } from "@/components/results/HeaderBar";
 import { CertaintyBar } from "@/components/results/CertaintyBar";
 import { RightRailPanels } from "@/components/results/RightRailPanels";
+import { TripUpdateBanner } from "@/components/results/TripUpdateBanner";
+import { CertaintyExplanationDrawer } from "@/components/results/CertaintyExplanationDrawer";
+import { FixBlockersController } from "@/components/results/FixBlockersController";
 
 // Failure state components
 import {
@@ -42,7 +45,52 @@ import { DayCardList, type Itinerary } from "@/components/results-v1/DayCardList
 // Analytics
 import { trackTripEvent, buildTripContext, type TripEventContext } from "@/lib/analytics";
 
-import type { TripResponse } from "@shared/schema";
+// Blocker deltas
+import { getBlockerDeltaUI, type BlockerDeltaUI } from "@/lib/blockerDeltas";
+
+// Change Planner
+import { useChangePlanner } from "@/hooks/useChangePlanner";
+import { ChangePlanBanner } from "@/components/results/ChangePlanBanner";
+import { ComparePlansModal } from "@/components/results/ComparePlansModal";
+import { comparePlans } from "@/lib/comparePlans";
+import { suggestNextFix, getSuggestionAnalyticsData, type NextFixSuggestion } from "@/lib/nextFix";
+import { applyFix, type ApplyFixContext, type ApplyFixResult } from "@/lib/applyFix";
+import type { ChangePlannerResponse } from "@shared/schema";
+import { api } from "@shared/routes";
+
+import type { TripResponse, UserTripInput } from "@shared/schema";
+
+// ============================================================================
+// UNDO CONTEXT
+// ============================================================================
+
+/**
+ * Context for undoing a recent change.
+ * Stored in memory only - no persistence needed.
+ */
+type UndoContext = {
+  changeId: string;
+  prevInput: UserTripInput;
+  nextInput: UserTripInput;
+  appliedAt: string; // ISO timestamp
+  source: "edit_trip" | "quick_chip" | "fix_blocker";
+};
+
+// ============================================================================
+// CERTAINTY HISTORY
+// ============================================================================
+
+/**
+ * A point in the certainty timeline.
+ * Shows how certainty evolved across changes.
+ */
+export type CertaintyPoint = {
+  id: string;                // changeId or "initial"
+  score: number;
+  at: string;                // ISO timestamp
+  label: string;             // short label for tooltip
+  source?: "edit_trip" | "fix_blocker" | "undo" | "initial";
+};
 
 // ============================================================================
 // NARRATIVE HELPERS
@@ -188,6 +236,135 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   const { id } = useParams();
   const tripId = tripIdOverride ?? Number(id);
 
+  // Parse URL params for "What Changed?" banner (from edit flow)
+  const searchString = useSearch();
+  const urlParams = useMemo(() => new URLSearchParams(searchString), [searchString]);
+  const wasUpdated = urlParams.get("updated") === "1";
+  const changesParam = urlParams.get("changes");
+  const changes = useMemo(() => {
+    if (!changesParam) return [];
+    try {
+      return JSON.parse(decodeURIComponent(changesParam)) as string[];
+    } catch {
+      return [];
+    }
+  }, [changesParam]);
+
+  // State for update banner (only show once, dismiss on action or timeout)
+  const [showUpdateBanner, setShowUpdateBanner] = useState(wasUpdated);
+
+  // Change Planner hook + banner state
+  const { isReplanning, planChanges, applyChanges } = useChangePlanner();
+  const [changePlanBanner, setChangePlanBanner] = useState<ChangePlannerResponse | null>(null);
+
+  // Certainty Explanation Drawer state
+  const [certaintyDrawerOpen, setCertaintyDrawerOpen] = useState(false);
+
+  // Blocker delta UI state (for Resolved/New chips)
+  const [blockerDeltaUI, setBlockerDeltaUI] = useState<BlockerDeltaUI | null>(null);
+
+  // Undo context - stores inputs needed to reverse the last change
+  const [undoCtx, setUndoCtx] = useState<UndoContext | null>(null);
+  const [isUndoing, setIsUndoing] = useState(false);
+
+  // Certainty history - tracks score evolution across changes (max 5 points)
+  const [certaintyHistory, setCertaintyHistory] = useState<CertaintyPoint[]>([]);
+
+  // Helper to add a certainty point (keeps max 5)
+  const addCertaintyPoint = useCallback((point: CertaintyPoint) => {
+    setCertaintyHistory(prev => {
+      const next = [...prev, point];
+      // Keep only last 5 points
+      return next.slice(-5);
+    });
+  }, []);
+
+  // URL plan param management (for shareable links)
+  const setPlanInUrl = useCallback((plan: ChangePlannerResponse, source?: string) => {
+    const url = new URL(window.location.href);
+    if (plan.changeId) {
+      url.searchParams.set("plan", plan.changeId);
+    }
+    if (source) {
+      url.searchParams.set("planSource", source);
+    }
+    window.history.replaceState({}, "", url.toString());
+  }, []);
+
+  const clearPlanFromUrl = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("plan");
+    url.searchParams.delete("planSource");
+    window.history.replaceState({}, "", url.toString());
+  }, []);
+
+  // Read plan param from URL (for shared links)
+  const planParam = useMemo(() => urlParams.get("plan"), [urlParams]);
+
+  // Check if current banner matches URL param (shared link opened)
+  const isSharedLink = useMemo(() => {
+    if (!planParam || !changePlanBanner?.changeId) return false;
+    return planParam === changePlanBanner.changeId;
+  }, [planParam, changePlanBanner?.changeId]);
+
+  // Fire-and-forget persist of applied plan for shareable links
+  const persistAppliedPlan = useCallback(async (
+    currentTripId: number,
+    plan: ChangePlannerResponse,
+    source?: string
+  ) => {
+    try {
+      const res = await fetch(`/api/trips/${currentTripId}/applied-plans`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          changeId: plan.changeId,
+          source: source || "edit_trip",
+          planSummary: {
+            detectedChanges: plan.detectedChanges || [],
+            deltaSummary: plan.deltaSummary,
+            failures: plan.failures,
+            uiInstructions: plan.uiInstructions,
+          },
+        }),
+      });
+      if (res.ok) {
+        trackTripEvent(currentTripId, "applied_plan_persisted", {
+          changeId: plan.changeId,
+          source: source || "unknown",
+        });
+      } else {
+        trackTripEvent(currentTripId, "applied_plan_persist_failed", {
+          changeId: plan.changeId,
+          source: source || "unknown",
+          status: res.status,
+        });
+      }
+    } catch (err) {
+      trackTripEvent(tripId, "applied_plan_persist_failed", {
+        changeId: plan.changeId,
+        source: source || "unknown",
+        error: "network",
+      });
+    }
+  }, [tripId]);
+
+  // Wrapper that sets both banner and delta state together
+  // Also updates URL for shareable links and persists to server
+  const handleSetBannerPlan = useCallback((plan: ChangePlannerResponse | null, source?: string) => {
+    setChangePlanBanner(plan);
+    setBlockerDeltaUI(plan ? getBlockerDeltaUI(plan) : null);
+
+    // Update URL for shareable links
+    if (plan) {
+      setPlanInUrl(plan, source);
+      // Fire-and-forget persist to server (non-blocking)
+      persistAppliedPlan(tripId, plan, source);
+    } else {
+      clearPlanFromUrl();
+    }
+  }, [setPlanInUrl, clearPlanFromUrl, persistAppliedPlan, tripId]);
+
   // Fetch trip data (skip if we have tripDataOverride)
   const { data: trip, isLoading, error } = useTrip(tripDataOverride ? -1 : tripId);
 
@@ -204,6 +381,11 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   const [isMapExpanded, setIsMapExpanded] = useState(false);
   const [allDaysExpanded, setAllDaysExpanded] = useState(true);
   const [showDistances, setShowDistances] = useState(false);
+
+  // Original trip snapshot - for compare plans feature (Item 15)
+  const originalTripRef = useRef<TripResponse | null>(null);
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const compareButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // Timeout and retry state
   const [generationStartTime] = useState(() => Date.now());
@@ -232,6 +414,35 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     return buildTripContext(workingTrip);
   }, [workingTrip?.id, workingTrip?.feasibilityReport]);
 
+  // Compare modal handlers with focus management (placed after analyticsContext)
+  const openCompareModal = useCallback(() => {
+    setIsCompareModalOpen(true);
+    trackTripEvent(tripId, 'compare_opened', {
+      changeId: changePlanBanner?.changeId,
+    }, analyticsContext);
+  }, [tripId, changePlanBanner?.changeId, analyticsContext]);
+
+  const closeCompareModal = useCallback(() => {
+    setIsCompareModalOpen(false);
+    trackTripEvent(tripId, 'compare_closed', {
+      changeId: changePlanBanner?.changeId,
+    }, analyticsContext);
+    // Return focus to trigger button after modal unmount paints
+    requestAnimationFrame(() => compareButtonRef.current?.focus());
+  }, [tripId, changePlanBanner?.changeId, analyticsContext]);
+
+  // Handle share analytics (placed after analyticsContext is defined)
+  const handleShareClick = useCallback((success: boolean) => {
+    // Track both click and copy result
+    trackTripEvent(tripId, 'plan_share_clicked', {
+      changeId: changePlanBanner?.changeId,
+    }, analyticsContext);
+    trackTripEvent(tripId, 'plan_share_copied', {
+      changeId: changePlanBanner?.changeId,
+      success,
+    }, analyticsContext);
+  }, [tripId, changePlanBanner?.changeId, analyticsContext]);
+
   // Check if still generating
   const isGenerating = useMemo(() => {
     if (!workingTrip) return true;
@@ -241,6 +452,16 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     if ((s === 'yes' || s === 'warning') && !hasItinerary) return true;
     return false;
   }, [workingTrip]);
+
+  // Capture original trip snapshot once generation completes (for compare feature)
+  useEffect(() => {
+    if (!workingTrip || isGenerating) return;
+    // Only capture once - when we have a complete trip
+    if (!originalTripRef.current) {
+      // Deep clone to prevent mutations
+      originalTripRef.current = JSON.parse(JSON.stringify(workingTrip));
+    }
+  }, [workingTrip, isGenerating]);
 
   // Fetch progress while generating
   const { data: progress } = useTripProgress(tripId, isGenerating);
@@ -269,7 +490,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     setShowTimeout(false);
 
     // Invalidate trip query to trigger refetch
-    await queryClient.invalidateQueries({ queryKey: ['trip', tripId] });
+    await queryClient.invalidateQueries({ queryKey: [api.trips.get.path, tripId] });
 
     // Reset retry state after a moment
     setTimeout(() => setIsRetrying(false), 2000);
@@ -307,6 +528,96 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     }
   }, [workingTrip?.id, workingTrip?.feasibilityStatus]);
 
+  // Initialize certainty history with initial score (once per trip)
+  useEffect(() => {
+    if (!workingTrip) return;
+    const report = workingTrip.feasibilityReport as any;
+    const score = report?.score;
+    if (typeof score !== 'number') return;
+
+    // Only add initial point if history is empty
+    setCertaintyHistory(prev => {
+      if (prev.length > 0) return prev;
+      // Convert createdAt to ISO string (handles Date or string)
+      const createdAt = workingTrip.createdAt;
+      const atString = createdAt instanceof Date
+        ? createdAt.toISOString()
+        : (typeof createdAt === 'string' ? createdAt : new Date().toISOString());
+      return [{
+        id: 'initial',
+        score,
+        at: atString,
+        label: 'Initial',
+        source: 'initial',
+      }];
+    });
+  }, [workingTrip?.id, workingTrip?.feasibilityReport]);
+
+  // Restore banner from URL param on page load (for shared links)
+  // Only runs once on initial load - does not overwrite if user has applied a newer plan
+  const [hasAttemptedRestore, setHasAttemptedRestore] = useState(false);
+
+  useEffect(() => {
+    if (!workingTrip?.id) return;
+    if (!planParam) return;
+    if (hasAttemptedRestore) return; // Only attempt once per page load
+
+    // If user already has a banner (applied a plan in this session), don't overwrite
+    // They are "ahead" of the shared link
+    if (changePlanBanner) return;
+
+    setHasAttemptedRestore(true);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/trips/${workingTrip.id}/applied-plans/${planParam}`);
+        if (!res.ok) {
+          trackTripEvent(workingTrip.id, "shared_plan_load_failed", {
+            changeId: planParam,
+            status: res.status,
+          });
+          // 404 = plan not found, clear URL param gracefully
+          if (res.status === 404) {
+            clearPlanFromUrl();
+          }
+          return;
+        }
+
+        const data = await res.json();
+        if (cancelled) return;
+
+        // Construct a minimal ChangePlannerResponse for the banner
+        // Cast to any since we only need changeId, deltaSummary, uiInstructions for display
+        const restoredPlan = {
+          changeId: data.changeId,
+          detectedChanges: data.detectedChanges || [],
+          deltaSummary: data.deltaSummary,
+          uiInstructions: data.uiInstructions || {},
+          failures: data.failures,
+        } as ChangePlannerResponse;
+
+        // Set banner directly (don't persist again since it's already stored)
+        setChangePlanBanner(restoredPlan);
+        setBlockerDeltaUI(getBlockerDeltaUI(restoredPlan));
+
+        trackTripEvent(workingTrip.id, "shared_plan_loaded", {
+          changeId: planParam,
+          source: data.source || "unknown",
+        });
+      } catch (err) {
+        trackTripEvent(workingTrip.id, "shared_plan_load_failed", {
+          changeId: planParam,
+          error: "network",
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workingTrip?.id, planParam, changePlanBanner, hasAttemptedRestore, clearPlanFromUrl]);
+
   // Fire generate_completed exactly once when itinerary appears
   useEffect(() => {
     if (!workingTrip) return;
@@ -337,10 +648,24 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
           isDemo,
         },
         analyticsContext,
-        isDemo ? 'demo' : 'trip_results_v1'
+        isDemo ? 'demo' : 'results_v1'
       );
     }
   }, [workingTrip?.id]); // Only fire once per trip load
+
+  // Auto-clear blocker delta UI after 12 seconds (premium feel)
+  useEffect(() => {
+    if (!blockerDeltaUI) return;
+    const timer = window.setTimeout(() => setBlockerDeltaUI(null), 12000);
+    return () => window.clearTimeout(timer);
+  }, [blockerDeltaUI]);
+
+  // Auto-expire undo window after 60 seconds
+  useEffect(() => {
+    if (!undoCtx) return;
+    const timer = window.setTimeout(() => setUndoCtx(null), 60_000);
+    return () => window.clearTimeout(timer);
+  }, [undoCtx]);
 
   // Day click handler
   const handleDayClick = useCallback((dayIndex: number) => {
@@ -358,19 +683,20 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     setHighlightedLocation(activityKey);
   }, []);
 
-  // Map marker click handler - also scrolls to activity in itinerary
+  // Map marker click handler - also scrolls to activity in itinerary (throttled)
   const handleMapMarkerClick = useCallback((locationId: string) => {
     setHighlightedLocation(locationId);
     trackTripEvent(tripId, 'map_marker_clicked', { locationId }, analyticsContext);
 
-    // Scroll to the activity in the itinerary
-    // Small delay to ensure state update happens first
-    setTimeout(() => {
-      const activityEl = document.querySelector(`[data-activity-key="${locationId}"]`);
-      if (activityEl) {
-        activityEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }, 100);
+    // Throttle scroll to avoid DOM query spam
+    if (scrollTimeoutRef.current) {
+      window.clearTimeout(scrollTimeoutRef.current);
+    }
+
+    scrollTimeoutRef.current = window.setTimeout(() => {
+      const el = document.querySelector(`[data-activity-key="${locationId}"]`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
   }, [tripId, analyticsContext]);
 
   // Chat handlers
@@ -384,6 +710,18 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   // Map expand toggle handler
   const handleMapExpandToggle = useCallback(() => {
     setIsMapExpanded(prev => !prev);
+  }, []);
+
+  // Ref for throttling map marker scroll
+  const scrollTimeoutRef = useRef<number | null>(null);
+
+  // Cleanup scroll timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        window.clearTimeout(scrollTimeoutRef.current);
+      }
+    };
   }, []);
 
   const handleTripUpdate = useCallback((updatedData: { itinerary?: any; budgetBreakdown?: any }) => {
@@ -406,6 +744,272 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
       return next;
     });
   }, [tripId, analyticsContext]);
+
+  // Handle undo - swap inputs and re-run Change Planner
+  const handleUndo = useCallback(async () => {
+    if (!undoCtx || !workingTrip || isUndoing) return;
+
+    setIsUndoing(true);
+
+    // Track undo click
+    const elapsedSinceApply = Math.round(
+      (Date.now() - new Date(undoCtx.appliedAt).getTime()) / 1000
+    );
+    trackTripEvent(tripId, 'trip_change_undo_clicked', {
+      originalChangeId: undoCtx.changeId,
+      source: undoCtx.source,
+      elapsedSecondsSinceApply: elapsedSinceApply,
+    }, analyticsContext);
+
+    try {
+      // Plan the reverse change (swap prevInput and nextInput)
+      const plan = await planChanges({
+        tripId,
+        prevInput: undoCtx.nextInput,  // swap
+        nextInput: undoCtx.prevInput,  // swap
+        currentResults: workingTrip,
+        source: "quick_chip",
+      });
+
+      // Apply reverse plan
+      applyChanges({
+        tripId,
+        plan,
+        setWorkingTrip,
+        setBannerPlan: handleSetBannerPlan,
+        source: "undo",
+      });
+
+      // Add certainty point for undo
+      const newScore = plan.deltaSummary?.certainty?.after;
+      if (typeof newScore === 'number') {
+        addCertaintyPoint({
+          id: plan.changeId || `undo-${Date.now()}`,
+          score: newScore,
+          at: new Date().toISOString(),
+          label: 'Undo',
+          source: 'undo',
+        });
+      }
+
+      // Track successful undo
+      trackTripEvent(tripId, 'trip_change_undo_applied', {
+        originalChangeId: undoCtx.changeId,
+        source: undoCtx.source,
+      }, analyticsContext);
+
+      // Clear undo context after successful undo
+      setUndoCtx(null);
+    } catch (err) {
+      console.error('[TripResultsV1] Undo failed:', err);
+      // Could add toast here in future
+    } finally {
+      setIsUndoing(false);
+    }
+  }, [undoCtx, workingTrip, isUndoing, tripId, analyticsContext, planChanges, applyChanges, setWorkingTrip, handleSetBannerPlan, addCertaintyPoint]);
+
+  // ============================================================================
+  // ITEM 16: NEXT FIX SUGGESTION
+  // ============================================================================
+
+  // Deduplication: track last shown suggestion to prevent event spam
+  const lastShownSuggestionKeyRef = useRef<string | null>(null);
+
+  // Snooze: hide suggestion until next plan change (session-only)
+  const [snoozedSuggestionKey, setSnoozedSuggestionKey] = useState<string | null>(null);
+
+  // Idempotency: prevent double-click on apply
+  const [isApplyingFix, setIsApplyingFix] = useState(false);
+
+  // Compute suggestion based on comparison (only when banner is shown)
+  const nextFixSuggestion = useMemo((): NextFixSuggestion | null => {
+    if (!changePlanBanner || !originalTripRef.current || !workingTrip) {
+      return null;
+    }
+    const comparison = comparePlans(originalTripRef.current, workingTrip);
+    return suggestNextFix(comparison, { trip: workingTrip });
+  }, [changePlanBanner, workingTrip]);
+
+  // Build unique key for suggestion deduplication
+  const suggestionKey = useMemo(() => {
+    if (!nextFixSuggestion || !changePlanBanner) return null;
+    return `${tripId}:${changePlanBanner.changeId}:${nextFixSuggestion.id}`;
+  }, [tripId, changePlanBanner?.changeId, nextFixSuggestion?.id]);
+
+  // Check if suggestion is snoozed
+  const isSuggestionSnoozed = suggestionKey === snoozedSuggestionKey;
+
+  // Track when suggestion is shown (deduplicated)
+  useEffect(() => {
+    if (!nextFixSuggestion || !changePlanBanner || !suggestionKey) return;
+    if (isSuggestionSnoozed) return; // Don't track snoozed suggestions
+
+    // Dedupe: only fire if this is a new suggestion key
+    if (lastShownSuggestionKeyRef.current === suggestionKey) return;
+    lastShownSuggestionKeyRef.current = suggestionKey;
+
+    trackTripEvent(tripId, 'next_fix_shown', {
+      changeId: changePlanBanner.changeId,
+      ...getSuggestionAnalyticsData(nextFixSuggestion),
+    }, analyticsContext);
+  }, [suggestionKey, nextFixSuggestion, changePlanBanner, tripId, analyticsContext, isSuggestionSnoozed]);
+
+  // Reset snooze when plan changes (new changeId = new opportunity)
+  useEffect(() => {
+    if (changePlanBanner?.changeId) {
+      setSnoozedSuggestionKey(null);
+    }
+  }, [changePlanBanner?.changeId]);
+
+  // Handle apply suggestion (with idempotency guard)
+  const handleApplySuggestion = useCallback(async (suggestion: NextFixSuggestion) => {
+    // Idempotency: prevent double-clicks
+    if (isApplyingFix || !workingTrip) return;
+    setIsApplyingFix(true);
+
+    try {
+      trackTripEvent(tripId, 'next_fix_applied', {
+        changeId: changePlanBanner?.changeId,
+        ...getSuggestionAnalyticsData(suggestion),
+      }, analyticsContext);
+
+      // Build context for applyFix dispatcher
+      const applyContext: ApplyFixContext = {
+        tripId: tripId,
+        trip: workingTrip,
+
+        // Change planner integration
+        planChanges,
+        applyChanges,
+        setWorkingTrip,
+        setBannerPlan: handleSetBannerPlan,
+
+        // Undo integration
+        handleUndo: undoCtx ? handleUndo : undefined,
+
+        // Refetch integration - use correct query key from use-trips.ts
+        refetchTrip: async () => {
+          await queryClient.invalidateQueries({ queryKey: [api.trips.get.path, tripId] });
+        },
+
+        // UI callbacks - minimal working implementations
+        openEditor: (target) => {
+          trackTripEvent(tripId, 'next_fix_editor_requested', {
+            editor: target,
+            changeId: changePlanBanner?.changeId,
+          }, analyticsContext);
+
+          // Scroll to relevant section based on target
+          const sectionMap: Record<string, string> = {
+            budget: 'cost-breakdown',
+            hotels: 'cost-breakdown',
+            flights: 'cost-breakdown',
+            itinerary: 'day-card-list',
+            dates: 'header-bar',
+            visa_docs: 'action-items',
+          };
+          const sectionId = sectionMap[target];
+          if (sectionId) {
+            const el = document.getElementById(sectionId) || document.querySelector(`[data-section="${sectionId}"]`);
+            el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        },
+        showToast: (message, type) => {
+          // Simple console + could wire to toast system later
+          const icon = type === 'success' ? '✓' : type === 'warning' ? '⚠' : 'ℹ';
+          console.log(`[Toast ${icon}] ${message}`);
+        },
+      };
+
+      // Route through applyFix dispatcher
+      const result: ApplyFixResult = await applyFix(suggestion, applyContext);
+
+      // Track result
+      trackTripEvent(tripId, 'next_fix_result', {
+        changeId: changePlanBanner?.changeId,
+        suggestionId: suggestion.id,
+        success: result.success,
+        action: result.action,
+        message: result.message,
+      }, analyticsContext);
+
+      // If patch was applied, update certainty history from planner result (not stale trip)
+      if (result.success && result.action === 'applied' && result.newChangeId && result.newCertaintyScore != null) {
+        addCertaintyPoint({
+          id: result.newChangeId,
+          score: result.newCertaintyScore, // Use planner's result, not stale workingTrip
+          at: new Date().toISOString(),
+          label: suggestion.title.slice(0, 20),
+          source: 'fix_blocker',
+        });
+      }
+    } catch (err) {
+      console.error('[handleApplySuggestion] Error:', err);
+      trackTripEvent(tripId, 'next_fix_error', {
+        changeId: changePlanBanner?.changeId,
+        suggestionId: suggestion.id,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      }, analyticsContext);
+    } finally {
+      setIsApplyingFix(false);
+    }
+  }, [tripId, changePlanBanner?.changeId, analyticsContext, undoCtx, handleUndo, isApplyingFix, workingTrip, planChanges, applyChanges, setWorkingTrip, handleSetBannerPlan, queryClient, addCertaintyPoint]);
+
+  // Handle snooze suggestion (hides until next plan change)
+  const handleSnoozeSuggestion = useCallback((suggestion: NextFixSuggestion) => {
+    if (!suggestionKey) return;
+    setSnoozedSuggestionKey(suggestionKey);
+    trackTripEvent(tripId, 'next_fix_snoozed', {
+      changeId: changePlanBanner?.changeId,
+      ...getSuggestionAnalyticsData(suggestion),
+    }, analyticsContext);
+  }, [tripId, changePlanBanner?.changeId, analyticsContext, suggestionKey]);
+
+  // Handle dismiss suggestion (permanent for this suggestion instance)
+  const handleDismissSuggestion = useCallback((suggestion: NextFixSuggestion) => {
+    trackTripEvent(tripId, 'next_fix_dismissed', {
+      changeId: changePlanBanner?.changeId,
+      ...getSuggestionAnalyticsData(suggestion),
+    }, analyticsContext);
+  }, [tripId, changePlanBanner?.changeId, analyticsContext]);
+
+  // Effective suggestion to show (null if snoozed)
+  const effectiveSuggestion = isSuggestionSnoozed ? null : nextFixSuggestion;
+
+  // Memoize costs (must be before early returns for hook rules)
+  const costs = useMemo(() => {
+    if (!workingTrip) return null;
+    const itinerary = workingTrip.itinerary as any;
+    const costBreakdown = itinerary?.costBreakdown;
+    if (!costBreakdown) return null;
+
+    const grand = Number(costBreakdown.total ?? costBreakdown.grandTotal) || 0;
+    const size = workingTrip.groupSize || 1;
+    const currency = workingTrip.currency || 'USD';
+
+    return {
+      flights: Number(costBreakdown.flights) || 0,
+      accommodation: Number(costBreakdown.accommodation) || 0,
+      activities: Number(costBreakdown.activities) || 0,
+      food: Number(costBreakdown.food) || 0,
+      transport: Number(costBreakdown.localTransport ?? costBreakdown.transport) || 0,
+      visa: Number(costBreakdown.visa) || 0,
+      insurance: Number(costBreakdown.insurance) || 0,
+      miscellaneous: Number(costBreakdown.miscellaneous ?? costBreakdown.misc) || 0,
+      grandTotal: grand,
+      perPerson: Math.round(grand / size) || 0,
+      currency,
+    };
+  }, [workingTrip]);
+
+  // Memoize narrative subtitle (must be before early returns)
+  const narrativeSubtitle = useMemo(() => {
+    if (!workingTrip) return null;
+    if (isGenerating) return null;
+    const itinerary = workingTrip.itinerary as any;
+    if (!itinerary?.days?.length) return null;
+    return generateNarrativeSubtitle(workingTrip, itinerary);
+  }, [workingTrip, isGenerating]);
 
   // Loading state (skip if we have tripDataOverride)
   if (!tripDataOverride && (isLoading || !workingTrip)) {
@@ -474,26 +1078,9 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     );
   }
 
-  // Calculate costs for panels
+  // Extract derived values for rendering (costs and narrativeSubtitle are already memoized above)
   const itinerary = workingTrip.itinerary as any;
-  const costBreakdown = itinerary?.costBreakdown;
-  const grandTotal = costBreakdown?.total ?? costBreakdown?.grandTotal ?? 0;
-  const groupSize = workingTrip.groupSize || 1;
   const currency = workingTrip.currency || 'USD';
-
-  const costs = costBreakdown ? {
-    flights: Number(costBreakdown.flights) || 0,
-    accommodation: Number(costBreakdown.accommodation) || 0,
-    activities: Number(costBreakdown.activities) || 0,
-    food: Number(costBreakdown.food) || 0,
-    transport: Number(costBreakdown.localTransport ?? costBreakdown.transport) || 0,
-    visa: Number(costBreakdown.visa) || 0,
-    insurance: Number(costBreakdown.insurance) || 0,
-    miscellaneous: Number(costBreakdown.miscellaneous ?? costBreakdown.misc) || 0,
-    grandTotal: Number(grandTotal) || 0,
-    perPerson: Math.round(Number(grandTotal) / groupSize) || 0,
-    currency,
-  } : null;
 
   return (
     <div className={`min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 ${isDemo ? 'pt-10' : ''}`}>
@@ -502,7 +1089,45 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
 
       {/* Sticky headers */}
       <HeaderBar trip={workingTrip} />
-      <CertaintyBar trip={workingTrip} />
+
+      {/* Change Planner banner - shows delta after a trip change is applied */}
+      {changePlanBanner && (
+        <div className="max-w-7xl mx-auto px-4 md:px-6 pt-3">
+          <ChangePlanBanner
+            plan={changePlanBanner}
+            onDismiss={() => handleSetBannerPlan(null)}
+            blockerDelta={blockerDeltaUI}
+            canUndo={!!undoCtx}
+            onUndo={handleUndo}
+            isUndoing={isUndoing}
+            onShare={handleShareClick}
+            isShared={isSharedLink}
+            defaultOpen={isSharedLink}
+            canCompare={!!originalTripRef.current}
+            onCompare={openCompareModal}
+            compareButtonRef={compareButtonRef}
+            suggestion={effectiveSuggestion}
+            onApplySuggestion={handleApplySuggestion}
+            onDismissSuggestion={handleDismissSuggestion}
+            onSnoozeSuggestion={handleSnoozeSuggestion}
+            isApplyingFix={isApplyingFix}
+          />
+        </div>
+      )}
+
+      {/* "What Changed?" banner - shows after returning from edit flow */}
+      {showUpdateBanner && (
+        <TripUpdateBanner
+          changes={changes}
+          onDismiss={() => setShowUpdateBanner(false)}
+        />
+      )}
+
+      <CertaintyBar
+        trip={workingTrip}
+        onExplainCertainty={() => setCertaintyDrawerOpen(true)}
+        certaintyHistory={certaintyHistory}
+      />
 
       {/* Main content - two column layout */}
       <main className="max-w-7xl mx-auto px-4 md:px-6 py-6">
@@ -544,10 +1169,10 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                 )}
               </div>
 
-              {/* Narrative subtitle */}
-              {!isGenerating && itinerary?.days?.length > 0 && (
+              {/* Narrative subtitle (memoized) */}
+              {narrativeSubtitle && (
                 <p className="text-sm text-white/50 mt-1.5 leading-relaxed line-clamp-2">
-                  {generateNarrativeSubtitle(workingTrip, itinerary)}
+                  {narrativeSubtitle}
                 </p>
               )}
             </div>
@@ -590,19 +1215,22 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                 ))}
               </div>
             ) : (
-              <DayCardList
-                tripId={tripId}
-                itinerary={itinerary as Itinerary}
-                currency={currency}
-                activeDayIndex={activeDayIndex}
-                activeActivityKey={highlightedLocation}
-                allExpanded={allDaysExpanded}
-                showDistances={showDistances}
-                onDayClick={handleDayClick}
-                onActivityClick={handleActivityClick}
-                onActivityHover={handleActivityHover}
-                analyticsContext={analyticsContext}
-              />
+              <div data-section="day-card-list">
+                <DayCardList
+                  tripId={tripId}
+                  itinerary={itinerary as Itinerary}
+                  currency={currency}
+                  tripStartDate={workingTrip.dates || undefined}
+                  activeDayIndex={activeDayIndex}
+                  activeActivityKey={highlightedLocation}
+                  allExpanded={allDaysExpanded}
+                  showDistances={showDistances}
+                  onDayClick={handleDayClick}
+                  onActivityClick={handleActivityClick}
+                  onActivityHover={handleActivityHover}
+                  analyticsContext={analyticsContext}
+                />
+              </div>
             )}
           </section>
 
@@ -641,11 +1269,32 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                 hasUndoableChange={false}
                 onUndo={() => {}}
                 isDemo={isDemo}
+                blockerDelta={blockerDeltaUI}
               />
             </div>
           </aside>
         </div>
       </main>
+
+      {/* Certainty Explanation Drawer */}
+      <CertaintyExplanationDrawer
+        open={certaintyDrawerOpen}
+        onClose={() => setCertaintyDrawerOpen(false)}
+        trip={workingTrip}
+        changePlan={changePlanBanner}
+      />
+
+      {/* Fix Blockers Controller - always mounted to handle events from anywhere */}
+      <FixBlockersController
+        trip={workingTrip}
+        setWorkingTrip={setWorkingTrip}
+        setBannerPlan={handleSetBannerPlan}
+        onSetUndoCtx={(ctx) => setUndoCtx({
+          ...ctx,
+          appliedAt: new Date().toISOString(),
+        })}
+        onAddCertaintyPoint={addCertaintyPoint}
+      />
 
       {/* Fullscreen Map Modal */}
       {isMapExpanded && !isGenerating && itinerary?.days?.length > 0 && (
@@ -678,6 +1327,32 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
             />
           </div>
         </div>
+      )}
+
+      {/* Compare Plans Modal (Item 15) */}
+      {originalTripRef.current && workingTrip && (
+        <ComparePlansModal
+          isOpen={isCompareModalOpen}
+          onClose={closeCompareModal}
+          originalTrip={originalTripRef.current}
+          updatedTrip={workingTrip}
+          onKeepUpdated={() => {
+            trackTripEvent(tripId, 'compare_keep_updated', {
+              changeId: changePlanBanner?.changeId,
+            }, analyticsContext);
+            closeCompareModal();
+          }}
+          onKeepOriginal={() => {
+            // Revert to original by triggering undo if available
+            if (undoCtx) {
+              handleUndo();
+            }
+            trackTripEvent(tripId, 'compare_keep_original', {
+              changeId: changePlanBanner?.changeId,
+            }, analyticsContext);
+            closeCompareModal();
+          }}
+        />
       )}
 
       {/* Dev indicator */}

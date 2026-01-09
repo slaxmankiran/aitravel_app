@@ -30,6 +30,9 @@ import insuranceRouter from "./routes/insurance";
 import collaborationRouter from "./routes/collaboration";
 import weatherRouter from "./routes/weather";
 import subscriptionsRouter from "./routes/subscriptions";
+import changePlanRouter from "./routes/changePlan";
+import fixOptionsRouter from "./routes/fixOptions";
+import appliedPlansRouter from "./routes/appliedPlans";
 
 // ============ FEASIBILITY ANALYTICS ============
 // Decision-quality metrics for validation
@@ -453,6 +456,7 @@ async function getDestinationCoords(destination: string): Promise<{ center: { la
 // Helper to parse date range string to start/end dates
 function parseDateRange(dateStr: string): { startDate: string; endDate: string } | null {
   try {
+    // Format 1: "Jan 15, 2026 - Jan 22, 2026"
     const parts = dateStr.split(' - ');
     if (parts.length === 2) {
       const start = new Date(parts[0].trim());
@@ -464,6 +468,8 @@ function parseDateRange(dateStr: string): { startDate: string; endDate: string }
         };
       }
     }
+
+    // Format 2: "June 15-22, 2026"
     const match = dateStr.match(/(\w+)\s+(\d+)-(\d+),?\s+(\d{4})/);
     if (match) {
       const [, month, startDay, endDay, year] = match;
@@ -476,6 +482,36 @@ function parseDateRange(dateStr: string): { startDate: string; endDate: string }
         };
       }
     }
+
+    // Format 3: "June 2026, 12 days" (flexible dates - assume 1st of month)
+    const flexMatch = dateStr.match(/(\w+)\s+(\d{4}),?\s+(\d+)\s*days?/i);
+    if (flexMatch) {
+      const [, month, year, numDays] = flexMatch;
+      const start = new Date(`${month} 1, ${year}`);
+      if (!isNaN(start.getTime())) {
+        const end = new Date(start);
+        end.setDate(start.getDate() + parseInt(numDays) - 1);
+        return {
+          startDate: start.toISOString().split('T')[0],
+          endDate: end.toISOString().split('T')[0],
+        };
+      }
+    }
+
+    // Format 4: "1/15/2026 - 1/22/2026" (US date format)
+    const usMatch = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*-\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (usMatch) {
+      const [, startMonth, startDay, startYear, endMonth, endDay, endYear] = usMatch;
+      const start = new Date(parseInt(startYear), parseInt(startMonth) - 1, parseInt(startDay));
+      const end = new Date(parseInt(endYear), parseInt(endMonth) - 1, parseInt(endDay));
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        return {
+          startDate: start.toISOString().split('T')[0],
+          endDate: end.toISOString().split('T')[0],
+        };
+      }
+    }
+
     return null;
   } catch {
     return null;
@@ -4446,6 +4482,9 @@ export async function registerRoutes(
   app.use('/api/trips', collaborationRouter);
   app.use('/api/weather', weatherRouter);
   app.use('/api/subscriptions', subscriptionsRouter);
+  app.use("/api", changePlanRouter);
+  app.use("/api", fixOptionsRouter);
+  app.use("/api", appliedPlansRouter);
 
   app.post(api.trips.create.path, async (req, res) => {
     try {
@@ -4816,7 +4855,19 @@ export async function registerRoutes(
     ts: string; // ISO
     tripId: number;
     page: string;
+    // V2 fields for session/flow tracking
     sessionId?: string;
+    flowId?: string;
+    entry?: {
+      referrer?: string;
+      utmSource?: string;
+      utmMedium?: string;
+      utmCampaign?: string;
+      entryPoint?: string;
+      device?: string;
+      locale?: string;
+      timezone?: string;
+    };
     context?: {
       passport?: string;
       destination?: string;
@@ -4833,12 +4884,26 @@ export async function registerRoutes(
   const tripEvents: TripEvent[] = [];
   const MAX_TRIP_EVENTS = 50_000;
 
+  // Entry metadata schema
+  const entrySchema = z.object({
+    referrer: z.string().optional(),
+    utmSource: z.string().optional(),
+    utmMedium: z.string().optional(),
+    utmCampaign: z.string().optional(),
+    entryPoint: z.string().optional(),
+    device: z.string().optional(),
+    locale: z.string().optional(),
+    timezone: z.string().optional(),
+  }).optional();
+
   const tripEventSchema = z.object({
     event: z.string().min(1),
-    ts: z.string().optional(), // allow client omit
+    ts: z.string().optional(),
     tripId: z.number(),
     page: z.string().min(1),
     sessionId: z.string().optional(),
+    flowId: z.string().optional(),
+    entry: entrySchema,
     context: z
       .object({
         passport: z.string().optional(),
@@ -4854,11 +4919,9 @@ export async function registerRoutes(
   });
 
   // POST /api/analytics/trip-events
-  // Fire-and-forget event ingestion. Must never break UX.
   app.post("/api/analytics/trip-events", async (req, res) => {
     const parsed = tripEventSchema.safeParse(req.body);
     if (!parsed.success) {
-      // Return success=false but keep 200 to avoid client error surfacing
       return res.status(200).json({ success: false, error: parsed.error.flatten() });
     }
 
@@ -4870,23 +4933,25 @@ export async function registerRoutes(
       tripId: body.tripId,
       page: body.page,
       sessionId: body.sessionId,
+      flowId: body.flowId,
+      entry: body.entry,
       context: body.context || {},
       data: body.data || {},
     };
 
     tripEvents.push(evt);
 
-    // Cap memory usage
     if (tripEvents.length > MAX_TRIP_EVENTS) {
       tripEvents.splice(0, tripEvents.length - MAX_TRIP_EVENTS);
     }
 
-    // Helpful local debug
     if (process.env.NODE_ENV !== "production") {
       console.log("[TripEvent]", evt.event, {
         tripId: evt.tripId,
         page: evt.page,
+        flowId: evt.flowId,
         destination: evt.context?.destination,
+        entryPoint: evt.entry?.entryPoint,
       });
     }
 
@@ -4894,13 +4959,14 @@ export async function registerRoutes(
   });
 
   // GET /api/analytics/trip-events
-  // Debug + basic funnel stats.
   app.get("/api/analytics/trip-events", async (req, res) => {
     const {
       limit,
       event,
       page,
       tripId,
+      flowId,
+      sessionId,
       since,
       until,
       includeRecent,
@@ -4916,6 +4982,8 @@ export async function registerRoutes(
 
     if (event) filtered = filtered.filter((e) => e.event === event);
     if (page) filtered = filtered.filter((e) => e.page === page);
+    if (flowId) filtered = filtered.filter((e) => e.flowId === flowId);
+    if (sessionId) filtered = filtered.filter((e) => e.sessionId === sessionId);
     if (parsedTripId && !Number.isNaN(parsedTripId)) {
       filtered = filtered.filter((e) => e.tripId === parsedTripId);
     }
@@ -4931,57 +4999,117 @@ export async function registerRoutes(
     const byEvent: Record<string, number> = {};
     const byPage: Record<string, number> = {};
     const byDestination: Record<string, number> = {};
+    const byEntryPoint: Record<string, number> = {};
+    const byDevice: Record<string, number> = {};
+    const byUtmSource: Record<string, number> = {};
 
     for (const e of filtered) {
       byEvent[e.event] = (byEvent[e.event] || 0) + 1;
       byPage[e.page] = (byPage[e.page] || 0) + 1;
       const dest = e.context?.destination;
       if (dest) byDestination[dest] = (byDestination[dest] || 0) + 1;
+      const entry = e.entry?.entryPoint || 'unknown';
+      byEntryPoint[entry] = (byEntryPoint[entry] || 0) + 1;
+      const device = e.entry?.device || 'unknown';
+      byDevice[device] = (byDevice[device] || 0) + 1;
+      const utm = e.entry?.utmSource || 'organic';
+      byUtmSource[utm] = (byUtmSource[utm] || 0) + 1;
     }
 
-    // Funnel: generate_started -> generate_completed (by tripId)
-    const startedTrips = new Set<number>();
-    const completedTrips = new Set<number>();
+    // Funnel: generate_started -> generate_completed (by flowId for accurate tracking)
+    const startedFlows = new Set<string>();
+    const completedFlows = new Set<string>();
+    const flowTimestamps: Record<string, { started?: number; completed?: number }> = {};
 
     for (const e of filtered) {
-      if (e.event === "itinerary_generate_started") startedTrips.add(e.tripId);
-      if (e.event === "itinerary_generate_completed") completedTrips.add(e.tripId);
+      const flowKey = e.flowId || `trip-${e.tripId}`;
+      if (e.event === "itinerary_generate_started") {
+        startedFlows.add(flowKey);
+        if (!flowTimestamps[flowKey]) flowTimestamps[flowKey] = {};
+        flowTimestamps[flowKey].started = Date.parse(e.ts);
+      }
+      if (e.event === "itinerary_generate_completed") {
+        completedFlows.add(flowKey);
+        if (!flowTimestamps[flowKey]) flowTimestamps[flowKey] = {};
+        flowTimestamps[flowKey].completed = Date.parse(e.ts);
+      }
+    }
+
+    // Calculate time to value (generate started -> completed)
+    const completionTimes: number[] = [];
+    for (const flow of Object.values(flowTimestamps)) {
+      if (flow.started && flow.completed) {
+        completionTimes.push(flow.completed - flow.started);
+      }
+    }
+    completionTimes.sort((a, b) => a - b);
+
+    const median = completionTimes.length > 0
+      ? completionTimes[Math.floor(completionTimes.length / 2)]
+      : null;
+    const p90 = completionTimes.length > 0
+      ? completionTimes[Math.floor(completionTimes.length * 0.9)]
+      : null;
+
+    // Funnel by entry point
+    const funnelByEntry: Record<string, { started: number; completed: number; rate: string }> = {};
+    for (const e of filtered) {
+      const entry = e.entry?.entryPoint || 'unknown';
+      if (!funnelByEntry[entry]) {
+        funnelByEntry[entry] = { started: 0, completed: 0, rate: '0%' };
+      }
+      const flowKey = e.flowId || `trip-${e.tripId}`;
+      if (e.event === "itinerary_generate_started") {
+        funnelByEntry[entry].started++;
+      }
+      if (e.event === "itinerary_generate_completed") {
+        funnelByEntry[entry].completed++;
+      }
+    }
+    // Calculate rates
+    for (const entry of Object.keys(funnelByEntry)) {
+      const { started, completed } = funnelByEntry[entry];
+      funnelByEntry[entry].rate = started > 0
+        ? `${((completed / started) * 100).toFixed(1)}%`
+        : '0%';
     }
 
     const funnel = {
-      startedTrips: startedTrips.size,
-      completedTrips: completedTrips.size,
+      startedFlows: startedFlows.size,
+      completedFlows: completedFlows.size,
       completionRate:
-        startedTrips.size > 0
-          ? `${((completedTrips.size / startedTrips.size) * 100).toFixed(1)}%`
+        startedFlows.size > 0
+          ? `${((completedFlows.size / startedFlows.size) * 100).toFixed(1)}%`
           : "0.0%",
     };
 
-    // Recent items (optional)
+    const timeToValue = {
+      samplesCount: completionTimes.length,
+      medianMs: median,
+      medianFormatted: median ? `${(median / 1000).toFixed(1)}s` : null,
+      p90Ms: p90,
+      p90Formatted: p90 ? `${(p90 / 1000).toFixed(1)}s` : null,
+    };
+
     const include = includeRecent !== "false";
-    const recent = include
-      ? filtered.slice(-parsedLimit).reverse()
-      : [];
+    const recent = include ? filtered.slice(-parsedLimit).reverse() : [];
 
     return res.json({
       success: true,
       totalStored: tripEvents.length,
       totalMatched: filtered.length,
-      filters: {
-        event: event || null,
-        page: page || null,
-        tripId: parsedTripId || null,
-        since: since || null,
-        until: until || null,
-        limit: parsedLimit,
-      },
       aggregates: {
         byEvent,
         byPage,
         byDestination,
+        byEntryPoint,
+        byDevice,
+        byUtmSource,
       },
       funnel,
-      recent,
+      funnelByEntry,
+      timeToValue,
+      events: recent,
     });
   });
 

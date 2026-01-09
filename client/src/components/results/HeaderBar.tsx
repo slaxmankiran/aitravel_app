@@ -3,8 +3,11 @@
  *
  * Top navigation bar for Trip Results V1.
  * Shows: Logo, destination, meta pills, actions (Edit, Share, Export)
+ *
+ * Performance: Memoized to prevent page-wide cascades.
  */
 
+import React from "react";
 import { Link } from "wouter";
 import { ArrowLeft, Share2, Download, Pencil, Users, Wallet, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -28,7 +31,7 @@ interface HeaderBarProps {
   onExport?: () => void;
 }
 
-export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
+function HeaderBarComponent({ trip, onShare, onExport }: HeaderBarProps) {
   const currencySymbol = getCurrencySymbol(trip.currency ?? undefined);
 
   // Build travel style label
@@ -42,11 +45,16 @@ export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
   const returnTo = encodeURIComponent(`/trips/${trip.id}/results-v1`);
   const editUrl = `/create?editTripId=${trip.id}&returnTo=${returnTo}`;
 
-  const handleShare = () => {
+  const handleShare = async () => {
     if (onShare) {
       onShare();
     } else {
-      navigator.clipboard.writeText(window.location.href);
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+      } catch (err) {
+        // Clipboard API can fail in insecure contexts or without permission
+        console.warn('Failed to copy to clipboard:', err);
+      }
     }
   };
 
@@ -59,7 +67,7 @@ export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
   };
 
   return (
-    <header className="sticky top-0 z-50 bg-slate-900/95 backdrop-blur-sm border-b border-white/10">
+    <header data-section="header-bar" className="sticky top-0 z-50 bg-slate-900/95 backdrop-blur-sm border-b border-white/10">
       <div className="max-w-7xl mx-auto px-4 md:px-6 py-3">
         <div className="flex items-center justify-between">
           {/* Left: Logo + Back */}
@@ -154,3 +162,6 @@ export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
     </header>
   );
 }
+
+// Memoize to prevent page-wide rerenders
+export const HeaderBar = React.memo(HeaderBarComponent);
