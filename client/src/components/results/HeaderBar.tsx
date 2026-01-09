@@ -38,8 +38,9 @@ export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
                            trip.travelStyle === 'custom' ? `${currencySymbol}${trip.budget?.toLocaleString()}` :
                            'Standard';
 
-  // Build edit trip URL with all params preserved
-  const editUrl = `/create?edit=${trip.id}&passport=${encodeURIComponent(trip.passport || '')}&origin=${encodeURIComponent(trip.origin || '')}&destination=${encodeURIComponent(trip.destination || '')}&dates=${encodeURIComponent(trip.dates || '')}&budget=${trip.budget || ''}&currency=${trip.currency || 'USD'}&adults=${trip.adults || 1}&children=${trip.children || 0}&infants=${trip.infants || 0}`;
+  // Build edit trip URL - use editTripId for proper edit mode, include returnTo for flow continuity
+  const returnTo = encodeURIComponent(`/trips/${trip.id}/results-v1`);
+  const editUrl = `/create?editTripId=${trip.id}&returnTo=${returnTo}`;
 
   const handleShare = () => {
     if (onShare) {
@@ -115,9 +116,10 @@ export function HeaderBar({ trip, onShare, onExport }: HeaderBarProps) {
                 variant="ghost"
                 size="sm"
                 className="text-white/70 hover:text-white hover:bg-white/10"
+                title="Opens the form for accurate edits"
               >
                 <Pencil className="w-4 h-4" />
-                <span className="hidden sm:inline ml-1">Edit</span>
+                <span className="hidden sm:inline ml-1">Edit trip details</span>
               </Button>
             </Link>
 

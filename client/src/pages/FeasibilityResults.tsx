@@ -1,4 +1,4 @@
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader2, ArrowLeft, ArrowRight, CheckCircle, AlertTriangle, XCircle, MapPin, Calendar, Users, Wallet, Plane, RefreshCw, Edit3, FileCheck, ShieldCheck, Clock, DollarSign, Ban, Globe, Info } from "lucide-react";
@@ -441,6 +441,10 @@ function CertaintyCheckAnimation() {
 export default function FeasibilityResults() {
   const { id } = useParams();
   const [, setLocation] = useLocation();
+  const searchString = useSearch();
+  const urlParams = new URLSearchParams(searchString);
+  const returnTo = urlParams.get("returnTo"); // Where to go after generation (edit mode)
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [showRiskModal, setShowRiskModal] = useState(false);
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
@@ -491,8 +495,9 @@ export default function FeasibilityResults() {
     },
     onSuccess: () => {
       setIsGenerating(true);
-      // Redirect to V1 results page which will show progress
-      setLocation(`/trips/${id}/results-v1`);
+      // Redirect to returnTo (if from edit mode) or V1 results page
+      const destination = returnTo ? decodeURIComponent(returnTo) : `/trips/${id}/results-v1`;
+      setLocation(destination);
     },
   });
 
@@ -718,7 +723,7 @@ export default function FeasibilityResults() {
               className="space-y-6"
             >
               {/* Certainty Score */}
-              <CertaintyScoreDisplay certaintyScore={certaintyScore} />
+              <CertaintyScoreDisplay certaintyScore={certaintyScore} travelStyle={trip.travelStyle as any} />
 
               {/* Why This Matters - Educational tooltip */}
               <div className="flex justify-center">

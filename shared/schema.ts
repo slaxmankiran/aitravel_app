@@ -112,6 +112,7 @@ export const trips = pgTable("trips", {
 
   // Status
   status: text("status").default("draft"), // 'draft', 'planning', 'booked', 'completed', 'cancelled'
+  createdFrom: text("created_from").default("form"), // 'chat' | 'form' | 'demo' - tracks which UI flow created the trip
 
   // Checklist progress
   checklistProgress: jsonb("checklist_progress"), // { visaApplied: true, flightsBooked: false, ... }

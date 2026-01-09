@@ -266,6 +266,171 @@ Uses a KNOWN_CITIES list to detect actual city names from day titles:
 
 ---
 
+## ChatTripV2 UX Improvements (2026-01-08)
+
+### Status: Implemented and Tested
+
+Mindtrip-style chat planning interface with refined UX patterns.
+
+**Route:** `/chat`
+
+### Changes Implemented
+
+#### 1. Quiet Mode (Priority 1)
+Once user sets destination + passport (isReady), all narrative messages are suppressed.
+
+```tsx
+// ChatTripV2.tsx - One-way transition to quiet mode
+const [enteredQuietMode, setEnteredQuietMode] = useState(false);
+
+useEffect(() => {
+  if (isReady && !enteredQuietMode) {
+    setEnteredQuietMode(true);
+  }
+}, [isReady, enteredQuietMode]);
+
+const addNarrativeMessage = (content: string) => {
+  if (enteredQuietMode) return; // Suppress in quiet mode
+  // ... add message
+};
+```
+
+#### 2. Notes Input (Not Chat)
+Input reframed as preference notes, not chat:
+- Save-on-blur behavior (no send button)
+- Checkmark icon for saving
+- Toast feedback: "Preferences saved"
+- Placeholder: "Optional notes (saved automatically)"
+
+#### 3. TripSummaryPills Stateful Affordance
+Visual state hierarchy:
+| State | Appearance |
+|-------|------------|
+| Urgent (missing required) | Amber pulse, amber border |
+| Complete | Checkmark icon, slate solid |
+| Highlight (passport set) | Emerald background |
+| Default | Dashed outline |
+
+#### 4. Flexible Dates Intent Labels
+Changed from mechanism to intent:
+- "Dates" → "I know my dates"
+- "Flexible" → "I'm flexible"
+- "Month" → "Preferred month (optional)"
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `ChatTripV2.tsx` | Quiet mode, notes input with save-on-blur |
+| `TripSummaryPills.tsx` | State hierarchy (urgent/complete/highlight) |
+| `DatePickerModal.tsx` | Intent-framed labels |
+
+---
+
+## CertaintyBar Improvements (2026-01-08)
+
+### Status: Implemented
+
+Fixed display issues in the expandable visa details panel.
+
+### Fixes
+
+| Issue | Solution |
+|-------|----------|
+| "0 days" for visa-free | Shows "Instant" instead |
+| Empty Requirements section | Shows "No visa required. Just bring your valid passport." for visa-free |
+
+### Code Changes
+
+```tsx
+// CertaintyBar.tsx - Processing time
+function getProcessingTime(processingDays) {
+  if (processingDays.minimum === 0 && processingDays.maximum === 0) {
+    return 'Instant'; // Instead of "0 days"
+  }
+  // ...
+}
+
+// Requirements section
+{visaDetails.documentsRequired?.length > 0 ? (
+  <ul>...</ul>
+) : (
+  <p>{visaDetails.type === 'visa_free'
+    ? 'No visa required. Just bring your valid passport.'
+    : 'No specific documents listed.'}</p>
+)}
+```
+
+---
+
+## Edit Trip Flow (2026-01-08)
+
+### Status: Implemented
+
+Hybrid approach: Edit always opens `/create` form, with tracking for future routing.
+
+### Option A: Edit Opens Form (Shipped)
+
+**HeaderBar.tsx**
+- Button label: "Edit trip details"
+- Tooltip: "Opens the form for accurate edits"
+- URL format: `/create?editTripId=2&returnTo=%2Ftrips%2F2%2Fresults-v1`
+
+**CreateTrip.tsx**
+- Fetches trip by `editTripId` param
+- Shows "Editing: [destination]" header banner
+- Loading state while fetching
+- CTA: "Update & Re-check Feasibility"
+- Passes `returnTo` through feasibility flow
+
+**FeasibilityResults.tsx**
+- Parses `returnTo` param
+- Redirects to `returnTo` after generation
+
+### Option B: Origin Tracking (Shipped)
+
+**Schema Addition**
+```sql
+created_from TEXT DEFAULT 'form'  -- 'chat' | 'form' | 'demo'
+```
+
+**ChatTripV2.tsx**
+- Sets `createdFrom: 'chat'` when creating trips
+
+### Flow Diagram
+
+```
+Results Page → [Edit trip details] → /create?editTripId=2&returnTo=...
+                                           ↓
+                                    CreateTrip (Edit Mode)
+                                    - Shows "Editing: Rome, Italy"
+                                    - Prefills all fields
+                                    - CTA: "Update & Re-check Feasibility"
+                                           ↓
+                                    FeasibilityResults?returnTo=...
+                                           ↓
+                                    Back to Results Page (returnTo)
+```
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `HeaderBar.tsx` | Edit button label, tooltip, URL with returnTo |
+| `CreateTrip.tsx` | Edit mode header, fetch by ID, smart CTA |
+| `FeasibilityResults.tsx` | Parse & use returnTo param |
+| `shared/schema.ts` | Added `created_from` field |
+| `ChatTripV2.tsx` | Sets `createdFrom: 'chat'` |
+
+### Benefits
+
+1. **Consistent UX** - Form is precision tool for editing
+2. **Flow continuity** - returnTo preserves user context
+3. **Analytics ready** - `created_from` enables segmentation
+4. **Future routing** - Can route to different editors based on origin
+
+---
+
 ## Features & Functionalities Overview
 
 ### Core Value Proposition: "Certainty Engine"

@@ -66,6 +66,10 @@ function getVisaLabel(visaType?: VisaDetails['type'], name?: string): string {
 // Format processing time
 function getProcessingTime(processingDays?: VisaDetails['processingDays']): string | null {
   if (!processingDays) return null;
+  // For visa-free (0 days), show "Instant" instead of awkward "0 days"
+  if (processingDays.minimum === 0 && processingDays.maximum === 0) {
+    return 'Instant';
+  }
   if (processingDays.minimum === processingDays.maximum) {
     return `${processingDays.minimum} days`;
   }
@@ -201,14 +205,22 @@ export function CertaintyBar({ trip, className = '' }: CertaintyBarProps) {
                     <FileCheck className="w-4 h-4 text-primary" />
                     <h4 className="text-sm font-medium text-white">Requirements</h4>
                   </div>
-                  <ul className="space-y-1.5 text-sm text-white/70">
-                    {visaDetails.documentsRequired?.slice(0, 4).map((doc, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <CheckCircle className="w-3.5 h-3.5 text-white/40 mt-0.5 shrink-0" />
-                        <span>{doc}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {visaDetails.documentsRequired && visaDetails.documentsRequired.length > 0 ? (
+                    <ul className="space-y-1.5 text-sm text-white/70">
+                      {visaDetails.documentsRequired.slice(0, 4).map((doc, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <CheckCircle className="w-3.5 h-3.5 text-white/40 mt-0.5 shrink-0" />
+                          <span>{doc}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-white/50">
+                      {visaDetails.type === 'visa_free'
+                        ? 'No visa required. Just bring your valid passport.'
+                        : 'No specific documents listed.'}
+                    </p>
+                  )}
                 </div>
 
                 {/* Timing */}

@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight, AlertCircle } from "lucide-react";
+import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight, AlertCircle, Pencil } from "lucide-react";
 import { z } from "zod";
 import { format } from "date-fns";
 import { DateRange } from "react-day-picker";
@@ -1206,10 +1206,12 @@ export default function CreateTrip() {
   // Parse URL parameters
   const urlParams = new URLSearchParams(searchString);
   const urlDestination = urlParams.get("destination");
-  const isEditMode = urlParams.get("edit") !== null;
+  const editTripId = urlParams.get("editTripId"); // New: fetch trip by ID
+  const returnTo = urlParams.get("returnTo"); // New: where to go after save
+  const isEditMode = urlParams.get("edit") !== null || editTripId !== null;
 
-  // Get all edit parameters
-  const editData = isEditMode ? {
+  // Get all edit parameters (legacy URL params support)
+  const editData = urlParams.get("edit") !== null ? {
     passport: urlParams.get("passport") || "",
     origin: urlParams.get("origin") || "",
     destination: urlParams.get("destination") || "",
@@ -1221,6 +1223,40 @@ export default function CreateTrip() {
     infants: urlParams.get("infants") ? Number(urlParams.get("infants")) : 0,
     travelStyle: (urlParams.get("travelStyle") as 'budget' | 'standard' | 'luxury' | 'custom') || "standard",
   } : null;
+
+  // Fetch trip data if editTripId is provided
+  const [editTripData, setEditTripData] = useState<any>(null);
+  const [isLoadingTrip, setIsLoadingTrip] = useState(!!editTripId);
+
+  useEffect(() => {
+    if (editTripId) {
+      setIsLoadingTrip(true);
+      fetch(`/api/trips/${editTripId}`)
+        .then(res => res.json())
+        .then(trip => {
+          setEditTripData(trip);
+          setFormData({
+            passport: trip.passport || "",
+            residence: trip.origin || "",
+            origin: trip.origin || "",
+            destination: trip.destination || "",
+            dates: trip.dates || "",
+            budget: trip.budget,
+            currency: trip.currency || "USD",
+            adults: trip.adults || 1,
+            children: trip.children || 0,
+            infants: trip.infants || 0,
+            groupSize: trip.groupSize || 1,
+            travelStyle: trip.travelStyle || "standard",
+          });
+          setIsLoadingTrip(false);
+        })
+        .catch(err => {
+          console.error("Failed to load trip for editing:", err);
+          setIsLoadingTrip(false);
+        });
+    }
+  }, [editTripId]);
 
   // Initialize state - URL params take priority over sessionStorage
   const [step, setStep] = useState(() => {
@@ -1267,15 +1303,51 @@ export default function CreateTrip() {
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const flowCompletedRef = useRef(false); // Track if user completed the flow
 
   const createTrip = useCreateTrip();
 
   // Track create_started event on initial mount (not edit mode)
   useEffect(() => {
     if (!isEditMode) {
-      trackTripEvent(0, 'create_started', { destination: urlDestination || undefined }, undefined, 'create_trip');
+      trackTripEvent(0, 'create_started', { destination: urlDestination || undefined }, undefined, 'create');
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track abandonment when user leaves without completing
+  useEffect(() => {
+    if (isEditMode) return; // Don't track abandonment for edit mode
+
+    const handleBeforeUnload = () => {
+      if (!flowCompletedRef.current) {
+        const payload = JSON.stringify({
+          event: 'planning_mode_abandoned',
+          ts: new Date().toISOString(),
+          tripId: 0,
+          page: 'create',
+          data: {
+            mode: 'form',
+            lastStep: step,
+            hadDestination: !!formData.destination,
+          }
+        });
+        navigator.sendBeacon('/api/analytics/trip-events', new Blob([payload], { type: 'application/json' }));
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (!flowCompletedRef.current) {
+        trackTripEvent(0, 'planning_mode_abandoned', {
+          mode: 'form',
+          lastStep: step,
+          hadDestination: !!formData.destination,
+        }, {}, 'create');
+      }
+    };
+  }, [step, formData.destination, isEditMode]);
 
   // Persist step to sessionStorage
   useEffect(() => {
@@ -1339,10 +1411,20 @@ export default function CreateTrip() {
       console.log("Submitting trip data:", updatedData);
       createTrip.mutate(updatedData as CreateTripRequest, {
         onSuccess: (response) => {
+          // Mark flow as completed to prevent abandoned tracking
+          flowCompletedRef.current = true;
+
           console.log("Trip created successfully:", response);
           clearFormStorage(); // Clear saved form data on success
-          // Navigate to feasibility check page FIRST (before itinerary generation)
-          setLocation(`/trips/${response.id}/feasibility`);
+
+          // If returnTo is specified (edit mode), go back there after re-checking feasibility
+          // Otherwise navigate to feasibility page for new trips
+          if (returnTo) {
+            // In edit mode, go through feasibility first then back to results
+            setLocation(`/trips/${response.id}/feasibility?returnTo=${encodeURIComponent(returnTo)}`);
+          } else {
+            setLocation(`/trips/${response.id}/feasibility`);
+          }
         },
         onError: (error) => {
           console.error("Trip creation failed:", error);
@@ -1396,8 +1478,31 @@ export default function CreateTrip() {
         {/* Right Side - Form */}
         <div className="flex-1 flex items-center justify-center p-8 bg-white">
           <div className="w-full max-w-lg">
+            {/* Edit Mode Header */}
+            {isEditMode && (
+              <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Pencil className="w-4 h-4 text-amber-600" />
+                  <span className="font-medium text-amber-900">
+                    Editing: {editTripData?.destination || formData.destination || 'Trip'}
+                  </span>
+                </div>
+                <p className="text-sm text-amber-700 mt-1">
+                  Make your changes below. We'll re-check feasibility when you save.
+                </p>
+              </div>
+            )}
+
+            {/* Loading state for edit mode */}
+            {isLoadingTrip && (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
+                <span className="ml-3 text-slate-600">Loading trip details...</span>
+              </div>
+            )}
+
             {/* Progress Bar */}
-            <div className="mb-8">
+            {!isLoadingTrip && <div className="mb-8">
               <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
                 <span className={step >= 1 ? "text-amber-600" : ""}>Profile</span>
                 <span className={step >= 2 ? "text-amber-600" : ""}>Destination</span>
@@ -1458,11 +1563,13 @@ export default function CreateTrip() {
                   origin={(formData as any).origin}
                   destination={(formData as any).destination}
                   dates={(formData as any).dates}
+                  isEditMode={isEditMode}
                 />
               )}
             </AnimatePresence>
           </CardContent>
             </Card>
+            </div>}
           </div>
         </div>
       </main>
@@ -1749,14 +1856,15 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
   );
 }
 
-function Step3Form({ defaultValues, onBack, onSubmit, isLoading, origin, destination, dates }: {
+function Step3Form({ defaultValues, onBack, onSubmit, isLoading, origin, destination, dates, isEditMode }: {
   defaultValues: Step3Data & { currency?: string },
   origin: string,
   onBack: () => void,
   onSubmit: (data: Step3Data & { currency: string }) => void,
   isLoading: boolean,
   destination?: string,
-  dates?: string
+  dates?: string,
+  isEditMode?: boolean
 }) {
   const form = useForm<Step3Data>({
     resolver: zodResolver(step3Schema),
@@ -2133,10 +2241,10 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, origin, destina
           {isLoading ? (
             <>
               <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              Planning...
+              {isEditMode ? "Re-checking..." : "Planning..."}
             </>
           ) : (
-            "Plan My Trip"
+            isEditMode ? "Update & Re-check Feasibility" : "Plan My Trip"
           )}
         </Button>
       </div>
