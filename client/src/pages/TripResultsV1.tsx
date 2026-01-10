@@ -17,7 +17,8 @@ import { useParams, useSearch } from "wouter";
 import { useTrip } from "@/hooks/use-trips";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { Loader2, X, ChevronDown, ChevronUp, Route } from "lucide-react";
+import { motion } from "framer-motion";
+import { Loader2, X, ChevronDown, ChevronUp, Route, Calendar, Users, Sparkles } from "lucide-react";
 
 // Layout components
 import { HeaderBar } from "@/components/results/HeaderBar";
@@ -26,6 +27,12 @@ import { RightRailPanels } from "@/components/results/RightRailPanels";
 import { TripUpdateBanner } from "@/components/results/TripUpdateBanner";
 import { CertaintyExplanationDrawer } from "@/components/results/CertaintyExplanationDrawer";
 import { FixBlockersController } from "@/components/results/FixBlockersController";
+import { DestinationHero } from "@/components/results/DestinationHero";
+import { ResultsBackground } from "@/components/results/ResultsBackground";
+import { ThemeSwitcher } from "@/components/results/ThemeSwitcher";
+
+// Theme system
+import { getResultsTheme, type ResultsTheme } from "@/lib/resultsTheme";
 
 // Failure state components
 import {
@@ -38,6 +45,7 @@ import {
 
 // Existing working components
 import { ItineraryMap } from "@/components/ItineraryMap";
+import { MapPreview } from "@/components/results/MapPreview";
 
 // New DayCardList (Phase 2)
 import { DayCardList, type Itinerary } from "@/components/results-v1/DayCardList";
@@ -46,13 +54,11 @@ import { DayCardList, type Itinerary } from "@/components/results-v1/DayCardList
 import { trackTripEvent, buildTripContext, type TripEventContext } from "@/lib/analytics";
 
 // Verdict system
-import { computeVerdict, buildVerdictInput } from "@/lib/verdict";
-import { VerdictCard } from "@/components/results/VerdictCard";
+import { computeVerdict, buildVerdictInput, getVerdictDisplay, type VerdictResult } from "@/lib/verdict";
 
 // Streaming skeletons
 import {
   CertaintyBarSkeleton,
-  VerdictCardSkeleton,
   ItinerarySkeleton,
   MapSkeleton,
   RightRailSkeleton,
@@ -240,6 +246,122 @@ function DemoBanner() {
 }
 
 // ============================================================================
+// CINEMATIC HERO OVERLAY (for cinematic theme)
+// ============================================================================
+
+interface CinematicHeroOverlayProps {
+  destination: string;
+  dates?: string;
+  travelers?: number;
+  travelStyle?: string;
+  verdictResult?: VerdictResult | null;
+  onShowDetails?: () => void;
+}
+
+/**
+ * Floating hero overlay for cinematic theme.
+ * No background image (canvas provides it) - just glass panel with text.
+ */
+function CinematicHeroOverlay({
+  destination,
+  dates,
+  travelers,
+  travelStyle,
+  verdictResult,
+  onShowDetails,
+}: CinematicHeroOverlayProps) {
+  const display = verdictResult ? getVerdictDisplay(verdictResult.verdict) : null;
+
+  // Format dates
+  const formattedDates = useMemo(() => {
+    if (!dates) return null;
+    const parts = dates.split(' to ');
+    if (parts.length === 2) {
+      try {
+        const start = new Date(parts[0]);
+        const end = new Date(parts[1]);
+        const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+        return `${start.toLocaleDateString('en-US', options)} – ${end.toLocaleDateString('en-US', { ...options, year: 'numeric' })}`;
+      } catch {
+        return dates;
+      }
+    }
+    return dates;
+  }, [dates]);
+
+  const styleDisplay = travelStyle
+    ? travelStyle.charAt(0).toUpperCase() + travelStyle.slice(1)
+    : null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.6, ease: 'easeOut' }}
+      className="relative"
+    >
+      {/* Destination title - large and prominent */}
+      <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-3 drop-shadow-xl">
+        {destination}
+      </h1>
+
+      {/* Metadata row */}
+      <div className="flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm mb-4">
+        {formattedDates && (
+          <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1">
+            <Calendar className="w-4 h-4" />
+            <span>{formattedDates}</span>
+          </div>
+        )}
+        {travelers && (
+          <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1">
+            <Users className="w-4 h-4" />
+            <span>{travelers} traveler{travelers !== 1 ? 's' : ''}</span>
+          </div>
+        )}
+        {styleDisplay && (
+          <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1">
+            <Sparkles className="w-4 h-4" />
+            <span>{styleDisplay}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Verdict badge */}
+      {verdictResult && display && (
+        <motion.button
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.3, duration: 0.4 }}
+          onClick={onShowDetails}
+          className={`group flex items-center gap-3 px-4 py-3 rounded-xl bg-black/30 backdrop-blur-md border hover:bg-black/40 transition-colors cursor-pointer ${display.borderClass}`}
+        >
+          <div
+            className={`w-11 h-11 rounded-full flex items-center justify-center border-2 font-bold text-lg ${display.borderClass} ${display.textClass}`}
+          >
+            {verdictResult.score}
+          </div>
+          <div className="text-left">
+            <div className="flex items-center gap-2">
+              <span className={`font-bold text-lg ${display.textClass}`}>
+                {verdictResult.verdict}
+              </span>
+              <span className="text-white/50 text-sm">
+                {verdictResult.score}% certainty
+              </span>
+            </div>
+            <p className="text-white/70 text-sm">
+              {display.headline}
+            </p>
+          </div>
+          <ChevronDown className="w-4 h-4 text-white/40 group-hover:text-white/60 transition-colors ml-2" />
+        </motion.button>
+      )}
+    </motion.div>
+  );
+}
+
+// ============================================================================
 // MAIN PAGE COMPONENT
 // ============================================================================
 
@@ -415,6 +537,9 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   const [isMapExpanded, setIsMapExpanded] = useState(false);
   const [allDaysExpanded, setAllDaysExpanded] = useState(true);
   const [showDistances, setShowDistances] = useState(false);
+
+  // Theme state - for visual template switching
+  const [theme, setTheme] = useState<ResultsTheme>(() => getResultsTheme());
 
   // Original trip snapshot - for compare plans feature (Item 15)
   const originalTripRef = useRef<TripResponse | null>(null);
@@ -1180,6 +1305,17 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     return computeVerdict(verdictInput);
   }, [workingTrip?.id, workingTrip?.feasibilityReport, workingTrip?.budget, workingTrip?.dates]);
 
+  // Map verdict to background bias for ambient gradient coloring (must be before early returns)
+  const verdictBias = useMemo((): 'go' | 'possible' | 'difficult' | undefined => {
+    if (!verdictResult) return undefined;
+    switch (verdictResult.verdict) {
+      case 'GO': return 'go';
+      case 'POSSIBLE': return 'possible';
+      case 'DIFFICULT': return 'difficult';
+      default: return undefined;
+    }
+  }, [verdictResult?.verdict]);
+
   // Loading state (skip if we have tripDataOverride)
   if (!tripDataOverride && (isLoading || !workingTrip)) {
     return (
@@ -1256,12 +1392,45 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   const currency = workingTrip.currency || 'USD';
 
   return (
-    <div className={`min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 ${isDemo ? 'pt-10' : ''}`}>
-      {/* Demo banner */}
-      {isDemo && <DemoBanner />}
+    <ResultsBackground
+      destination={workingTrip.destination || 'Unknown'}
+      theme={theme}
+      verdictBias={verdictBias}
+    >
+      <div className={`min-h-screen ${isDemo ? 'pt-10' : ''}`}>
+        {/* Demo banner */}
+        {isDemo && <DemoBanner />}
 
-      {/* Sticky headers */}
-      <HeaderBar trip={workingTrip} />
+        {/* Sticky headers */}
+        <HeaderBar trip={workingTrip} />
+
+        {/* Destination Hero - compact overlay with verdict (no background image - canvas provides it) */}
+        {theme !== 'cinematic' && (
+          <div className="max-w-7xl mx-auto px-4 md:px-6 pt-4">
+            <DestinationHero
+              destination={workingTrip.destination || 'Your Destination'}
+              dates={workingTrip.dates || undefined}
+              travelers={workingTrip.groupSize || undefined}
+              travelStyle={workingTrip.travelStyle || undefined}
+              verdictResult={verdictResult}
+              onShowDetails={() => setCertaintyDrawerOpen(true)}
+            />
+          </div>
+        )}
+
+        {/* Cinematic mode: Floating hero overlay instead of card */}
+        {theme === 'cinematic' && (
+          <div className="max-w-7xl mx-auto px-4 md:px-6 pt-6">
+            <CinematicHeroOverlay
+              destination={workingTrip.destination || 'Your Destination'}
+              dates={workingTrip.dates || undefined}
+              travelers={workingTrip.groupSize || undefined}
+              travelStyle={workingTrip.travelStyle || undefined}
+              verdictResult={verdictResult}
+              onShowDetails={() => setCertaintyDrawerOpen(true)}
+            />
+          </div>
+        )}
 
       {/* Change Planner banner - shows delta after a trip change is applied */}
       {changePlanBanner && (
@@ -1312,13 +1481,18 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left column: Itinerary - scrollable container */}
           <section className="lg:col-span-7 lg:max-h-[calc(100vh-80px)] lg:overflow-y-auto lg:overflow-x-hidden scrollbar-dark">
-            {/* Sticky header within scrollable area - solid bg to prevent content showing through */}
+            {/* Sticky header within scrollable area - compact controls only */}
             <div className="sticky top-0 z-10 bg-slate-900 pb-3 -mx-1 px-1">
-              {/* Title row with controls */}
+              {/* Title row with controls - simplified since hero shows destination */}
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-2xl font-display font-bold text-white tracking-tight">
-                  {itinerary?.days?.length || '...'} Days in {workingTrip.destination}
-                </h2>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-semibold text-white">
+                    Your Itinerary
+                  </h2>
+                  <span className="text-sm text-white/50">
+                    {itinerary?.days?.length || '...'} days
+                  </span>
+                </div>
 
                 {/* Controls: Expand/Collapse All + Distance Toggle - compact */}
                 {!isGenerating && itinerary?.days?.length > 0 && (
@@ -1347,31 +1521,16 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                 )}
               </div>
 
-              {/* Narrative subtitle (memoized) */}
+              {/* Narrative subtitle (memoized) - shows travel style and visa info */}
               {narrativeSubtitle && (
-                <p className="text-sm text-white/50 mt-1.5 leading-relaxed line-clamp-2">
+                <p className="text-xs text-white/40 mt-1 leading-relaxed">
                   {narrativeSubtitle}
                 </p>
               )}
             </div>
 
-            {/* Verdict Card - Trip feasibility summary */}
-            {verdictResult ? (
-              <div className="mb-4">
-                <VerdictCard
-                  verdictResult={verdictResult}
-                  onShowDetails={() => setCertaintyDrawerOpen(true)}
-                />
-              </div>
-            ) : isGenerating ? (
-              <VerdictCardSkeleton />
-            ) : null}
-
-            {/* Inline warnings for missing data */}
-            {!isGenerating && itinerary?.days?.length > 0 && !costs && (
-              <InlineWarning type="missing_costs" />
-            )}
-            {!isGenerating && itinerary?.days?.length > 0 && costs && costs.grandTotal === 0 && (
+            {/* Inline warning for missing cost data */}
+            {!isGenerating && itinerary?.days?.length > 0 && (!costs || costs.grandTotal === 0) && (
               <InlineWarning type="missing_costs" />
             )}
 
@@ -1397,6 +1556,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                   activeActivityKey={highlightedLocation}
                   allExpanded={allDaysExpanded}
                   showDistances={showDistances}
+                  destination={workingTrip.destination || undefined}
                   onDayClick={handleDayClick}
                   onActivityClick={handleActivityClick}
                   onActivityHover={handleActivityHover}
@@ -1406,40 +1566,46 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
             )}
           </section>
 
-          {/* Right column: Map + Panels */}
+          {/* Right column: Decision panels + Map preview */}
           <aside className="lg:col-span-5 space-y-4">
-            {/* Sticky container for map */}
-            <div className="lg:sticky lg:top-[140px]">
-              {/* Map - Inline (non-expanded) */}
-              <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden aspect-[4/3] mb-4">
-                {isGenerating || !itinerary?.days?.length ? (
-                  <MapSkeleton />
-                ) : (
-                  <ItineraryMap
-                    trip={workingTrip}
-                    onLocationSelect={handleMapMarkerClick}
-                    highlightedLocation={highlightedLocation}
-                    activeDayIndex={activeDayIndex}
-                    isExpanded={false}
-                    onExpandToggle={handleMapExpandToggle}
-                  />
-                )}
-              </div>
-
-              {/* Panels - show skeleton during initial generation */}
+            {/* Sticky container for panels with subtle background to prevent void */}
+            <div className="lg:sticky lg:top-[140px] bg-slate-800/20 rounded-2xl p-3 -m-3">
+              {/* Panels first - show skeleton during initial generation */}
               {isGenerating && !costs ? (
                 <RightRailSkeleton />
               ) : (
                 <RightRailPanels
                   trip={workingTrip}
                   costs={costs}
+                  verdictResult={verdictResult}
                   onTripUpdate={handleTripUpdate}
                   onChatOpen={handleChatOpen}
+                  onShowDetails={() => setCertaintyDrawerOpen(true)}
+                  onFixBlockers={() => {
+                    // Scroll to action items section
+                    const el = document.querySelector('[data-section="action-items"]');
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
                   hasLocalChanges={false}
                   hasUndoableChange={false}
                   onUndo={() => {}}
                   isDemo={isDemo}
                   blockerDelta={blockerDeltaUI}
+                />
+              )}
+
+              {/* Map Preview - compact card with expand CTA */}
+              {!isGenerating && itinerary?.days?.length > 0 && (
+                <MapPreview
+                  daysCount={itinerary.days.length}
+                  locationsCount={itinerary.days.reduce((acc: number, day: any) =>
+                    acc + (day.activities?.length || 0), 0
+                  )}
+                  destination={workingTrip.destination || 'Your trip'}
+                  selectedDay={activeDayIndex}
+                  onExpand={handleMapExpandToggle}
+                  onDayChange={(day) => setActiveDayIndex(day)}
+                  className="mt-4"
                 />
               )}
             </div>
@@ -1526,10 +1692,12 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
         />
       )}
 
-      {/* Dev indicator */}
-      <div className="fixed bottom-4 right-4 bg-primary/90 text-white text-xs px-3 py-1.5 rounded-full shadow-lg z-50">
-        V1 Preview
+      {/* Theme Switcher - dev only, allows switching visual templates */}
+      <ThemeSwitcher
+        currentTheme={theme}
+        onThemeChange={setTheme}
+      />
       </div>
-    </div>
+    </ResultsBackground>
   );
 }

@@ -112,9 +112,9 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
 
   return (
     <div className={`sticky top-[56px] z-40 ${className}`}>
-      {/* Main bar */}
-      <div className="bg-slate-800/95 backdrop-blur-sm border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-2.5">
+      {/* Main bar - lighter visual weight */}
+      <div className="bg-slate-900/80 backdrop-blur-sm border-b border-white/5">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-2">
           <div className="flex items-center justify-between gap-4">
             {/* Left: Certainty + Visa info */}
             <div className="flex items-center gap-4 md:gap-6 overflow-x-auto scrollbar-hide">

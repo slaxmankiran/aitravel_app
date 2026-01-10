@@ -25,35 +25,27 @@ const TripChat = lazy(() =>
 import type { TripResponse } from "@shared/schema";
 import type { CostViewModel, BudgetStatus } from "@/hooks/useTripViewModel";
 import type { BlockerDeltaUI } from "@/lib/blockerDeltas";
+import type { VerdictResult } from "@/lib/verdict";
+import { getBudgetSuggestions } from "@/lib/budgetSuggestions";
+import { DecisionStack } from "./DecisionStack";
 
 // ============================================================================
 // BUDGET ALERT COMPONENT
 // ============================================================================
 
 interface BudgetAlertProps {
-  overByAmount: number;
-  overByPercent: number;
-  budgetStatus: BudgetStatus;
-  currency: string;
+  costs: CostViewModel;
   /** Callback when a suggestion chip is clicked */
   onSuggestion?: (prompt: string) => void;
 }
 
-// Map chip labels to AI prompts
-const SUGGESTION_PROMPTS: Record<string, string> = {
-  'Fewer days': 'Reduce the trip by 1-2 days to lower costs. Keep the best experiences.',
-  'Budget hotels': 'Switch all accommodations to budget-friendly hotels or hostels. Keep the same itinerary.',
-  'Skip flights': 'Remove internal flights and use ground transport (bus, train) instead to save money.',
-  'Cheaper hotels': 'Find more affordable hotel options while keeping the same locations and dates.',
-  'Fewer activities': 'Remove some paid activities and suggest free alternatives. Focus on must-see attractions.',
-  'Local food': 'Replace expensive restaurants with local street food and casual eateries to reduce food costs.',
-};
-
 /**
  * Prominent alert when trip is over budget.
- * Shows amount over and suggestion chips for common fixes.
+ * Shows amount over and data-driven suggestion chips based on cost breakdown.
  */
-function BudgetAlert({ overByAmount, overByPercent, budgetStatus, currency, onSuggestion }: BudgetAlertProps) {
+function BudgetAlert({ costs, onSuggestion }: BudgetAlertProps) {
+  const { budgetStatus, overByAmount, overByPercent, currency } = costs;
+
   if (budgetStatus !== 'over20' && budgetStatus !== 'over50') {
     return null;
   }
@@ -64,18 +56,8 @@ function BudgetAlert({ overByAmount, overByPercent, budgetStatus, currency, onSu
   const textClass = isSevere ? 'text-red-400' : 'text-amber-400';
   const iconClass = isSevere ? 'text-red-400' : 'text-amber-400';
 
-  // Suggestion chips based on severity
-  const suggestions = isSevere
-    ? [
-        { label: 'Fewer days', icon: '📅' },
-        { label: 'Budget hotels', icon: '🏨' },
-        { label: 'Skip flights', icon: '🚌' },
-      ]
-    : [
-        { label: 'Cheaper hotels', icon: '🏨' },
-        { label: 'Fewer activities', icon: '🎯' },
-        { label: 'Local food', icon: '🍜' },
-      ];
+  // Get data-driven suggestions based on cost breakdown
+  const suggestions = getBudgetSuggestions(costs, budgetStatus);
 
   return (
     <div className={`${bgClass} ${borderClass} border rounded-xl p-4 mb-4`}>
@@ -86,22 +68,26 @@ function BudgetAlert({ overByAmount, overByPercent, budgetStatus, currency, onSu
             {isSevere ? 'Significantly over budget' : 'Over budget'}
           </p>
           <p className="text-sm text-white/60 mt-0.5">
-            {currency}{Math.abs(Math.round(overByAmount)).toLocaleString()} over ({Math.round(overByPercent)}%)
+            {currency}{Math.abs(Math.round(overByAmount)).toLocaleString()} over ({Math.min(Math.round(overByPercent), 999)}%{overByPercent > 999 ? '+' : ''})
           </p>
 
-          {/* Suggestion chips */}
+          {/* Data-driven suggestion chips */}
           <div className="flex flex-wrap gap-2 mt-3">
             {suggestions.map((s) => (
               <button
                 key={s.label}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white/10 text-white/70 hover:bg-white/20 hover:text-white transition-colors"
-                onClick={() => {
-                  const prompt = SUGGESTION_PROMPTS[s.label] || s.label;
-                  onSuggestion?.(prompt);
-                }}
+                onClick={() => onSuggestion?.(s.prompt)}
+                title={s.percentOfTotal > 0 ? `${s.percentOfTotal}% of trip cost` : undefined}
               >
                 <span>{s.icon}</span>
                 {s.label}
+                {/* Show percentage badge for major drivers */}
+                {s.percentOfTotal >= 25 && (
+                  <span className="ml-0.5 text-[10px] text-white/40">
+                    ({s.percentOfTotal}%)
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -114,8 +100,11 @@ function BudgetAlert({ overByAmount, overByPercent, budgetStatus, currency, onSu
 interface RightRailPanelsProps {
   trip: TripResponse;
   costs: CostViewModel | null;
+  verdictResult?: VerdictResult | null;
   onTripUpdate: (data: { itinerary?: any; budgetBreakdown?: any }) => void;
   onChatOpen?: () => void;
+  onShowDetails?: () => void;
+  onFixBlockers?: () => void;
   hasLocalChanges: boolean;
   hasUndoableChange: boolean;
   onUndo: () => void;
@@ -128,8 +117,11 @@ interface RightRailPanelsProps {
 function RightRailPanelsComponent({
   trip,
   costs,
+  verdictResult,
   onTripUpdate,
   onChatOpen,
+  onShowDetails,
+  onFixBlockers,
   hasLocalChanges,
   hasUndoableChange,
   onUndo,
@@ -144,12 +136,6 @@ function RightRailPanelsComponent({
 
   // Track if we've consumed the forceOpen to prevent reopening on every render
   const forceOpenConsumedRef = useRef(false);
-
-  // Get currency symbol for display
-  const currencySymbol = costs?.currency === 'EUR' ? '€' :
-    costs?.currency === 'GBP' ? '£' :
-    costs?.currency === 'JPY' ? '¥' :
-    costs?.currency === 'INR' ? '₹' : '$';
 
   // Handle budget suggestion chip click
   const handleBudgetSuggestion = (prompt: string) => {
@@ -173,13 +159,23 @@ function RightRailPanelsComponent({
 
   return (
     <div className="space-y-4">
-      {/* Budget Alert - Show prominently when over budget */}
-      {costs && (costs.budgetStatus === 'over20' || costs.budgetStatus === 'over50') && (
-        <BudgetAlert
-          overByAmount={costs.overByAmount}
-          overByPercent={costs.overByPercent}
+      {/* Decision Stack - Combined verdict + budget + visa + safety */}
+      {verdictResult && costs && (
+        <DecisionStack
+          trip={trip}
+          verdictResult={verdictResult}
           budgetStatus={costs.budgetStatus}
-          currency={currencySymbol}
+          budgetOverBy={costs.overByAmount}
+          currency={costs.currency}
+          onFixBlockers={onFixBlockers}
+          onShowDetails={onShowDetails}
+        />
+      )}
+
+      {/* Budget Alert - Show only if no DecisionStack (fallback) */}
+      {!verdictResult && costs && (costs.budgetStatus === 'over20' || costs.budgetStatus === 'over50') && (
+        <BudgetAlert
+          costs={costs}
           onSuggestion={isDemo ? undefined : handleBudgetSuggestion}
         />
       )}
