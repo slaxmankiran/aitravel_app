@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useLocation, useSearch, Link } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -11,10 +11,11 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight } from "lucide-react";
+import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight, AlertCircle, Pencil } from "lucide-react";
 import { z } from "zod";
 import { format } from "date-fns";
 import { DateRange } from "react-day-picker";
+import { trackTripEvent } from "@/lib/analytics";
 
 // Major world cities for autocomplete
 const MAJOR_CITIES = [
@@ -429,9 +430,57 @@ const COUNTRIES = [
 // Splitting the schema for steps
 const step1Schema = insertTripSchema.pick({ passport: true, residence: true });
 const step2Schema = insertTripSchema.pick({ origin: true, destination: true, dates: true });
+// Travel style options with budget multipliers and visual details
+const TRAVEL_STYLES = [
+  {
+    value: 'budget',
+    label: 'Budget',
+    icon: '🎒',
+    color: 'emerald',
+    tagline: 'Smart & Savvy',
+    features: ['Hostels & budget hotels', 'Street food & local eats', 'Public transport', 'Free attractions'],
+    multiplier: 0.6
+  },
+  {
+    value: 'standard',
+    label: 'Comfort',
+    icon: '🧳',
+    color: 'blue',
+    tagline: 'Best of Both',
+    features: ['3-4 star hotels', 'Local restaurants', 'Mix of transport', 'Popular attractions'],
+    multiplier: 1.0
+  },
+  {
+    value: 'luxury',
+    label: 'Luxury',
+    icon: '✨',
+    color: 'amber',
+    tagline: 'Premium Experience',
+    features: ['5-star resorts', 'Fine dining', 'Private transfers', 'VIP experiences'],
+    multiplier: 2.5
+  },
+  {
+    value: 'custom',
+    label: 'Custom',
+    icon: '⚙️',
+    color: 'slate',
+    tagline: 'Set Your Own',
+    features: ['Enter your exact budget', 'Full control', 'Any travel style'],
+    multiplier: 1.0
+  },
+] as const;
+
+type TravelStyleValue = 'budget' | 'standard' | 'luxury' | 'custom';
+
 // Custom step3 schema that treats empty/NaN children/infants as 0
+// Budget is only required when travelStyle is 'custom'
 const step3Schema = z.object({
-  budget: z.number().min(1, "Budget is required"),
+  travelStyle: z.enum(['budget', 'standard', 'luxury', 'custom']).default('standard'),
+  budget: z.preprocess((val) => {
+    // Convert undefined/null/NaN to 1 (placeholder for non-custom styles)
+    if (val === "" || val === null || val === undefined || Number.isNaN(val)) return 1;
+    return Number(val);
+  }, z.number().min(0).default(1)),
   groupSize: z.number().min(1).default(1),
   adults: z.number().min(1, "At least 1 adult is required").default(1),
   children: z.preprocess((val) => {
@@ -442,11 +491,63 @@ const step3Schema = z.object({
     if (val === "" || val === null || val === undefined || Number.isNaN(val)) return 0;
     return Number(val);
   }, z.number().min(0).default(0)),
+}).refine((data) => {
+  // Only require budget >= 1 when travelStyle is 'custom'
+  if (data.travelStyle === 'custom' && data.budget < 1) {
+    return false;
+  }
+  return true;
+}, {
+  message: "Budget is required for custom travel style",
+  path: ["budget"],
 });
+
+// Detect if origin and destination are in the same country/region for domestic pricing
+function isDomesticTravel(origin: string, destination: string): boolean {
+  const o = origin.toLowerCase();
+  const d = destination.toLowerCase();
+
+  // India domestic
+  const indianCities = ['india', 'delhi', 'mumbai', 'bangalore', 'bengaluru', 'hyderabad', 'chennai', 'kolkata', 'goa', 'jaipur', 'agra', 'kerala', 'pune', 'ahmedabad', 'lucknow', 'chandigarh', 'kochi', 'thiruvananthapuram', 'varanasi', 'udaipur', 'jodhpur', 'amritsar', 'shimla', 'manali', 'rishikesh', 'darjeeling', 'gangtok', 'leh', 'srinagar', 'mysore', 'hampi', 'ooty', 'munnar', 'alleppey', 'coorg', 'pondicherry'];
+  if (indianCities.some(c => o.includes(c)) && indianCities.some(c => d.includes(c))) return true;
+
+  // Thailand domestic
+  const thaiCities = ['thailand', 'bangkok', 'phuket', 'chiang mai', 'pattaya', 'krabi', 'koh samui', 'koh phangan', 'koh tao', 'ayutthaya', 'sukhothai'];
+  if (thaiCities.some(c => o.includes(c)) && thaiCities.some(c => d.includes(c))) return true;
+
+  // Vietnam domestic
+  const vietnamCities = ['vietnam', 'hanoi', 'ho chi minh', 'saigon', 'da nang', 'hoi an', 'nha trang', 'hue', 'sapa', 'halong'];
+  if (vietnamCities.some(c => o.includes(c)) && vietnamCities.some(c => d.includes(c))) return true;
+
+  // Indonesia domestic
+  const indonesiaCities = ['indonesia', 'bali', 'jakarta', 'yogyakarta', 'lombok', 'ubud', 'denpasar', 'surabaya', 'bandung'];
+  if (indonesiaCities.some(c => o.includes(c)) && indonesiaCities.some(c => d.includes(c))) return true;
+
+  return false;
+}
+
+// Detect South Asia region for very affordable pricing
+function isSouthAsiaDestination(destination: string): boolean {
+  const d = destination.toLowerCase();
+  const southAsiaCities = ['india', 'delhi', 'mumbai', 'bangalore', 'bengaluru', 'hyderabad', 'chennai', 'kolkata', 'goa', 'jaipur', 'agra', 'kerala', 'pune', 'nepal', 'kathmandu', 'pokhara', 'sri lanka', 'colombo', 'bangladesh', 'dhaka', 'pakistan', 'karachi', 'lahore'];
+  return southAsiaCities.some(c => d.includes(c));
+}
 
 // Minimum budget per person per day (USD equivalent) by destination type
 // These are realistic estimates including accommodation, food, local transport, activities
 const BUDGET_MINIMUMS = {
+  // South Asia domestic - extremely affordable (₹800-1200/day)
+  southAsiaDomestic: {
+    perPersonPerDay: 10,   // ~₹830/day for budget travel
+    transportCost: 12,     // ~₹1000 for train/bus round trip
+    destinations: [] as string[]  // Detected via isDomesticTravel
+  },
+  // South Asia international - still affordable
+  southAsiaInternational: {
+    perPersonPerDay: 25,   // ~₹2000/day including better hotels
+    transportCost: 150,    // Budget flights from abroad
+    destinations: [] as string[]
+  },
   veryExpensive: {
     perPersonPerDay: 250,  // Reduced from 350 - budget-conscious estimate
     flightCost: 1200,      // Reduced from 1400
@@ -571,25 +672,37 @@ const BUDGET_MINIMUMS = {
   default: { perPersonPerDay: 100, flightCost: 600 }  // Reduced defaults
 };
 
-// Calculate minimum realistic budget including flights
-function calculateMinimumBudget(destination: string, numDays: number, adults: number, children: number, infants: number): number {
+// Calculate minimum realistic budget including transport
+function calculateMinimumBudget(origin: string, destination: string, numDays: number, adults: number, children: number, infants: number): number {
   const destLower = destination.toLowerCase();
 
   let perPersonPerDay = BUDGET_MINIMUMS.default.perPersonPerDay;
-  let flightCostPerAdult = BUDGET_MINIMUMS.default.flightCost;
+  let transportCostPerAdult = BUDGET_MINIMUMS.default.flightCost;
 
-  if (BUDGET_MINIMUMS.veryExpensive.destinations.some(d => destLower.includes(d))) {
+  // Priority 1: Check for domestic travel in affordable regions
+  const isDomestic = isDomesticTravel(origin, destination);
+  const isSouthAsia = isSouthAsiaDestination(destination);
+
+  if (isDomestic && isSouthAsia) {
+    // South Asia domestic - very affordable (₹800-1200/day total)
+    perPersonPerDay = BUDGET_MINIMUMS.southAsiaDomestic.perPersonPerDay;
+    transportCostPerAdult = BUDGET_MINIMUMS.southAsiaDomestic.transportCost;
+  } else if (isSouthAsia) {
+    // Coming to South Asia from abroad
+    perPersonPerDay = BUDGET_MINIMUMS.southAsiaInternational.perPersonPerDay;
+    transportCostPerAdult = BUDGET_MINIMUMS.southAsiaInternational.transportCost;
+  } else if (BUDGET_MINIMUMS.veryExpensive.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.veryExpensive.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.veryExpensive.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.veryExpensive.flightCost;
   } else if (BUDGET_MINIMUMS.expensive.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.expensive.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.expensive.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.expensive.flightCost;
   } else if (BUDGET_MINIMUMS.moderate.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.moderate.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.moderate.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.moderate.flightCost;
   } else if (BUDGET_MINIMUMS.budget.destinations.some(d => destLower.includes(d))) {
     perPersonPerDay = BUDGET_MINIMUMS.budget.perPersonPerDay;
-    flightCostPerAdult = BUDGET_MINIMUMS.budget.flightCost;
+    transportCostPerAdult = BUDGET_MINIMUMS.budget.flightCost;
   }
 
   // Adults: full cost, Children: 70%, Infants: 20%
@@ -597,15 +710,15 @@ function calculateMinimumBudget(destination: string, numDays: number, adults: nu
   const childDailyCost = children * perPersonPerDay * 0.7 * numDays;
   const infantDailyCost = infants * perPersonPerDay * 0.2 * numDays;
 
-  // Flight costs (round-trip): Adults full price, Children 75%, Infants 10%
-  const adultFlightCost = adults * flightCostPerAdult;
-  const childFlightCost = children * flightCostPerAdult * 0.75;
-  const infantFlightCost = infants * flightCostPerAdult * 0.1;
+  // Transport costs: Adults full price, Children 75%, Infants 10%
+  const adultTransportCost = adults * transportCostPerAdult;
+  const childTransportCost = children * transportCostPerAdult * 0.75;
+  const infantTransportCost = infants * transportCostPerAdult * 0.1;
 
   const totalDailyCosts = adultDailyCost + childDailyCost + infantDailyCost;
-  const totalFlightCosts = adultFlightCost + childFlightCost + infantFlightCost;
+  const totalTransportCosts = adultTransportCost + childTransportCost + infantTransportCost;
 
-  return Math.round(totalDailyCosts + totalFlightCosts);
+  return Math.round(totalDailyCosts + totalTransportCosts);
 }
 
 // Parse date range to get number of days
@@ -754,7 +867,15 @@ function CountrySelect({
   );
 }
 
-// City Autocomplete Component
+// City Autocomplete Component - Hybrid: Local + Nominatim API
+interface NominatimResult {
+  city: string;
+  country: string;
+  code: string;
+  displayName: string;
+  source: 'local' | 'api';
+}
+
 function CityAutocomplete({
   value,
   onChange,
@@ -766,17 +887,88 @@ function CityAutocomplete({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState(value || "");
+  const [apiResults, setApiResults] = useState<NominatimResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const filteredCities = useMemo(() => {
+  // Fast local filtering (instant)
+  const localResults = useMemo(() => {
     if (!search || search.length < 2) return [];
     const searchLower = search.toLowerCase();
     return MAJOR_CITIES.filter(c =>
       c.city.toLowerCase().includes(searchLower) ||
       c.country.toLowerCase().includes(searchLower)
-    ).slice(0, 10);
+    ).slice(0, 8).map(c => ({
+      city: c.city,
+      country: c.country,
+      code: c.code,
+      displayName: `${c.city}, ${c.country}`,
+      source: 'local' as const
+    }));
   }, [search]);
+
+  // Merge local and API results, deduplicating by display name
+  const allResults = useMemo(() => {
+    const localNames = new Set(localResults.map(r => r.displayName.toLowerCase()));
+    const uniqueApiResults = apiResults.filter(
+      r => !localNames.has(r.displayName.toLowerCase())
+    );
+    return [...localResults, ...uniqueApiResults].slice(0, 10);
+  }, [localResults, apiResults]);
+
+  // Nominatim API search (debounced, for unknown cities)
+  const searchNominatim = useCallback(async (query: string) => {
+    if (query.length < 3) return;
+
+    // Only search API if local results are insufficient
+    const localCount = MAJOR_CITIES.filter(c =>
+      c.city.toLowerCase().includes(query.toLowerCase()) ||
+      c.country.toLowerCase().includes(query.toLowerCase())
+    ).length;
+
+    if (localCount >= 5) {
+      setApiResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&featuretype=city&addressdetails=1`,
+        {
+          headers: { 'User-Agent': 'VoyageAI Travel Planner' }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const results: NominatimResult[] = data
+          .filter((item: any) => item.address?.city || item.address?.town || item.address?.village || item.name)
+          .map((item: any) => {
+            const cityName = item.address?.city || item.address?.town || item.address?.village || item.name;
+            const country = item.address?.country || '';
+            const countryCode = item.address?.country_code?.toUpperCase() || '';
+            return {
+              city: cityName,
+              country,
+              code: countryCode,
+              displayName: `${cityName}, ${country}`,
+              source: 'api' as const
+            };
+          })
+          .filter((r: NominatimResult) => r.city && r.country);
+
+        setApiResults(results);
+      }
+    } catch (error) {
+      console.log('Nominatim search failed:', error);
+      setApiResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -795,6 +987,27 @@ function CityAutocomplete({
     }
   }, [value]);
 
+  // Debounced API search
+  useEffect(() => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    if (search.length >= 3) {
+      searchTimeoutRef.current = setTimeout(() => {
+        searchNominatim(search);
+      }, 300); // 300ms debounce
+    } else {
+      setApiResults([]);
+    }
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [search, searchNominatim]);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
     setSearch(newValue);
@@ -802,10 +1015,9 @@ function CityAutocomplete({
     setIsOpen(newValue.length >= 2);
   };
 
-  const handleCitySelect = (city: typeof MAJOR_CITIES[0]) => {
-    const fullName = `${city.city}, ${city.country}`;
-    setSearch(fullName);
-    onChange(fullName);
+  const handleCitySelect = (result: NominatimResult) => {
+    setSearch(result.displayName);
+    onChange(result.displayName);
     setIsOpen(false);
   };
 
@@ -822,10 +1034,13 @@ function CityAutocomplete({
           placeholder={placeholder}
           className="w-full h-12 pl-10 pr-3 bg-white border border-slate-200 rounded-md hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
         />
+        {isSearching && (
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary animate-spin" />
+        )}
       </div>
 
       <AnimatePresence>
-        {isOpen && filteredCities.length > 0 && (
+        {isOpen && (allResults.length > 0 || isSearching) && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -833,23 +1048,34 @@ function CityAutocomplete({
             className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden"
           >
             <div className="max-h-60 overflow-y-auto">
-              {filteredCities.map((city, idx) => (
+              {allResults.map((result, idx) => (
                 <button
-                  key={`${city.city}-${city.country}-${idx}`}
+                  key={`${result.city}-${result.country}-${idx}`}
                   type="button"
-                  onClick={() => handleCitySelect(city)}
+                  onClick={() => handleCitySelect(result)}
                   className="w-full px-3 py-3 text-left flex items-center gap-3 hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0"
                 >
-                  <MapPin className="h-4 w-4 text-slate-400 flex-shrink-0" />
-                  <div>
-                    <span className="font-medium">{city.city}</span>
-                    <span className="text-slate-500">, {city.country}</span>
+                  <MapPin className={`h-4 w-4 flex-shrink-0 ${result.source === 'api' ? 'text-emerald-500' : 'text-slate-400'}`} />
+                  <div className="flex-1">
+                    <span className="font-medium">{result.city}</span>
+                    <span className="text-slate-500">, {result.country}</span>
+                    {result.source === 'api' && (
+                      <span className="ml-2 text-xs text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">Dynamic</span>
+                    )}
                   </div>
                 </button>
               ))}
+              {isSearching && allResults.length === 0 && (
+                <div className="px-4 py-3 text-center text-slate-500 text-sm flex items-center justify-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Searching cities worldwide...
+                </div>
+              )}
             </div>
             <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-500">
-              Only major cities are available
+              {apiResults.length > 0
+                ? "💡 Search any city worldwide"
+                : "Type 3+ characters to search more cities"}
             </div>
           </motion.div>
         )}
@@ -980,10 +1206,12 @@ export default function CreateTrip() {
   // Parse URL parameters
   const urlParams = new URLSearchParams(searchString);
   const urlDestination = urlParams.get("destination");
-  const isEditMode = urlParams.get("edit") !== null;
+  const editTripId = urlParams.get("editTripId"); // New: fetch trip by ID
+  const returnTo = urlParams.get("returnTo"); // New: where to go after save
+  const isEditMode = urlParams.get("edit") !== null || editTripId !== null;
 
-  // Get all edit parameters
-  const editData = isEditMode ? {
+  // Get all edit parameters (legacy URL params support)
+  const editData = urlParams.get("edit") !== null ? {
     passport: urlParams.get("passport") || "",
     origin: urlParams.get("origin") || "",
     destination: urlParams.get("destination") || "",
@@ -993,7 +1221,81 @@ export default function CreateTrip() {
     adults: urlParams.get("adults") ? Number(urlParams.get("adults")) : 1,
     children: urlParams.get("children") ? Number(urlParams.get("children")) : 0,
     infants: urlParams.get("infants") ? Number(urlParams.get("infants")) : 0,
+    travelStyle: (urlParams.get("travelStyle") as 'budget' | 'standard' | 'luxury' | 'custom') || "standard",
   } : null;
+
+  // Fetch trip data if editTripId is provided
+  const [editTripData, setEditTripData] = useState<any>(null);
+  const [isLoadingTrip, setIsLoadingTrip] = useState(!!editTripId);
+
+  // Store original trip snapshot for diff calculation (edit mode only)
+  const originalTripRef = useRef<{
+    destination?: string;
+    dates?: string;
+    groupSize?: number;
+    travelStyle?: string;
+    budget?: number;
+    passport?: string;
+    origin?: string;
+  } | null>(null);
+
+  // Helper: Pick only comparable fields from trip
+  const pickComparableFields = (trip: any) => ({
+    destination: trip.destination,
+    dates: trip.dates,
+    groupSize: trip.groupSize,
+    travelStyle: trip.travelStyle,
+    budget: trip.budget,
+    passport: trip.passport,
+    origin: trip.origin,
+  });
+
+  // Helper: Calculate which fields changed
+  const diffTrip = (original: typeof originalTripRef.current, updated: any): string[] => {
+    if (!original) return [];
+    const changes: string[] = [];
+    const keys = ['destination', 'dates', 'groupSize', 'travelStyle', 'budget', 'passport', 'origin'] as const;
+    for (const key of keys) {
+      if (original[key] !== updated[key]) {
+        changes.push(key);
+      }
+    }
+    return changes;
+  };
+
+  useEffect(() => {
+    if (editTripId) {
+      setIsLoadingTrip(true);
+      fetch(`/api/trips/${editTripId}`)
+        .then(res => res.json())
+        .then(trip => {
+          setEditTripData(trip);
+          // Store original snapshot for diff (only on first load)
+          if (!originalTripRef.current) {
+            originalTripRef.current = pickComparableFields(trip);
+          }
+          setFormData({
+            passport: trip.passport || "",
+            residence: trip.origin || "",
+            origin: trip.origin || "",
+            destination: trip.destination || "",
+            dates: trip.dates || "",
+            budget: trip.budget,
+            currency: trip.currency || "USD",
+            adults: trip.adults || 1,
+            children: trip.children || 0,
+            infants: trip.infants || 0,
+            groupSize: trip.groupSize || 1,
+            travelStyle: trip.travelStyle || "standard",
+          });
+          setIsLoadingTrip(false);
+        })
+        .catch(err => {
+          console.error("Failed to load trip for editing:", err);
+          setIsLoadingTrip(false);
+        });
+    }
+  }, [editTripId]);
 
   // Initialize state - URL params take priority over sessionStorage
   const [step, setStep] = useState(() => {
@@ -1028,6 +1330,7 @@ export default function CreateTrip() {
         children: editData.children,
         infants: editData.infants,
         groupSize: editData.adults + editData.children + editData.infants,
+        travelStyle: editData.travelStyle,
       };
     }
     // If URL has destination only (from explore page), use it
@@ -1039,8 +1342,51 @@ export default function CreateTrip() {
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const flowCompletedRef = useRef(false); // Track if user completed the flow
 
   const createTrip = useCreateTrip();
+
+  // Track create_started event on initial mount (not edit mode)
+  useEffect(() => {
+    if (!isEditMode) {
+      trackTripEvent(0, 'create_started', { destination: urlDestination || undefined }, undefined, 'create');
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track abandonment when user leaves without completing
+  useEffect(() => {
+    if (isEditMode) return; // Don't track abandonment for edit mode
+
+    const handleBeforeUnload = () => {
+      if (!flowCompletedRef.current) {
+        const payload = JSON.stringify({
+          event: 'planning_mode_abandoned',
+          ts: new Date().toISOString(),
+          tripId: 0,
+          page: 'create',
+          data: {
+            mode: 'form',
+            lastStep: step,
+            hadDestination: !!formData.destination,
+          }
+        });
+        navigator.sendBeacon('/api/analytics/trip-events', new Blob([payload], { type: 'application/json' }));
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (!flowCompletedRef.current) {
+        trackTripEvent(0, 'planning_mode_abandoned', {
+          mode: 'form',
+          lastStep: step,
+          hadDestination: !!formData.destination,
+        }, {}, 'create');
+      }
+    };
+  }, [step, formData.destination, isEditMode]);
 
   // Persist step to sessionStorage
   useEffect(() => {
@@ -1051,6 +1397,31 @@ export default function CreateTrip() {
   useEffect(() => {
     sessionStorage.setItem('createTrip_formData', JSON.stringify(formData));
   }, [formData]);
+
+  // PRELOAD DESTINATION IMAGE: Start fetching as soon as user enters destination
+  // This ensures the image is cached and ready when they reach the TripDetails page
+  useEffect(() => {
+    const destination = formData.destination;
+    if (!destination || destination.length < 3) return;
+
+    // Debounce the API call to avoid too many requests while typing
+    const timer = setTimeout(() => {
+      console.log(`[Preload] Starting AI image fetch for: ${destination}`);
+      fetch(`/api/destination-image?destination=${encodeURIComponent(destination)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.imageUrl) {
+            console.log(`[Preload] Cached image for ${destination}: ${data.landmark}`);
+            // Preload the actual image into browser cache
+            const img = new Image();
+            img.src = data.imageUrl;
+          }
+        })
+        .catch(err => console.log('[Preload] Image prefetch failed:', err));
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [formData.destination]);
 
   // Clear sessionStorage on successful submission (will be called from handleNext)
   const clearFormStorage = () => {
@@ -1079,9 +1450,27 @@ export default function CreateTrip() {
       console.log("Submitting trip data:", updatedData);
       createTrip.mutate(updatedData as CreateTripRequest, {
         onSuccess: (response) => {
+          // Mark flow as completed to prevent abandoned tracking
+          flowCompletedRef.current = true;
+
           console.log("Trip created successfully:", response);
           clearFormStorage(); // Clear saved form data on success
-          setLocation(`/trips/${response.id}`);
+
+          // If returnTo is specified (edit mode), go back there after re-checking feasibility
+          // Otherwise navigate to feasibility page for new trips
+          if (returnTo) {
+            // Calculate what changed for the "What Changed?" banner
+            const changes = diffTrip(originalTripRef.current, updatedData);
+            const changesParam = changes.length > 0 ? `&changes=${encodeURIComponent(JSON.stringify(changes))}` : '';
+
+            // Build returnTo with updated flag and changes
+            const updatedReturnTo = `${decodeURIComponent(returnTo)}?updated=1${changesParam}`;
+
+            // In edit mode, go through feasibility first then back to results
+            setLocation(`/trips/${response.id}/feasibility?returnTo=${encodeURIComponent(updatedReturnTo)}`);
+          } else {
+            setLocation(`/trips/${response.id}/feasibility`);
+          }
         },
         onError: (error) => {
           console.error("Trip creation failed:", error);
@@ -1093,69 +1482,107 @@ export default function CreateTrip() {
   };
 
   return (
-    <div className="min-h-screen relative flex flex-col items-center justify-center p-4 overflow-hidden">
-      {/* Clean Navigation - No border */}
-      <nav className="fixed top-0 w-full z-50 bg-black/10 backdrop-blur-sm">
-        <div className="container mx-auto px-4 h-14 flex items-center justify-between">
-          <Link href="/">
-            <div className="flex items-center gap-2 cursor-pointer group">
-              <div className="w-8 h-8 rounded-lg bg-white/20 backdrop-blur-md flex items-center justify-center text-white font-bold font-display shadow-lg group-hover:bg-white/30 transition-colors">
-                V
-              </div>
-              <span className="font-display font-semibold text-lg tracking-tight text-white/90 group-hover:text-white transition-colors">VoyageAI</span>
-            </div>
-          </Link>
-        </div>
-      </nav>
+    <div className="min-h-screen flex bg-slate-50">
+      {/* Main Content - Split Layout */}
+      <main className="flex-1 flex min-h-screen">
+        {/* Left Side - Destination Image */}
+        <div className="hidden lg:block w-1/2 relative overflow-hidden">
+          {/* Stunning Background Video */}
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="absolute w-full h-full object-cover"
+            poster="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920&q=80"
+          >
+            <source src="https://videos.pexels.com/video-files/3571264/3571264-uhd_2560_1440_30fps.mp4" type="video/mp4" />
+          </video>
+          <div className="absolute inset-0 bg-gradient-to-r from-black/30 to-black/10" />
 
-      {/* Stunning Timelapse Video Background */}
-      <div className="absolute inset-0 overflow-hidden">
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          className="absolute w-full h-full object-cover"
-          poster="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1920&q=80"
-        >
-          {/* Stunning aerial timelapse - mountains and clouds */}
-          <source src="https://videos.pexels.com/video-files/3571264/3571264-uhd_2560_1440_30fps.mp4" type="video/mp4" />
-        </video>
-        {/* Subtle dark overlay for readability - minimal color tint */}
-        <div className="absolute inset-0 bg-black/30" />
-      </div>
-
-      <div className="w-full max-w-lg relative z-10">
-        {/* Progress Bar */}
-        <div className="mb-8">
-          <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-white/70 mb-2">
-            <span className={step >= 1 ? "text-cyan-300" : ""}>Profile</span>
-            <span className={step >= 2 ? "text-cyan-300" : ""}>Destination</span>
-            <span className={step >= 3 ? "text-cyan-300" : ""}>Budget</span>
-          </div>
-          <div className="h-2 bg-white/20 rounded-full overflow-hidden backdrop-blur-sm">
+          {/* Inspirational Text Overlay */}
+          <div className="absolute inset-0 flex flex-col justify-end p-12">
             <motion.div
-              className="h-full bg-gradient-to-r from-cyan-400 to-primary"
-              initial={{ width: "33%" }}
-              animate={{ width: `${(step / 3) * 100}%` }}
-              transition={{ duration: 0.3 }}
-            />
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <h1 className="text-5xl font-display font-bold text-white leading-tight mb-4">
+                Where to
+                <br />
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-300 to-orange-400">
+                  next?
+                </span>
+              </h1>
+              <p className="text-lg text-white/80 max-w-md">
+                Tell us your dream destination and we'll analyze visa requirements, safety, and create your perfect itinerary.
+              </p>
+            </motion.div>
           </div>
         </div>
 
-        <Card className="shadow-2xl border-0 overflow-hidden backdrop-blur-xl bg-white/95 rounded-2xl">
-          <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-5 text-white">
-            <h2 className="text-xl font-display font-bold">
-              {step === 1 && "Traveler Profile"}
-              {step === 2 && "Trip Details"}
-              {step === 3 && "Budget & Travelers"}
-            </h2>
-            <p className="text-slate-400 text-sm mt-1">
-              {step === 1 && "Tell us about your citizenship for visa checks."}
-              {step === 2 && "Where and when do you want to go?"}
-              {step === 3 && "Set your budget and group size for the perfect trip."}
-            </p>
-          </div>
+        {/* Right Side - Form */}
+        <div className="flex-1 flex items-center justify-center p-8 bg-white">
+          <div className="w-full max-w-lg">
+            {/* Edit Mode Header */}
+            {isEditMode && (
+              <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                <div className="flex items-center gap-2">
+                  <Pencil className="w-4 h-4 text-amber-600" />
+                  <span className="font-medium text-amber-900">
+                    Editing: {editTripData?.destination || formData.destination || 'Trip'}
+                  </span>
+                </div>
+                <p className="text-sm text-amber-700 mt-1">
+                  Make your changes below. We'll re-check feasibility when you save.
+                </p>
+              </div>
+            )}
+
+            {/* Loading state for edit mode */}
+            {isLoadingTrip && (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
+                <span className="ml-3 text-slate-600">Loading trip details...</span>
+              </div>
+            )}
+
+            {/* Progress Bar + Form (hidden while loading trip data) */}
+            {!isLoadingTrip && (
+              <>
+                <div className="mb-8">
+                  <div className="flex justify-between text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                    <span className={step >= 1 ? "text-amber-600" : ""}>Profile</span>
+                    <span className={step >= 2 ? "text-amber-600" : ""}>Destination</span>
+                    <span className={step >= 3 ? "text-amber-600" : ""}>Budget</span>
+                  </div>
+                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-amber-400 to-orange-500"
+                      initial={{ width: "33%" }}
+                      animate={{ width: `${(step / 3) * 100}%` }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  </div>
+                </div>
+
+                {/* Form Header */}
+            <div className="mb-6">
+              <h2 className="text-2xl font-display font-bold text-slate-900">
+                {step === 1 && "Traveler Profile"}
+                {step === 2 && "Trip Details"}
+                {step === 3 && "Budget & Travelers"}
+              </h2>
+              <p className="text-slate-500 text-sm mt-1">
+                {step === 1 && "Tell us about your citizenship for visa checks."}
+                {step === 2 && "Where and when do you want to go?"}
+                {step === 3 && "Set your budget and group size for the perfect trip."}
+              </p>
+            </div>
+
+            {/* Form Card */}
+            <Card className="shadow-lg border border-slate-100 overflow-hidden rounded-2xl">
+              <div className="h-1 bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500" />
           
           <CardContent className="p-6 pt-8">
             <AnimatePresence mode="wait">
@@ -1181,14 +1608,20 @@ export default function CreateTrip() {
                   onBack={() => setStep(2)}
                   onSubmit={handleNext}
                   isLoading={isSubmitting || createTrip.isPending}
+                  origin={(formData as any).origin}
                   destination={(formData as any).destination}
                   dates={(formData as any).dates}
+                  isEditMode={isEditMode}
                 />
               )}
             </AnimatePresence>
           </CardContent>
-        </Card>
-      </div>
+            </Card>
+              </>
+            )}
+          </div>
+        </div>
+      </main>
     </div>
   );
 }
@@ -1306,19 +1739,45 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
   }, [dateRange, form]);
 
   const [dateError, setDateError] = useState<string | null>(null);
+  const [dateWarning, setDateWarning] = useState<string | null>(null);
+
+  // Calculate trip duration for display
+  const tripDuration = dateRange?.from && dateRange?.to
+    ? Math.ceil((dateRange.to.getTime() - dateRange.from.getTime()) / (1000 * 60 * 60 * 24)) + 1
+    : 0;
 
   // Custom submit handler with date validation
   const handleSubmit = (data: Step2Data) => {
     // Validate dates are not in the past
     if (areDatesInPast(data.dates)) {
       setDateError("Travel dates must be in the future. Please select upcoming dates.");
+      setDateWarning(null);
       return;
     }
     // Validate end date is selected
     if (!dateRange?.to) {
       setDateError("Please select both start and end dates for your trip.");
+      setDateWarning(null);
       return;
     }
+
+    // Calculate trip duration (dateRange.from is guaranteed to exist if dateRange.to exists)
+    const duration = Math.ceil((dateRange.to.getTime() - dateRange.from!.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+    // Block extremely unrealistic trips (60+ days)
+    if (duration > 60) {
+      setDateError(`A ${duration}-day trip is too long for detailed planning. Please select 60 days or less.`);
+      setDateWarning(null);
+      return;
+    }
+
+    // Warn for very long trips (21-60 days) but allow proceeding
+    if (duration > 21) {
+      setDateWarning(`${duration} days is a long trip! The AI will generate a varied itinerary, but consider breaking it into multiple shorter trips for better planning.`);
+    } else {
+      setDateWarning(null);
+    }
+
     setDateError(null);
     onSubmit(data);
   };
@@ -1338,7 +1797,7 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
           onChange={(value) => form.setValue("origin", value)}
           placeholder="Your departure city (e.g. New York, London)..."
         />
-        <p className="text-xs text-muted-foreground">Used to estimate flight costs for your trip.</p>
+        <p className="text-xs text-muted-foreground">Used to estimate travel costs for your trip.</p>
       </div>
 
       <div className="space-y-2">
@@ -1416,10 +1875,24 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
         </Popover>
         <input type="hidden" {...form.register("dates")} />
         {form.formState.errors.dates && <p className="text-destructive text-sm">{form.formState.errors.dates.message}</p>}
+        {/* Trip duration display */}
+        {tripDuration > 0 && (
+          <p className={`text-sm ${tripDuration > 21 ? 'text-amber-600' : 'text-muted-foreground'}`}>
+            {tripDuration} day{tripDuration > 1 ? 's' : ''} trip
+            {tripDuration > 14 && tripDuration <= 21 && ' (extended trip)'}
+            {tripDuration > 21 && tripDuration <= 60 && ' (very long trip)'}
+          </p>
+        )}
         {dateError && (
           <p className="text-destructive text-sm flex items-center gap-1">
             <span className="inline-block w-4 h-4 rounded-full bg-destructive/20 text-destructive text-xs flex items-center justify-center">!</span>
             {dateError}
+          </p>
+        )}
+        {dateWarning && !dateError && (
+          <p className="text-amber-600 text-sm flex items-center gap-1 bg-amber-50 p-2 rounded-lg">
+            <span className="inline-block w-4 h-4 rounded-full bg-amber-100 text-amber-600 text-xs flex items-center justify-center">!</span>
+            {dateWarning}
           </p>
         )}
       </div>
@@ -1432,17 +1905,19 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
   );
 }
 
-function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, dates }: {
+function Step3Form({ defaultValues, onBack, onSubmit, isLoading, origin, destination, dates, isEditMode }: {
   defaultValues: Step3Data & { currency?: string },
+  origin: string,
   onBack: () => void,
   onSubmit: (data: Step3Data & { currency: string }) => void,
   isLoading: boolean,
   destination?: string,
-  dates?: string
+  dates?: string,
+  isEditMode?: boolean
 }) {
   const form = useForm<Step3Data>({
     resolver: zodResolver(step3Schema),
-    defaultValues: defaultValues || { budget: 2000, groupSize: 1, adults: 1, children: 0, infants: 0 }
+    defaultValues: defaultValues || { travelStyle: 'standard', budget: 2000, groupSize: 1, adults: 1, children: 0, infants: 0 }
   });
 
   const [currency, setCurrency] = useState(defaultValues?.currency || "USD");
@@ -1450,6 +1925,10 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
   const [budgetError, setBudgetError] = useState<string | null>(null);
   const [budgetWarning, setBudgetWarning] = useState<string | null>(null);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
+  const [travelStyle, setTravelStyle] = useState<TravelStyleValue>(
+    (defaultValues?.travelStyle as TravelStyleValue) || 'standard'
+  );
+  const [showCustomBudget, setShowCustomBudget] = useState(defaultValues?.travelStyle === 'custom');
 
   // Fetch live exchange rates on mount (using free API)
   useEffect(() => {
@@ -1522,19 +2001,26 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
   const budget = (typeof rawBudget === 'number' && !Number.isNaN(rawBudget)) ? rawBudget : 0;
   const totalTravelers = adults + children + infants;
 
-  // Calculate minimum budget based on destination, duration, and travelers
+  // Calculate minimum budget based on origin, destination, duration, and travelers
   const numDays = getNumDaysFromDateString(dates || "");
   const minimumBudget = useMemo(() => {
-    return calculateMinimumBudget(destination || "", numDays, adults, children, infants);
-  }, [destination, numDays, adults, children, infants]);
+    return calculateMinimumBudget(origin || "", destination || "", numDays, adults, children, infants);
+  }, [origin, destination, numDays, adults, children, infants]);
 
   // Update groupSize when traveler counts change
   useEffect(() => {
     form.setValue("groupSize", totalTravelers);
   }, [adults, children, infants, totalTravelers, form]);
 
-  // Validate budget in real-time
+  // Validate budget in real-time - ONLY for Custom budget (not Budget/Standard/Luxury)
   useEffect(() => {
+    // Only validate when Custom is selected - AI handles Budget/Standard/Luxury automatically
+    if (!showCustomBudget) {
+      setBudgetError(null);
+      setBudgetWarning(null);
+      return;
+    }
+
     if (budget > 0 && minimumBudget > 0) {
       // Convert minimumBudget to selected currency using live rates
       const multiplier = getExchangeRate(currency);
@@ -1551,12 +2037,13 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
         setBudgetWarning(null);
       }
     }
-  }, [budget, minimumBudget, currency, selectedCurrency, totalTravelers, numDays]);
+  }, [budget, minimumBudget, currency, selectedCurrency, totalTravelers, numDays, showCustomBudget]);
 
   // Custom submit handler that includes currency
   const handleFormSubmit = (data: Step3Data) => {
-    // Block submission if budget is way too low
-    if (budgetError) {
+    // Block submission only for Custom if budget is way too low
+    // Budget/Standard/Luxury don't need validation - AI handles costs
+    if (showCustomBudget && budgetError) {
       return;
     }
     onSubmit({ ...data, currency });
@@ -1632,17 +2119,16 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
         <input type="hidden" {...form.register("groupSize", { valueAsNumber: true })} />
       </div>
 
-      {/* Budget Section - After Travelers */}
-      <div className="space-y-2">
-        <Label htmlFor="budget">Total Budget for {totalTravelers} Traveler{totalTravelers > 1 ? 's' : ''}</Label>
-        <div className="flex gap-2">
-          {/* Compact Currency Dropdown */}
-          <div className="relative">
+      {/* Travel Style & Budget Section - Combined for better UX */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <Label className="text-base font-medium">Travel Style & Budget</Label>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">Currency:</span>
             <select
               value={currency}
               onChange={(e) => handleCurrencyChange(e.target.value)}
-              className="h-12 pl-3 pr-8 text-sm font-medium bg-slate-50 border border-slate-200 rounded-lg appearance-none cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-              style={{ minWidth: '90px' }}
+              className="h-8 pl-2 pr-6 text-xs font-medium bg-slate-50 border border-slate-200 rounded-lg appearance-none cursor-pointer hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-primary/20"
             >
               {CURRENCIES.map((c) => (
                 <option key={c.code} value={c.code}>
@@ -1650,39 +2136,151 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
                 </option>
               ))}
             </select>
-            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-          </div>
-
-          {/* Budget Input */}
-          <div className="relative flex-1">
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-medium text-sm">
-              {selectedCurrency?.symbol || '$'}
-            </div>
-            <Input
-              id="budget"
-              type="number"
-              placeholder="5000"
-              className="pl-8 h-12"
-              {...form.register("budget", { valueAsNumber: true })}
-            />
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Total budget for {totalTravelers} traveler{totalTravelers > 1 ? 's' : ''}{numDays > 0 ? `, ${numDays} days` : ''}.
-          {minimumBudget > 0 && numDays > 0 && (
-            <> Estimated minimum: <span className="text-emerald-600 font-semibold">{selectedCurrency?.symbol || '$'}{Math.round(minimumBudget * getExchangeRate(currency)).toLocaleString()}</span> (based on your selections)</>
+
+        {/* Travel Style Cards - 2x2 Grid - No upfront budget estimates */}
+        <div className="grid grid-cols-2 gap-3">
+          {TRAVEL_STYLES.map((style) => {
+            const isSelected = travelStyle === style.value;
+
+            // Color classes based on style
+            const colorClasses = {
+              emerald: { border: 'border-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700', badge: 'bg-emerald-100 text-emerald-700' },
+              blue: { border: 'border-blue-500', bg: 'bg-blue-50', text: 'text-blue-700', badge: 'bg-blue-100 text-blue-700' },
+              amber: { border: 'border-amber-500', bg: 'bg-amber-50', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-700' },
+              slate: { border: 'border-slate-500', bg: 'bg-slate-50', text: 'text-slate-700', badge: 'bg-slate-100 text-slate-700' },
+            }[style.color];
+
+            return (
+              <motion.button
+                key={style.value}
+                type="button"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  setTravelStyle(style.value as TravelStyleValue);
+                  form.setValue('travelStyle', style.value as TravelStyleValue);
+
+                  if (style.value === 'custom') {
+                    setShowCustomBudget(true);
+                  } else {
+                    setShowCustomBudget(false);
+                    // Set a placeholder budget - AI will calculate realistic costs based on travel style
+                    // This is just a marker; actual costs are determined by AI based on destination + style
+                    form.setValue('budget', 1); // Minimal placeholder, AI calculates actual costs
+                  }
+                }}
+                className={`relative p-4 rounded-xl border-2 transition-all text-left ${
+                  isSelected
+                    ? `${colorClasses?.border} ${colorClasses?.bg} shadow-lg`
+                    : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+                }`}
+              >
+                {/* Selected indicator */}
+                {isSelected && (
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    className={`absolute -top-2 -right-2 w-6 h-6 rounded-full ${colorClasses?.badge} flex items-center justify-center shadow-sm`}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </motion.div>
+                )}
+
+                <div className="flex items-start gap-3">
+                  <div className="text-2xl">{style.icon}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`font-semibold ${isSelected ? colorClasses?.text : 'text-slate-800'}`}>
+                        {style.label}
+                      </span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${isSelected ? colorClasses?.badge : 'bg-slate-100 text-slate-500'}`}>
+                        {style.tagline}
+                      </span>
+                    </div>
+
+                    {/* Features list - no budget estimate shown */}
+                    <ul className="mt-2 space-y-0.5">
+                      {style.features.slice(0, 3).map((feature, idx) => (
+                        <li key={idx} className="text-xs text-slate-500 flex items-center gap-1">
+                          <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+                          {feature}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </motion.button>
+            );
+          })}
+        </div>
+
+        {/* Custom Budget Input - Only shown when Custom is selected */}
+        <AnimatePresence>
+          {showCustomBudget && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <Label htmlFor="budget" className="text-sm font-medium">
+                  Enter Your Total Budget for {totalTravelers} Traveler{totalTravelers > 1 ? 's' : ''} ({numDays} days)
+                </Label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-semibold">
+                      {selectedCurrency?.symbol || '$'}
+                    </div>
+                    <Input
+                      id="budget"
+                      type="number"
+                      placeholder="Enter your budget"
+                      className="pl-8 h-12 text-lg font-semibold bg-white"
+                      {...form.register("budget", { valueAsNumber: true })}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">
+                  AI will create a realistic itinerary that fits your budget. If budget is tight, it will suggest cheaper alternatives like free activities, budget stays, or shorter trips.
+                </p>
+              </div>
+            </motion.div>
           )}
-        </p>
-        {form.formState.errors.budget && <p className="text-destructive text-sm">{form.formState.errors.budget.message}</p>}
+        </AnimatePresence>
+
+        {/* Budget/Standard/Luxury - AI handles costs silently, no message needed */}
+
+        {/* Hidden input for non-custom styles to ensure budget is submitted */}
+        {!showCustomBudget && (
+          <input type="hidden" {...form.register("budget", { valueAsNumber: true })} />
+        )}
+
+        {/* Validation Messages */}
+        {form.formState.errors.budget && (
+          <p className="text-destructive text-sm">{form.formState.errors.budget.message}</p>
+        )}
         {budgetError && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-red-700 text-sm font-medium">{budgetError}</p>
-          </div>
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2"
+          >
+            <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+            <p className="text-red-700 text-sm">{budgetError}</p>
+          </motion.div>
         )}
         {budgetWarning && !budgetError && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2"
+          >
+            <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
             <p className="text-amber-700 text-sm">{budgetWarning}</p>
-          </div>
+          </motion.div>
         )}
       </div>
 
@@ -1692,10 +2290,10 @@ function Step3Form({ defaultValues, onBack, onSubmit, isLoading, destination, da
           {isLoading ? (
             <>
               <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              Planning...
+              {isEditMode ? "Re-checking..." : "Planning..."}
             </>
           ) : (
-            "Plan My Trip"
+            isEditMode ? "Update & Re-check Feasibility" : "Plan My Trip"
           )}
         </Button>
       </div>

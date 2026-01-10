@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, jsonb, varchar, real, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, jsonb, varchar, real, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql, relations } from "drizzle-orm";
@@ -94,8 +94,10 @@ export const trips = pgTable("trips", {
   interests: text("interests").array(), // ['museums', 'beaches', 'nightlife', 'food']
 
   // AI Outputs
-  feasibilityStatus: text("feasibility_status").default("pending"),
+  feasibilityStatus: text("feasibility_status").default("pending"), // 'pending' | 'yes' | 'no' | 'warning' | 'error'
   feasibilityReport: jsonb("feasibility_report"),
+  feasibilityError: text("feasibility_error"), // Error message if feasibilityStatus === 'error'
+  feasibilityLastRunAt: timestamp("feasibility_last_run_at"), // When the last feasibility check started
   itinerary: jsonb("itinerary"),
 
   // Template/Sharing
@@ -110,6 +112,7 @@ export const trips = pgTable("trips", {
 
   // Status
   status: text("status").default("draft"), // 'draft', 'planning', 'booked', 'completed', 'cancelled'
+  createdFrom: text("created_from").default("form"), // 'chat' | 'form' | 'demo' - tracks which UI flow created the trip
 
   // Checklist progress
   checklistProgress: jsonb("checklist_progress"), // { visaApplied: true, flightsBooked: false, ... }
@@ -169,6 +172,37 @@ export const tripConversations = pgTable("trip_conversations", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+// ============================================================================
+// APPLIED PLANS (for shareable change plan links)
+// ============================================================================
+
+/**
+ * Stores applied plan summaries for shareable links.
+ * When a user applies a change plan, we persist a compact summary.
+ * Shared links can restore the banner state from this table.
+ */
+export const tripAppliedPlans = pgTable("trip_applied_plans", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }).notNull(),
+  changeId: text("change_id").notNull(),
+  source: text("source").notNull(), // "fix_blocker" | "edit_trip" | "undo" | "quick_chip"
+  appliedAt: timestamp("applied_at").defaultNow().notNull(),
+
+  // Plan summary (compact, no full trip snapshot)
+  detectedChanges: jsonb("detected_changes").notNull().default([]),
+  deltaSummary: jsonb("delta_summary").notNull(),
+  failures: jsonb("failures"), // nullable
+  uiInstructions: jsonb("ui_instructions"), // nullable
+
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  // Unique constraint: one plan per tripId + changeId
+  tripChangeUnique: uniqueIndex("trip_applied_plans_trip_change_uniq").on(table.tripId, table.changeId),
+  // Index for recent plans queries
+  tripAppliedIdx: index("trip_applied_plans_trip_applied_idx").on(table.tripId, table.appliedAt),
+}));
 
 // ============================================================================
 // PRICE ALERTS
@@ -392,15 +426,193 @@ export type WeatherCache = typeof weatherCache.$inferSelect;
 // ============================================================================
 
 export interface FeasibilityReport {
+  schemaVersion: number; // Current: 2. Prevents silent breakage when fields change.
   overall: "yes" | "no" | "warning";
   score: number;
   breakdown: {
+    accessibility?: { status: "accessible" | "restricted" | "impossible"; reason: string };
     visa: { status: "ok" | "issue"; reason: string };
     budget: { status: "ok" | "tight" | "impossible"; estimatedCost: number; reason: string };
     safety: { status: "safe" | "caution" | "danger"; reason: string };
   };
   summary: string;
+  visaDetails?: VisaDetails; // Server-generated visa details (single source of truth)
+  generatedAt: string; // ISO date when this analysis was run
+  expiresAt?: string; // ISO date when this analysis should be refreshed (e.g., +7 days)
 }
+
+// Current feasibility report schema version
+export const FEASIBILITY_SCHEMA_VERSION = 2;
+
+// Alternative destination (shown when HARD_BLOCKER)
+export interface Alternative {
+  destination: string;
+  destinationCode: string;
+  city: string;
+  flag: string;
+  visaType: 'visa_free' | 'voa' | 'e_visa' | 'embassy';  // Internal enum for logic/analytics
+  visaStatus: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa';  // User-facing display
+  visaLabel: string;
+  processingDays: number;
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+  // Curation metadata - controls product behavior
+  isCurated: boolean;                              // First-class product switch
+  curationLevel?: 'manual' | 'auto';               // How curation was determined
+  lastReviewedAt?: string;                         // ISO date of last human review
+  // Behavior tied to isCurated:
+  // - Non-curated: rough cost range, short explanation, certainty cap ≤75, affiliate optional
+  // - Curated: tight cost range, rich explanation, certainty cap ≤90, affiliate yes
+}
+
+// Legacy alias for backward compatibility
+export type { Alternative as AlternativeDestination };
+
+// ============================================================================
+// MVP CERTAINTY ENGINE TYPES
+// ============================================================================
+
+export interface VisaTiming {
+  daysUntilTrip: number;
+  businessDaysUntilTrip: number;
+  processingDaysNeeded: number;
+  hasEnoughTime: boolean;
+  urgency: 'ok' | 'tight' | 'risky' | 'impossible';
+  recommendation: string;
+}
+
+export interface VisaDetails {
+  required: boolean;
+  type: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa' | 'not_allowed';
+  name?: string;
+  processingDays: {
+    minimum: number;
+    maximum: number;
+    expedited?: number;
+  };
+  cost: {
+    government: number;
+    service?: number;
+    expedited?: number;
+    currency: string;
+    totalPerPerson: number;
+    breakdownLabel?: string; // e.g., "Gov't fee + service charge"
+    accuracy: 'curated' | 'estimated';
+  };
+  documentsRequired: string[];
+  applicationMethod: 'online' | 'embassy' | 'vfs' | 'on_arrival';
+  applicationUrl?: string;
+  timing?: VisaTiming;
+  affiliateLink?: string;
+  lastVerified?: string; // ISO date string when data was last verified
+  sources?: Array<{ title: string; url: string }>;
+  confidenceLevel: 'high' | 'medium' | 'low';
+}
+
+export interface CertaintyScoreBreakdown {
+  accessibility: {
+    score: number; // 0-25
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+  };
+  visa: {
+    score: number; // 0-30
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+    timingOk: boolean;
+  };
+  safety: {
+    score: number; // 0-25
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+  };
+  budget: {
+    score: number; // 0-20
+    status: 'ok' | 'warning' | 'blocker';
+    reason: string;
+  };
+}
+
+export interface CertaintyScore {
+  score: number; // 0-100
+  verdict: 'GO' | 'POSSIBLE' | 'DIFFICULT' | 'NO';
+  summary: string;
+  breakdown: CertaintyScoreBreakdown;
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface EntryCosts {
+  visa: {
+    required: boolean;
+    costPerPerson: number;
+    totalCost: number;
+    note: string;
+    affiliateLink?: string;
+  };
+  insurance: {
+    required: boolean;
+    recommended: boolean;
+    estimatedCost: number;
+    note: string;
+    affiliateLink?: string;
+  };
+  total: number;
+}
+
+export interface ActionItem {
+  id: string;
+  title: string;
+  description: string;
+  priority: 'high' | 'medium' | 'low';
+  dueInfo?: string; // "5-7 days processing"
+  estimatedCost?: string; // "₹3,500/person"
+  affiliateLink?: string;
+  affiliateLabel?: string;
+  completed: boolean;
+}
+
+export interface TrueCostBreakdown {
+  currency: string;
+  currencySymbol: string;
+  tripCosts: {
+    flights: { total: number; perPerson: number; note: string };
+    accommodation: { total: number; perNight: number; nights: number };
+    activities: { total: number; note: string };
+    food: { total: number; perDay: number };
+    localTransport: { total: number; note: string };
+    subtotal: number;
+  };
+  entryCosts: EntryCosts;
+  grandTotal: number;
+  perPerson: number;
+  budgetStatus: 'under' | 'on_track' | 'over';
+  budgetDifference?: number;
+}
+
+// Affiliate links configuration
+export const AFFILIATE_LINKS = {
+  visa: {
+    ivisa: 'https://www.ivisa.com/?utm_source=voyageai&utm_medium=affiliate',
+    visaHQ: 'https://www.visahq.com/?utm_source=voyageai',
+  },
+  insurance: {
+    safetywing: 'https://safetywing.com/nomad-insurance/?referenceID=voyageai',
+    worldNomads: 'https://www.worldnomads.com/?affiliate=voyageai',
+  },
+  flights: {
+    skyscanner: 'https://www.skyscanner.com/?associate=voyageai',
+    googleFlights: 'https://www.google.com/travel/flights',
+  },
+  hotels: {
+    booking: 'https://www.booking.com/?aid=voyageai',
+    agoda: 'https://www.agoda.com/?cid=voyageai',
+  },
+  activities: {
+    viator: 'https://www.viator.com/?pid=voyageai',
+    getYourGuide: 'https://www.getyourguide.com/?partner_id=voyageai',
+  }
+} as const;
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -482,3 +694,270 @@ export const SUBSCRIPTION_TIERS = {
     }
   }
 } as const;
+
+// ============================================================================
+// CHANGE PLANNER AGENT TYPES
+// See: docs/CHANGE_PLANNER_AGENT_SPEC.md for full specification
+// ============================================================================
+
+/**
+ * Fields that can be changed by the user after seeing results
+ */
+export type ChangeableField =
+  | "dates"
+  | "budget"
+  | "origin"
+  | "destination"
+  | "passport"
+  | "travelers"
+  | "preferences"
+  | "constraints";
+
+/**
+ * Modules that can be recomputed based on changes
+ */
+export type RecomputableModule =
+  | "visa"
+  | "flights"
+  | "hotels"
+  | "itinerary"
+  | "certainty"
+  | "action_items";
+
+/**
+ * Severity of a detected change
+ */
+export type ChangeSeverity = "low" | "medium" | "high";
+
+/**
+ * UI sections that can be highlighted after changes
+ */
+export type HighlightableSection = "ActionItems" | "CostBreakdown" | "Itinerary" | "VisaCard";
+
+/**
+ * Toast notification tones
+ */
+export type ToastTone = "success" | "warning" | "error";
+
+/**
+ * Banner tones for change results
+ */
+export type BannerTone = "green" | "amber" | "red";
+
+/**
+ * User trip input for change detection
+ */
+export interface UserTripInput {
+  dates: {
+    start: string;  // ISO date
+    end: string;    // ISO date
+    duration: number;
+  };
+  budget: {
+    total: number;
+    perPerson?: number;
+    currency: string;
+  };
+  origin: {
+    city: string;
+    airport?: string;
+    country: string;
+  };
+  destination: {
+    city: string;
+    country: string;
+  };
+  passport: string;  // Country code
+  travelers: {
+    total: number;
+    adults: number;
+    children: number;
+    infants: number;
+  };
+  preferences: {
+    pace: "relaxed" | "moderate" | "packed";
+    interests: string[];
+    hotelClass: "budget" | "mid" | "luxury";
+  };
+  constraints: string[];
+}
+
+/**
+ * A single detected change between previous and current input
+ */
+export interface DetectedChange {
+  field: ChangeableField;
+  before: any;
+  after: any;
+  impact: RecomputableModule[];
+  severity: ChangeSeverity;
+}
+
+/**
+ * Plan for what to recompute
+ */
+export interface RecomputePlan {
+  modulesToRecompute: RecomputableModule[];
+  cacheKeysToInvalidate: string[];
+  apiCalls: Array<{
+    name: string;
+    endpointKey: string;
+    dependsOn?: string[];
+    priority: 1 | 2 | 3;
+  }>;
+}
+
+/**
+ * Summary of deltas between before and after states
+ */
+export interface DeltaSummary {
+  certainty: {
+    before: number;
+    after: number;
+    reason: string;
+  };
+  totalCost: {
+    before: number;
+    after: number;
+    delta: number;
+    notes: string[];
+  };
+  blockers: {
+    before: number;
+    after: number;
+    resolved: string[];
+    new: string[];
+  };
+  itinerary: {
+    dayCountBefore: number;
+    dayCountAfter: number;
+    majorDiffs: string[];
+  };
+}
+
+/**
+ * Instructions for the UI on how to render the change results
+ */
+export interface UIInstructions {
+  banner: {
+    tone: BannerTone;
+    title: string;
+    subtitle?: string;
+  };
+  highlightSections: HighlightableSection[];
+  toasts?: Array<{
+    tone: ToastTone;
+    message: string;
+  }>;
+}
+
+/**
+ * Updated action item from change planner
+ */
+export interface ChangePlannerActionItem {
+  key: string;
+  label: string;
+  category: "required" | "recommended";
+  type: string;
+  completed: boolean;
+  reason?: string;
+}
+
+/**
+ * Updated data from the change planner
+ */
+export interface UpdatedData {
+  visa?: any;
+  flights?: any;
+  hotels?: any;
+  itinerary?: any;
+  actionItems: ChangePlannerActionItem[];
+  costBreakdown?: any;
+}
+
+/**
+ * Fix option suggestion when blockers exist
+ */
+export interface FixOption {
+  title: string;
+  changePatch: Partial<UserTripInput>;
+  expectedOutcome: {
+    certaintyAfter: number;
+    blockersAfter: number;
+    costDelta: number;
+  };
+  confidence: "high" | "medium" | "low";
+}
+
+/**
+ * Main response from the Change Planner Agent
+ */
+export interface ChangePlannerResponse {
+  changeId: string;
+  detectedChanges: DetectedChange[];
+  recomputePlan: RecomputePlan;
+  deltaSummary: DeltaSummary;
+  uiInstructions: UIInstructions;
+  updatedData: UpdatedData;
+  fixOptions?: FixOption[];
+  failures?: ModuleFailure[];
+}
+
+/**
+ * Partial failure information when some modules fail
+ */
+export interface ModuleFailure {
+  module: RecomputableModule;
+  errorCode: string;
+  errorMessage: string;
+  retryable: boolean;
+}
+
+/**
+ * Response with partial failures
+ */
+export interface ChangePlannerResponseWithFailures extends ChangePlannerResponse {
+  failures: ModuleFailure[];
+}
+
+/**
+ * Analytics event payloads for change tracking
+ */
+export interface TripChangeStartedEvent {
+  changeFields: ChangeableField[];
+  source: "edit_trip" | "quick_chip" | "fix_blocker";
+  currentCertainty: number;
+}
+
+export interface TripChangePlannedEvent {
+  modulesToRecompute: RecomputableModule[];
+  severityMax: ChangeSeverity;
+  predictedBlockerDelta: number;
+  predictedCostDelta: number;
+}
+
+export interface TripChangeAppliedEvent {
+  certaintyBefore: number;
+  certaintyAfter: number;
+  blockersBefore: number;
+  blockersAfter: number;
+  costBefore: number;
+  costAfter: number;
+  durationMs: number;
+}
+
+export interface TripChangeFailedEvent {
+  moduleFailed: RecomputableModule;
+  errorCode: string;
+  partialApplied: boolean;
+}
+
+export interface FixOptionEvent {
+  optionTitle: string;
+  confidence: "high" | "medium" | "low";
+  outcomeDeltas: {
+    certainty: number;
+    blockers: number;
+    cost: number;
+  };
+}

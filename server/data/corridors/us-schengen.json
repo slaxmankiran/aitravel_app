@@ -1,0 +1,157 @@
+{
+  "corridor": {
+    "passport": "United States",
+    "passportCode": "US",
+    "destination": "Schengen Area",
+    "destinationCode": "SCHENGEN",
+    "destinationCountries": [
+      "Austria", "Belgium", "Croatia", "Czech Republic", "Denmark", "Estonia",
+      "Finland", "France", "Germany", "Greece", "Hungary", "Iceland", "Italy",
+      "Latvia", "Liechtenstein", "Lithuania", "Luxembourg", "Malta", "Netherlands",
+      "Norway", "Poland", "Portugal", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland"
+    ]
+  },
+  "lastVerified": "2025-01-06",
+  "source": "European Commission / Schengen Visa Info",
+  "visa": {
+    "required": false,
+    "type": "visa_free",
+    "name": "Visa-Free Entry",
+    "processingDays": {
+      "minimum": 0,
+      "maximum": 0,
+      "note": "No visa required. ETIAS authorization launching 2025."
+    },
+    "cost": {
+      "government": 0,
+      "service": 0,
+      "currency": "EUR",
+      "note": "No visa fee. ETIAS will cost EUR 7 when implemented."
+    },
+    "documentsRequired": [
+      "Valid US passport (3+ months validity beyond stay)",
+      "Return/onward ticket",
+      "Proof of accommodation",
+      "Proof of sufficient funds for stay",
+      "Travel insurance (recommended)"
+    ],
+    "applicationMethod": "none",
+    "notes": [
+      "US citizens can stay up to 90 days within any 180-day period",
+      "90/180 rule applies to entire Schengen Area collectively",
+      "ETIAS (European Travel Information and Authorization System) launching 2025",
+      "Once ETIAS launches, pre-registration required before travel"
+    ],
+    "etias": {
+      "launching": "2025",
+      "cost": 7,
+      "currency": "EUR",
+      "validity": "3 years or until passport expires",
+      "processingTime": "Usually within minutes, max 96 hours",
+      "applicationUrl": "https://travel-europe.europa.eu/etias_en",
+      "note": "Not a visa - an electronic travel authorization similar to US ESTA"
+    }
+  },
+  "entryRequirements": {
+    "passportValidity": "3 months beyond intended departure from Schengen",
+    "blankPages": 1,
+    "returnTicket": true,
+    "proofOfAccommodation": true,
+    "proofOfFunds": true,
+    "proofOfFundsAmount": {
+      "recommended": 100,
+      "perDay": true,
+      "currency": "EUR",
+      "note": "Varies by country. Generally EUR 50-100/day expected."
+    },
+    "travelInsurance": {
+      "required": false,
+      "recommended": true,
+      "minimumCoverage": 30000,
+      "currency": "EUR",
+      "note": "Some Schengen countries may request proof at border"
+    }
+  },
+  "stayLimits": {
+    "maxStay": 90,
+    "period": 180,
+    "note": "90 days in any 180-day rolling period across ALL Schengen countries combined",
+    "extendable": false,
+    "overstayConsequences": "Fines, deportation, future entry bans"
+  },
+  "costEstimates": {
+    "currency": "USD",
+    "budget": {
+      "daily": {
+        "accommodation": 60,
+        "food": 40,
+        "transport": 25,
+        "activities": 25
+      },
+      "total7Days": 1050
+    },
+    "mid": {
+      "daily": {
+        "accommodation": 150,
+        "food": 80,
+        "transport": 50,
+        "activities": 70
+      },
+      "total7Days": 2450
+    },
+    "luxury": {
+      "daily": {
+        "accommodation": 400,
+        "food": 200,
+        "transport": 100,
+        "activities": 150
+      },
+      "total7Days": 5950
+    },
+    "flights": {
+      "budget": 400,
+      "average": 800,
+      "premium": 3000,
+      "note": "Round-trip from US East Coast. West Coast add $100-200."
+    },
+    "regionalVariation": {
+      "expensive": ["Norway", "Switzerland", "Iceland", "Denmark"],
+      "moderate": ["France", "Germany", "Netherlands", "Italy"],
+      "budget": ["Portugal", "Spain", "Greece", "Czech Republic", "Poland", "Hungary"]
+    }
+  },
+  "tips": [
+    "Track your 90/180 days carefully - the rule is strictly enforced",
+    "Use Schengen calculator apps to track remaining days",
+    "Entry typically through first Schengen country you land in",
+    "Keep accommodation bookings and return tickets accessible",
+    "Some countries (Germany, Netherlands) are stricter at immigration than others"
+  ],
+  "popularDestinations": [
+    {
+      "country": "France",
+      "cities": ["Paris", "Nice", "Lyon"],
+      "highlights": ["Eiffel Tower", "Louvre", "French Riviera"]
+    },
+    {
+      "country": "Italy",
+      "cities": ["Rome", "Florence", "Venice", "Milan"],
+      "highlights": ["Colosseum", "Vatican", "Tuscan countryside"]
+    },
+    {
+      "country": "Spain",
+      "cities": ["Barcelona", "Madrid", "Seville"],
+      "highlights": ["Sagrada Familia", "Alhambra", "beaches"]
+    },
+    {
+      "country": "Germany",
+      "cities": ["Berlin", "Munich", "Frankfurt"],
+      "highlights": ["Brandenburg Gate", "Oktoberfest", "castles"]
+    },
+    {
+      "country": "Netherlands",
+      "cities": ["Amsterdam", "Rotterdam"],
+      "highlights": ["Canals", "Van Gogh Museum", "tulip fields"]
+    }
+  ]
+}

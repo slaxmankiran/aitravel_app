@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { type TripResponse } from "@shared/schema";
-import { Filter, Calendar, ZoomIn, Maximize2, Map, Satellite, Printer, Navigation, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Maximize2, Map, Satellite, X, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface DayPlan {
   day: number;
@@ -20,7 +20,10 @@ interface DayPlan {
 interface Props {
   trip: TripResponse;
   highlightedLocation?: string | number | null;
+  activeDayIndex?: number | null; // When set, filters map to show only this day's markers
   onLocationSelect?: (locationId: string) => void;
+  isExpanded?: boolean;
+  onExpandToggle?: () => void;
 }
 
 interface LocationData {
@@ -90,9 +93,34 @@ function getWalkingTime(distanceKm: number): string {
   return `${hours}h ${mins}m walk`;
 }
 
-export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Props) {
+function ItineraryMapComponent({ trip, highlightedLocation, activeDayIndex, onLocationSelect, isExpanded, onExpandToggle }: Props) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+
+  // Inject pulse keyframes once (for highlighted marker animation)
+  useEffect(() => {
+    if (document.getElementById('marker-pulse-style')) return;
+
+    const style = document.createElement('style');
+    style.id = 'marker-pulse-style';
+    style.innerHTML = `
+      @keyframes pulse-ring {
+        0% {
+          box-shadow: 0 0 0 0 currentColor;
+          opacity: 0.8;
+        }
+        70% {
+          box-shadow: 0 0 0 10px transparent;
+          opacity: 0;
+        }
+        100% {
+          box-shadow: 0 0 0 0 transparent;
+          opacity: 0;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
   const markersRef = useRef<globalThis.Map<string, any>>(new globalThis.Map());
   const polylineRef = useRef<any>(null);
   const tileLayerRef = useRef<any>(null);
@@ -110,60 +138,66 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
 
   const itinerary = trip.itinerary as unknown as { days: DayPlan[] };
 
-  // Collect all locations with coordinates using day-based IDs
-  const allLocations: LocationData[] = [];
-  const dayNumbers: number[] = [];
+  // Memoize location extraction - only recompute when itinerary days change
+  const { allLocations, dayNumbers } = useMemo(() => {
+    const locations: LocationData[] = [];
+    const days: number[] = [];
 
-  if (itinerary && itinerary.days) {
-    itinerary.days.forEach((day) => {
-      if (!dayNumbers.includes(day.day)) {
-        dayNumbers.push(day.day);
-      }
-      let activityIndexInDay = 0;
-      day.activities.forEach((activity) => {
-        activityIndexInDay++; // Always increment for each activity in the day
-
-        // Get coordinates from either coordinates field or location object
-        let lat: number | undefined;
-        let lng: number | undefined;
-
-        if (activity.coordinates?.lat && activity.coordinates?.lng) {
-          lat = activity.coordinates.lat;
-          lng = activity.coordinates.lng;
-        } else if (typeof activity.location === 'object' && activity.location?.lat && activity.location?.lng) {
-          lat = activity.location.lat;
-          lng = activity.location.lng;
+    if (itinerary?.days) {
+      itinerary.days.forEach((day) => {
+        if (!days.includes(day.day)) {
+          days.push(day.day);
         }
+        let activityIndexInDay = 0;
+        day.activities.forEach((activity) => {
+          activityIndexInDay++; // Always increment for each activity in the day
 
-        if (lat && lng) {
-          // Get location name string
-          const locationName = typeof activity.location === 'string'
-            ? activity.location
-            : (typeof activity.location === 'object' && activity.location?.address)
-              ? activity.location.address
-              : (activity as any).name || activity.description || "Unknown";
+          // Get coordinates from either coordinates field or location object
+          let lat: number | undefined;
+          let lng: number | undefined;
 
-          allLocations.push({
-            id: `${day.day}-${activityIndexInDay}`, // Day-based ID like "1-1", "1-2", "2-1"
-            position: [lat, lng],
-            name: locationName,
-            description: (activity as any).name || activity.description,
-            time: activity.time,
-            day: day.day,
-            activityIndex: activityIndexInDay,
-            type: activity.type,
-          });
-        }
+          if (activity.coordinates?.lat && activity.coordinates?.lng) {
+            lat = activity.coordinates.lat;
+            lng = activity.coordinates.lng;
+          } else if (typeof activity.location === 'object' && activity.location?.lat && activity.location?.lng) {
+            lat = activity.location.lat;
+            lng = activity.location.lng;
+          }
+
+          if (lat && lng) {
+            // Get location name string
+            const locationName = typeof activity.location === 'string'
+              ? activity.location
+              : (typeof activity.location === 'object' && activity.location?.address)
+                ? activity.location.address
+                : (activity as any).name || activity.description || "Unknown";
+
+            locations.push({
+              id: `${day.day}-${activityIndexInDay}`, // Day-based ID like "1-1", "1-2", "2-1"
+              position: [lat, lng],
+              name: locationName,
+              description: (activity as any).name || activity.description,
+              time: activity.time,
+              day: day.day,
+              activityIndex: activityIndexInDay,
+              type: activity.type,
+            });
+          }
+        });
       });
-    });
-  }
+    }
 
-  // Filter locations based on active filters
-  const filteredLocations = allLocations.filter((loc) => {
-    const typeMatch = activeTypes.has(loc.type as ActivityType);
-    const dayMatch = selectedDay === null || loc.day === selectedDay;
-    return typeMatch && dayMatch;
-  });
+    return { allLocations: locations, dayNumbers: days };
+  }, [itinerary?.days]);
+
+  // Memoize filtered locations - only recompute when filters or locations change
+  const filteredLocations = useMemo(() => {
+    return allLocations.filter((loc) => {
+      const typeMatch = activeTypes.has(loc.type as ActivityType);
+      const dayMatch = selectedDay === null || loc.day === selectedDay;
+      return typeMatch && dayMatch;
+    });
+  }, [allLocations, activeTypes, selectedDay]);
 
   // Toggle type filter
   const toggleType = (type: ActivityType) => {
@@ -243,11 +277,16 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
             font-weight: bold;
             font-size: ${isHighlighted ? '12px' : '10px'};
             border: ${isHighlighted ? '3px' : '2px'} solid white;
-            box-shadow: ${isHighlighted ? '0 0 0 3px ' + color + ', 0 4px 12px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.3)'};
-            transition: all 0.2s;
+            box-shadow: ${
+              isHighlighted
+                ? `0 0 0 0 ${color}80, 0 4px 12px rgba(0,0,0,0.4)`
+                : '0 2px 8px rgba(0,0,0,0.3)'
+            };
+            transition: all 0.2s ease;
             transform: ${isHighlighted ? 'scale(1.1)' : 'scale(1)'};
             z-index: ${isHighlighted ? '1000' : '1'};
             white-space: nowrap;
+            ${isHighlighted ? 'animation: pulse-ring 0.9s ease-out 1;' : ''}
           ">${loc.id}</div>
         `,
         iconSize: [isHighlighted ? 40 : 32, isHighlighted ? 28 : 22],
@@ -322,12 +361,29 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
     }
   }, [highlightedLocation, allLocations]);
 
-  // Initialize map
+  // Sync external activeDayIndex with internal selectedDay state
+  // When a day card is clicked, filter map to show only that day's markers
+  useEffect(() => {
+    if (activeDayIndex !== null && activeDayIndex !== undefined) {
+      // Convert 0-based index to 1-based day number
+      const dayNumber = activeDayIndex + 1;
+      setSelectedDay(dayNumber);
+      // Zoom to that day's locations
+      zoomToDay(dayNumber);
+    }
+  }, [activeDayIndex]);
+
+  // Initialize map - use trip.id as dep so map reinits when trip changes
   useEffect(() => {
     if (!mapRef.current || allLocations.length === 0) return;
 
     const initMap = async () => {
-      if (mapInstanceRef.current) return;
+      // Clean up existing map if trip changed
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        leafletRef.current = null;
+      }
 
       const L = (await import("leaflet")).default;
       leafletRef.current = L;
@@ -340,7 +396,7 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
         shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
       });
 
-      // Calculate center
+      // Calculate center from current locations
       const centerLat = allLocations.reduce((sum, loc) => sum + loc.position[0], 0) / allLocations.length;
       const centerLng = allLocations.reduce((sum, loc) => sum + loc.position[1], 0) / allLocations.length;
 
@@ -357,7 +413,13 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
       tileLayerRef.current = L.tileLayer(MAP_STYLES[mapStyle].url, {
         attribution: '&copy; OpenStreetMap contributors',
         maxZoom: 19,
+        crossOrigin: 'anonymous',
       }).addTo(map);
+
+      // Force map to recalculate size (fixes tiles not loading in hidden containers)
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 100);
 
       // Initial marker update
       updateMarkers();
@@ -372,7 +434,7 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
         leafletRef.current = null;
       }
     };
-  }, [allLocations.length]);
+  }, [trip.id, allLocations]);
 
   // Update markers when filters change
   useEffect(() => {
@@ -428,218 +490,176 @@ export function ItineraryMap({ trip, highlightedLocation, onLocationSelect }: Pr
     window.print();
   };
 
-  // Toggle fullscreen
+  // Toggle fullscreen - use external control if provided
   const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
+    if (onExpandToggle) {
+      onExpandToggle();
+    } else {
+      setIsFullscreen(!isFullscreen);
+    }
   };
+
+  // Use external isExpanded if provided, otherwise use internal state
+  const effectiveFullscreen = isExpanded !== undefined ? isExpanded : isFullscreen;
+
+  // Invalidate size when fullscreen changes (container size changed)
+  useEffect(() => {
+    if (mapInstanceRef.current) {
+      // Small delay to ensure DOM has updated
+      setTimeout(() => {
+        mapInstanceRef.current?.invalidateSize();
+        // Re-fit bounds to show all markers
+        if (filteredLocations.length > 0 && leafletRef.current) {
+          const positions = filteredLocations.map(loc => loc.position);
+          const bounds = leafletRef.current.latLngBounds(positions);
+          mapInstanceRef.current?.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+        }
+      }, 100);
+    }
+  }, [effectiveFullscreen, filteredLocations]);
 
   if (!itinerary || !itinerary.days || allLocations.length === 0) {
     return (
-      <div className="text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-slate-300">
-        <p className="text-muted-foreground">Map coordinates not available for this itinerary.</p>
+      <div className="text-center py-8 bg-white/5 rounded-2xl border border-dashed border-white/20">
+        <p className="text-white/50">Map coordinates not available for this itinerary.</p>
       </div>
     );
   }
 
   return (
     <div
-      className={`rounded-2xl overflow-hidden border border-slate-200 shadow-sm print:shadow-none ${
-        isFullscreen ? 'fixed inset-4 z-50 bg-white' : ''
+      className={`overflow-hidden bg-white/5 border-0 shadow-[0_10px_30px_-18px_rgba(0,0,0,0.8)] print:shadow-none ${
+        effectiveFullscreen ? 'h-full flex flex-col rounded-none' : 'h-full'
       }`}
     >
-      {/* Fullscreen close button */}
-      {isFullscreen && (
+      {/* Fullscreen close button - only show for internal fullscreen */}
+      {isFullscreen && !onExpandToggle && (
         <button
           onClick={toggleFullscreen}
-          className="absolute top-6 right-6 z-[1000] p-2 bg-white rounded-full shadow-lg hover:bg-slate-100 transition-colors"
+          className="absolute top-6 right-6 z-[1000] p-2 bg-white/10 backdrop-blur rounded-full shadow-lg border border-white/10 hover:bg-white/15 transition-colors"
         >
-          <X className="w-5 h-5 text-slate-600" />
+          <X className="w-5 h-5 text-white/70" />
         </button>
       )}
 
-      {/* Filter Controls */}
-      <div className="bg-white p-4 border-b border-slate-200 print:hidden">
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Type Filters */}
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-slate-500" />
-            <span className="text-sm font-medium text-slate-700 hidden sm:inline">Filter:</span>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {(Object.keys(TYPE_COLORS) as ActivityType[]).map((type) => (
-              <button
-                key={type}
-                onClick={() => toggleType(type)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
-                  activeTypes.has(type)
-                    ? "bg-slate-900 text-white"
-                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-                }`}
-              >
-                <div
-                  className="w-2.5 h-2.5 rounded-full"
-                  style={{ backgroundColor: TYPE_COLORS[type] }}
-                />
-                <span className="hidden sm:inline">{TYPE_LABELS[type]}</span>
-                <span className="sm:hidden">{TYPE_LABELS[type].charAt(0)}</span>
-                <span className="opacity-70">
-                  ({allLocations.filter((l) => l.type === type && (selectedDay === null || l.day === selectedDay)).length})
-                </span>
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2 ml-auto">
-            {/* Day Filter */}
-            <div className="flex items-center gap-1.5">
-              <Calendar className="w-4 h-4 text-slate-500" />
-              <select
-                value={selectedDay ?? ""}
-                onChange={(e) => setSelectedDay(e.target.value ? Number(e.target.value) : null)}
-                className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
-              >
-                <option value="">All Days</option>
-                {dayNumbers.map((day) => (
-                  <option key={day} value={day}>
-                    Day {day}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Map Style */}
-            <div className="flex border border-slate-200 rounded-lg overflow-hidden">
-              {(Object.keys(MAP_STYLES) as MapStyle[]).map((style) => (
-                <button
-                  key={style}
-                  onClick={() => setMapStyle(style)}
-                  className={`px-2 py-1.5 text-xs font-medium transition-colors ${
-                    mapStyle === style
-                      ? "bg-slate-900 text-white"
-                      : "bg-white text-slate-600 hover:bg-slate-100"
-                  }`}
-                  title={MAP_STYLES[style].label}
-                >
-                  {MAP_STYLES[style].label}
-                </button>
-              ))}
-            </div>
-
-            {/* Print */}
-            <button
-              onClick={handlePrint}
-              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors hidden sm:block"
-              title="Print map"
-            >
-              <Printer className="w-4 h-4 text-slate-600" />
-            </button>
-
-            {/* Fullscreen Toggle */}
-            <button
-              onClick={toggleFullscreen}
-              className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors"
-              title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-            >
-              <Maximize2 className="w-4 h-4 text-slate-600" />
-            </button>
-          </div>
-        </div>
-
-        {/* Quick Day Navigation */}
-        <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-100">
-          <ZoomIn className="w-4 h-4 text-slate-500" />
-          <span className="text-xs text-slate-600">Jump to:</span>
-          <div className="flex gap-1 flex-wrap">
-            {dayNumbers.map((day) => (
-              <button
-                key={day}
-                onClick={() => {
-                  setSelectedDay(day);
-                  zoomToDay(day);
-                }}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                  selectedDay === day
-                    ? "bg-primary text-white"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                }`}
-              >
-                Day {day}
-              </button>
-            ))}
-            {selectedDay !== null && (
-              <button
-                onClick={() => setSelectedDay(null)}
-                className="px-2.5 py-1 text-xs font-medium rounded-md bg-slate-200 text-slate-700 hover:bg-slate-300 transition-colors"
-              >
-                Show All
-              </button>
-            )}
-          </div>
-
-          {/* Distance toggle */}
-          <label className="flex items-center gap-1.5 ml-auto cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showDistances}
-              onChange={(e) => setShowDistances(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-slate-300 text-primary focus:ring-primary/20"
-            />
-            <span className="text-xs text-slate-600">Show distances</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Map Container */}
-      <div className="relative">
+      {/* Map Container - Full height with floating controls */}
+      <div className={`relative h-full ${effectiveFullscreen ? 'flex-1' : ''}`}>
         <div
           ref={mapRef}
-          style={{ height: isFullscreen ? "calc(100vh - 280px)" : "450px", width: "100%" }}
-          className="bg-slate-100"
+          className="absolute inset-0 bg-slate-800"
         />
 
-        {/* Location Navigator */}
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-[1000] flex items-center gap-2 bg-white/95 backdrop-blur rounded-full shadow-lg px-2 py-1.5 print:hidden">
+        {/* Floating Controls - Top Left: Filters */}
+        <div className="absolute top-2 left-2 z-[1000] flex flex-wrap gap-1 print:hidden">
+          {(Object.keys(TYPE_COLORS) as ActivityType[]).map((type) => (
+            <button
+              key={type}
+              onClick={() => toggleType(type)}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-all shadow-md ${
+                activeTypes.has(type)
+                  ? "bg-slate-800/90 text-white border border-white/20"
+                  : "bg-slate-800/70 text-white/60 border border-white/10 hover:bg-slate-800/90"
+              }`}
+            >
+              <div
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: TYPE_COLORS[type] }}
+              />
+              <span>{TYPE_LABELS[type]}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Floating Controls - Top Right: Day selector + Active day indicator */}
+        <div className="absolute top-2 right-12 z-[1000] print:hidden flex items-center gap-2">
+          {/* Active day indicator - shows when an activity is highlighted */}
+          {highlightedLocation && (() => {
+            const dayNum = String(highlightedLocation).split('-')[0];
+            return (
+              <div className="px-2 py-1 rounded-md bg-primary/20 border border-primary/30 text-[10px] font-medium text-primary">
+                Showing Day {dayNum}
+              </div>
+            );
+          })()}
+          <select
+            value={selectedDay ?? ""}
+            onChange={(e) => {
+              const val = e.target.value ? Number(e.target.value) : null;
+              setSelectedDay(val);
+              if (val) zoomToDay(val);
+            }}
+            className="text-[10px] border border-white/20 rounded-md px-2 py-1.5 bg-slate-800/90 text-white shadow-md focus:outline-none"
+          >
+            <option value="" className="bg-slate-800">All Days</option>
+            {dayNumbers.map((day) => (
+              <option key={day} value={day} className="bg-slate-800">
+                Day {day}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Floating Controls - Bottom Right: Expand button */}
+        <div className="absolute bottom-3 right-3 z-[1000] print:hidden">
+          <button
+            onClick={toggleFullscreen}
+            className="p-2 rounded-lg bg-slate-800/90 border border-white/20 hover:bg-slate-700/90 transition-colors shadow-md"
+            title={effectiveFullscreen ? "Collapse map" : "Expand map"}
+          >
+            <Maximize2 className="w-4 h-4 text-white" />
+          </button>
+        </div>
+
+        {/* Location Navigator - Bottom Center */}
+        <div className="absolute bottom-3 left-1/2 transform -translate-x-1/2 z-[1000] flex items-center gap-1 bg-slate-800/90 backdrop-blur-sm rounded-full border border-white/20 shadow-md px-2 py-1 print:hidden">
           <button
             onClick={() => navigateLocation('prev')}
             disabled={currentLocationIndex === 0}
-            className="p-1.5 rounded-full hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="p-1 rounded-full hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
-            <ChevronLeft className="w-4 h-4 text-slate-600" />
+            <ChevronLeft className="w-3.5 h-3.5 text-white/70" />
           </button>
-          <div className="text-xs font-medium text-slate-700 min-w-[100px] text-center">
-            {filteredLocations[currentLocationIndex]?.name || "Select location"}
+          <div className="text-[10px] font-medium text-white/90 min-w-[60px] text-center truncate max-w-[120px]">
+            {filteredLocations[currentLocationIndex]?.name || "—"}
           </div>
           <button
             onClick={() => navigateLocation('next')}
             disabled={currentLocationIndex === filteredLocations.length - 1}
-            className="p-1.5 rounded-full hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="p-1 rounded-full hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
-            <ChevronRight className="w-4 h-4 text-slate-600" />
+            <ChevronRight className="w-3.5 h-3.5 text-white/70" />
           </button>
         </div>
-      </div>
 
-      {/* Legend & Stats */}
-      <div className="bg-white p-3 border-t border-slate-200">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-3 text-xs">
-            {(Object.keys(TYPE_COLORS) as ActivityType[]).map((type) => (
-              <div key={type} className="flex items-center gap-1.5">
-                <div
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: TYPE_COLORS[type] }}
-                />
-                <span className="text-slate-600">{TYPE_LABELS[type]}</span>
-              </div>
-            ))}
-          </div>
-          <div className="text-xs text-slate-500">
-            Showing <span className="font-semibold text-slate-700">{filteredLocations.length}</span> of{" "}
-            <span className="font-semibold text-slate-700">{allLocations.length}</span> locations
-            {selectedDay && ` • Day ${selectedDay}`}
+        {/* Map style toggle - Bottom Left */}
+        <div className="absolute bottom-3 left-3 z-[1000] print:hidden">
+          <div className="flex border border-white/20 rounded-md overflow-hidden bg-slate-800/90 shadow-md">
+            <button
+              onClick={() => setMapStyle("street")}
+              className={`px-2 py-1 text-[10px] font-medium transition-colors ${
+                mapStyle === "street"
+                  ? "bg-white/20 text-white"
+                  : "text-white/60 hover:bg-white/10"
+              }`}
+            >
+              Street
+            </button>
+            <button
+              onClick={() => setMapStyle("satellite")}
+              className={`px-2 py-1 text-[10px] font-medium transition-colors ${
+                mapStyle === "satellite"
+                  ? "bg-white/20 text-white"
+                  : "text-white/60 hover:bg-white/10"
+              }`}
+            >
+              Satellite
+            </button>
           </div>
         </div>
       </div>
     </div>
   );
 }
+
+// Memoize to prevent expensive Leaflet rerenders
+export const ItineraryMap = React.memo(ItineraryMapComponent);

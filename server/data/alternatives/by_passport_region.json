@@ -1,0 +1,307 @@
+{
+  "_comment": "Alternative destinations by passport region. Used when a trip hits a HARD_BLOCKER.",
+  "_rules": {
+    "maxAlternatives": 3,
+    "preferCurated": true,
+    "fallbackToGlobal": true
+  },
+  "regions": {
+    "south_asia": {
+      "passports": ["IN", "India", "PK", "Pakistan", "BD", "Bangladesh", "LK", "Sri Lanka", "NP", "Nepal"],
+      "alternatives": [
+        {
+          "destination": "Thailand",
+          "destinationCode": "TH",
+          "city": "Bangkok",
+          "flag": "🇹🇭",
+          "visaType": "voa",
+          "visaStatus": "visa_on_arrival",
+          "visaLabel": "Visa on Arrival",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "15-day VOA for Indian passport holders",
+          "isCurated": true,
+          "curationLevel": "manual",
+          "lastReviewedAt": "2026-01-08"
+        },
+        {
+          "destination": "Malaysia",
+          "destinationCode": "MY",
+          "city": "Kuala Lumpur",
+          "flag": "🇲🇾",
+          "visaType": "e_visa",
+          "visaStatus": "e_visa",
+          "visaLabel": "eVisa",
+          "processingDays": 3,
+          "confidence": "medium",
+          "reason": "Easy eVisa process, 3-5 days",
+          "isCurated": false
+        },
+        {
+          "destination": "Indonesia",
+          "destinationCode": "ID",
+          "city": "Bali",
+          "flag": "🇮🇩",
+          "visaType": "voa",
+          "visaStatus": "visa_on_arrival",
+          "visaLabel": "Visa on Arrival",
+          "processingDays": 0,
+          "confidence": "medium",
+          "reason": "30-day VOA available",
+          "isCurated": false
+        },
+        {
+          "destination": "Vietnam",
+          "destinationCode": "VN",
+          "city": "Ho Chi Minh City",
+          "flag": "🇻🇳",
+          "visaType": "e_visa",
+          "visaStatus": "e_visa",
+          "visaLabel": "eVisa",
+          "processingDays": 3,
+          "confidence": "medium",
+          "reason": "Easy eVisa, beautiful destinations",
+          "isCurated": false
+        },
+        {
+          "destination": "Sri Lanka",
+          "destinationCode": "LK",
+          "city": "Colombo",
+          "flag": "🇱🇰",
+          "visaType": "e_visa",
+          "visaStatus": "e_visa",
+          "visaLabel": "eVisa",
+          "processingDays": 1,
+          "confidence": "medium",
+          "reason": "Quick eTA process",
+          "isCurated": false
+        },
+        {
+          "destination": "Maldives",
+          "destinationCode": "MV",
+          "city": "Malé",
+          "flag": "🇲🇻",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "30-day visa-free for all nationalities",
+          "isCurated": false
+        }
+      ]
+    },
+    "north_america": {
+      "passports": ["US", "USA", "United States", "CA", "Canada"],
+      "alternatives": [
+        {
+          "destination": "Mexico",
+          "destinationCode": "MX",
+          "city": "Cancun",
+          "flag": "🇲🇽",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "180 days visa-free",
+          "isCurated": false
+        },
+        {
+          "destination": "Costa Rica",
+          "destinationCode": "CR",
+          "city": "San José",
+          "flag": "🇨🇷",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "90 days visa-free, eco-tourism paradise",
+          "isCurated": false
+        },
+        {
+          "destination": "Portugal",
+          "destinationCode": "PT",
+          "city": "Lisbon",
+          "flag": "🇵🇹",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "Schengen - 90 days visa-free",
+          "isCurated": true,
+          "curationLevel": "manual",
+          "lastReviewedAt": "2026-01-08"
+        },
+        {
+          "destination": "Japan",
+          "destinationCode": "JP",
+          "city": "Tokyo",
+          "flag": "🇯🇵",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "90 days visa-free",
+          "isCurated": false
+        },
+        {
+          "destination": "United Kingdom",
+          "destinationCode": "GB",
+          "city": "London",
+          "flag": "🇬🇧",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "6 months visa-free",
+          "isCurated": false
+        }
+      ]
+    },
+    "europe": {
+      "passports": ["GB", "UK", "United Kingdom", "DE", "Germany", "FR", "France", "IT", "Italy", "ES", "Spain", "NL", "Netherlands"],
+      "alternatives": [
+        {
+          "destination": "Thailand",
+          "destinationCode": "TH",
+          "city": "Bangkok",
+          "flag": "🇹🇭",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "60 days visa-free",
+          "isCurated": false
+        },
+        {
+          "destination": "Japan",
+          "destinationCode": "JP",
+          "city": "Tokyo",
+          "flag": "🇯🇵",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "90 days visa-free",
+          "isCurated": false
+        },
+        {
+          "destination": "Mexico",
+          "destinationCode": "MX",
+          "city": "Mexico City",
+          "flag": "🇲🇽",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "180 days visa-free",
+          "isCurated": false
+        },
+        {
+          "destination": "Morocco",
+          "destinationCode": "MA",
+          "city": "Marrakech",
+          "flag": "🇲🇦",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "medium",
+          "reason": "90 days visa-free",
+          "isCurated": false
+        },
+        {
+          "destination": "South Korea",
+          "destinationCode": "KR",
+          "city": "Seoul",
+          "flag": "🇰🇷",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "90 days visa-free",
+          "isCurated": false
+        }
+      ]
+    },
+    "global_fallback": {
+      "passports": ["*"],
+      "alternatives": [
+        {
+          "destination": "Maldives",
+          "destinationCode": "MV",
+          "city": "Malé",
+          "flag": "🇲🇻",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "30-day visa-free for ALL nationalities",
+          "isCurated": false
+        },
+        {
+          "destination": "Georgia",
+          "destinationCode": "GE",
+          "city": "Tbilisi",
+          "flag": "🇬🇪",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "high",
+          "reason": "1-year visa-free for 100+ countries",
+          "isCurated": false
+        },
+        {
+          "destination": "Ecuador",
+          "destinationCode": "EC",
+          "city": "Quito",
+          "flag": "🇪🇨",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "medium",
+          "reason": "90 days visa-free for most countries",
+          "isCurated": false
+        },
+        {
+          "destination": "Malaysia",
+          "destinationCode": "MY",
+          "city": "Kuala Lumpur",
+          "flag": "🇲🇾",
+          "visaType": "visa_free",
+          "visaStatus": "visa_free",
+          "visaLabel": "Visa Free",
+          "processingDays": 0,
+          "confidence": "medium",
+          "reason": "Visa-free or easy eVisa for most",
+          "isCurated": false
+        },
+        {
+          "destination": "Turkey",
+          "destinationCode": "TR",
+          "city": "Istanbul",
+          "flag": "🇹🇷",
+          "visaType": "e_visa",
+          "visaStatus": "e_visa",
+          "visaLabel": "eVisa",
+          "processingDays": 1,
+          "confidence": "medium",
+          "reason": "Easy eVisa for most countries",
+          "isCurated": false
+        }
+      ]
+    }
+  }
+}

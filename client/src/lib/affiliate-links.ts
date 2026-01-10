@@ -467,3 +467,88 @@ export function openAffiliateLink(
   // Open in new tab
   window.open(url, '_blank', 'noopener,noreferrer');
 }
+
+// ============================================================================
+// ALTERNATIVE DESTINATION TRACKING
+// ============================================================================
+
+export interface AlternativeClickEvent {
+  tripId?: number;  // For deduplication - only first click per trip+destination counts
+  passport: string;
+  blockedDestination: string;
+  alternativeDestination: string;
+  alternativeCity: string;
+  visaType: string;
+  visaStatus: string;
+  confidence: string;
+}
+
+/**
+ * Track alternative impressions (when alternatives are shown)
+ * Used to calculate CTR and identify silent rejections
+ *
+ * IMPORTANT: Only one impression per (tripId + alternativeDestination) counts.
+ * Server deduplicates, but passing tripId enables proper deduplication.
+ */
+export function trackAlternativeImpression(
+  passport: string,
+  blockedDestination: string,
+  alternativesShown: string[],
+  tripId?: number
+): void {
+  // Log for development
+  console.log('[Analytics] alternative_impression', {
+    tripId,
+    passport,
+    blockedDestination,
+    alternativesShown,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Send to analytics API (fire and forget)
+  fetch('/api/analytics/alternative-impression', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tripId, passport, blockedDestination, alternativesShown }),
+  }).catch(err => {
+    console.warn('Failed to track alternative impression:', err);
+  });
+}
+
+/**
+ * Track alternative destination click
+ * Used when a user hits a HARD_BLOCKER and clicks an alternative
+ */
+export function trackAlternativeClick(event: AlternativeClickEvent): void {
+  // Log for development
+  console.log('[Analytics] alternative_clicked', {
+    passport: event.passport,
+    blockedDestination: event.blockedDestination,
+    alternativeDestination: event.alternativeDestination,
+    visaType: event.visaType,
+    confidence: event.confidence,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Send to analytics API (fire and forget)
+  fetch('/api/analytics/alternative-click', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(event),
+  }).catch(err => {
+    // Silent fail - don't block user interaction
+    console.warn('Failed to track alternative click:', err);
+  });
+
+  // Also track in Google Analytics if available
+  if (typeof window !== 'undefined' && (window as any).gtag) {
+    (window as any).gtag('event', 'alternative_clicked', {
+      event_category: 'feasibility',
+      passport: event.passport,
+      blocked_destination: event.blockedDestination,
+      alternative_destination: event.alternativeDestination,
+      visa_type: event.visaType,
+      confidence: event.confidence,
+    });
+  }
+}

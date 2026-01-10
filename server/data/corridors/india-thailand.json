@@ -1,0 +1,141 @@
+{
+  "corridor": {
+    "passport": "India",
+    "passportCode": "IN",
+    "destination": "Thailand",
+    "destinationCode": "TH"
+  },
+  "lastVerified": "2025-01-06",
+  "source": "Royal Thai Embassy / Immigration Bureau of Thailand",
+  "visa": {
+    "required": true,
+    "type": "visa_on_arrival",
+    "name": "Thailand Visa on Arrival (VoA)",
+    "processingDays": {
+      "minimum": 0,
+      "maximum": 0,
+      "note": "Processed at airport on arrival. Queue times vary 30 min to 2 hours."
+    },
+    "cost": {
+      "government": 2000,
+      "service": 0,
+      "currency": "THB",
+      "note": "2,000 THB (~INR 4,800). Cash only at airport."
+    },
+    "documentsRequired": [
+      "Valid passport (6+ months validity)",
+      "Completed TM.88 arrival card (available at airport)",
+      "Recent passport photo (4x6 cm)",
+      "Confirmed return ticket within 15 days",
+      "Proof of accommodation in Thailand",
+      "Proof of funds (10,000 THB per person or 20,000 THB per family)"
+    ],
+    "applicationMethod": "on_arrival",
+    "applicationUrl": "https://www.immigration.go.th",
+    "notes": [
+      "VoA allows maximum 15-day stay (non-extendable)",
+      "For longer stays, apply for Tourist Visa at Thai Embassy (60 days)",
+      "VoA available at major airports: BKK, DMK, CNX, HKT, etc.",
+      "Visa exemption does NOT apply to Indian passport holders"
+    ],
+    "alternatives": {
+      "touristVisa": {
+        "type": "embassy_visa",
+        "name": "Thailand Tourist Visa (TR)",
+        "maxStay": 60,
+        "extendable": true,
+        "processingDays": {
+          "minimum": 3,
+          "maximum": 5
+        },
+        "cost": {
+          "singleEntry": 2500,
+          "currency": "INR"
+        },
+        "applicationMethod": "embassy",
+        "applicationUrl": "https://www.thaiembassy.org/newdelhi"
+      },
+      "eVisa": {
+        "available": true,
+        "type": "e_visa",
+        "name": "Thailand e-Visa",
+        "applicationUrl": "https://www.thaievisa.go.th",
+        "processingDays": {
+          "minimum": 5,
+          "maximum": 10
+        },
+        "note": "Available for Tourist Visa applications. Recommended over VoA for certainty."
+      }
+    }
+  },
+  "entryRequirements": {
+    "passportValidity": "6 months beyond intended stay",
+    "blankPages": 1,
+    "returnTicket": true,
+    "proofOfAccommodation": true,
+    "proofOfFunds": true,
+    "proofOfFundsAmount": {
+      "perPerson": 10000,
+      "perFamily": 20000,
+      "currency": "THB"
+    },
+    "travelInsurance": {
+      "required": false,
+      "recommended": true,
+      "minimumCoverage": 10000,
+      "currency": "USD"
+    }
+  },
+  "stayLimits": {
+    "voaMaxStay": 15,
+    "touristVisaMaxStay": 60,
+    "extendable": true,
+    "extensionDays": 30,
+    "extensionCost": 1900,
+    "extensionCurrency": "THB",
+    "extensionProcess": "Apply at Immigration Office before visa expires"
+  },
+  "costEstimates": {
+    "currency": "INR",
+    "budget": {
+      "daily": {
+        "accommodation": 1200,
+        "food": 800,
+        "transport": 400,
+        "activities": 600
+      },
+      "total7Days": 21000
+    },
+    "mid": {
+      "daily": {
+        "accommodation": 3500,
+        "food": 1500,
+        "transport": 800,
+        "activities": 1500
+      },
+      "total7Days": 51100
+    },
+    "luxury": {
+      "daily": {
+        "accommodation": 12000,
+        "food": 4000,
+        "transport": 2000,
+        "activities": 3000
+      },
+      "total7Days": 147000
+    },
+    "flights": {
+      "budget": 8000,
+      "average": 15000,
+      "premium": 45000,
+      "note": "Round-trip from major Indian metros. Budget airlines available."
+    }
+  },
+  "tips": [
+    "Carry printed return ticket and hotel booking for VoA queue",
+    "Have exact change in THB for visa fee - cards not accepted",
+    "Fast-track VoA service available at BKK for 200 THB extra",
+    "Consider e-Visa if traveling during peak season to avoid airport queues",
+    "Thai SIM cards available at airport - cheaper than Indian roaming"
+  ]
+}

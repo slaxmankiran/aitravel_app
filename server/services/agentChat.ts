@@ -171,7 +171,7 @@ export async function getOrCreateSession(tripId: number): Promise<ChatSession> {
       messages: [],
       tripContext: extractTripContext(trip),
       lastUpdated: new Date(),
-      visaStatus: trip.feasibilityReport?.breakdown?.visa,
+      visaStatus: (trip.feasibilityReport as any)?.breakdown?.visa,
     };
 
     chatSessions.set(tripId, session);
@@ -209,12 +209,28 @@ function extractTripContext(trip: any): TripContext {
  */
 function buildSystemPrompt(context: TripContext): string {
   const currencySymbol = getCurrencySymbol(context.currency);
+
+  // Calculate current itinerary costs for accurate budget tracking
+  let totalItineraryCost = 0;
+  let activitiesCount = 0;
+
   const itinerarySummary = context.itinerary?.days?.map((day: any, idx: number) => {
-    const activities = day.activities?.map((a: any) => `  - ${a.name} (${currencySymbol}${a.cost || 0})`).join('\n') || '  (no activities)';
+    const activities = day.activities?.map((a: any) => {
+      const cost = a.cost || a.estimatedCost || 0;
+      totalItineraryCost += cost;
+      activitiesCount++;
+      return `  - ${a.name} (${currencySymbol}${cost})`;
+    }).join('\n') || '  (no activities)';
     return `Day ${idx + 1}: ${day.title}\n${activities}`;
   }).join('\n\n') || 'No itinerary yet';
 
   const budgetBreakdown = context.feasibilityReport?.breakdown?.budget;
+  const costBreakdown = context.itinerary?.costBreakdown;
+
+  // Use most accurate budget data available
+  const estimatedTotal = costBreakdown?.grandTotal || budgetBreakdown?.estimatedCost || totalItineraryCost;
+  const remainingBudget = context.budget - estimatedTotal;
+  const budgetPercentUsed = Math.round((estimatedTotal / context.budget) * 100);
 
   return `You are VoyageAI, an intelligent travel planning assistant. You help users plan and modify their trips.
 
@@ -222,29 +238,49 @@ function buildSystemPrompt(context: TripContext): string {
 - **Destination**: ${context.destination}
 - **Origin**: ${context.origin || 'Not specified'}
 - **Dates**: ${context.dates}
-- **Budget**: ${currencySymbol}${context.budget} ${context.currency}
+- **Total Budget**: ${currencySymbol}${context.budget.toLocaleString()} ${context.currency}
 - **Travelers**: ${context.travelers.adults} adults${context.travelers.children > 0 ? `, ${context.travelers.children} children` : ''}${context.travelers.infants > 0 ? `, ${context.travelers.infants} infants` : ''} (${context.travelers.total} total)
 - **Passport**: ${context.passport}
 
-## CURRENT ITINERARY
+## CURRENT ITINERARY (${activitiesCount} activities)
 ${itinerarySummary}
 
-## BUDGET STATUS
-${budgetBreakdown ? `Estimated Cost: ${currencySymbol}${budgetBreakdown.estimatedCost || 'N/A'}` : 'Budget analysis pending'}
+## BUDGET BREAKDOWN (IMPORTANT - Track this carefully!)
+- **Total Budget**: ${currencySymbol}${context.budget.toLocaleString()}
+- **Current Estimated Spend**: ${currencySymbol}${estimatedTotal.toLocaleString()} (${budgetPercentUsed}% used)
+- **Remaining Budget**: ${currencySymbol}${remainingBudget.toLocaleString()}
+- **Status**: ${remainingBudget < 0 ? '⚠️ OVER BUDGET' : remainingBudget < context.budget * 0.1 ? '⚠️ Budget is tight' : '✅ Within budget'}
+${costBreakdown ? `
+Cost Categories:
+- Activities: ${currencySymbol}${costBreakdown.activities?.total || 0}
+- Accommodation: ${currencySymbol}${costBreakdown.accommodation?.total || 0}
+- Flights/Transport: ${currencySymbol}${costBreakdown.flights?.total || 0}
+- Food (estimated): ${currencySymbol}${costBreakdown.food?.total || 0}` : ''}
 
 ## YOUR CAPABILITIES
 You can help users with:
 1. **Suggest attractions** - Recommend nearby places, restaurants, activities
-2. **Update itinerary** - Add, remove, or modify activities
+2. **Update itinerary** - Add, remove, or modify activities (ALWAYS include cost!)
 3. **Adjust schedule** - Change activity order, swap days
-4. **Budget advice** - Suggest cost-effective alternatives
+4. **Budget advice** - Suggest cost-effective alternatives, show budget breakdown
 5. **Local tips** - Provide insider knowledge about the destination
 6. **Answer questions** - About visa, weather, culture, transportation
+
+## CRITICAL: COST TRACKING
+When adding ANY activity, you MUST include a realistic cost estimate:
+- Free attractions: cost: 0
+- Museum/attraction entries: ${currencySymbol}10-50 per person
+- Tours/experiences: ${currencySymbol}30-150 per person
+- Restaurant meals: ${currencySymbol}15-80 per person
+- Transportation: ${currencySymbol}5-50
+
+If user asks to "update budget breakdown" or check their spending, summarize the current costs and how changes will affect the budget.
 
 ## RESPONSE FORMAT
 When the user asks you to make changes, respond with:
 1. A friendly confirmation of what you'll do
-2. The specific changes in a structured format
+2. The cost impact (e.g., "This will add ${currencySymbol}XX to your trip")
+3. The specific changes in a structured format
 
 When suggesting changes, use this format:
 [ACTION: action_type]
@@ -252,15 +288,19 @@ When suggesting changes, use this format:
 [/ACTION]
 
 Action types:
-- ADD_ACTIVITY: {"dayNumber": 1, "activity": {"name": "...", "time": "10:00", "duration": "2 hours", "cost": 50, "description": "...", "location": {"lat": 0, "lng": 0, "address": "..."}}}
+- ADD_ACTIVITY: {"dayNumber": 1, "activity": {"name": "...", "time": "10:00", "duration": "2 hours", "cost": 50, "type": "activity", "description": "...", "location": {"lat": 0, "lng": 0, "address": "..."}}}
 - REMOVE_ACTIVITY: {"dayNumber": 1, "activityIndex": 0}
 - UPDATE_ACTIVITY: {"dayNumber": 1, "activityIndex": 0, "updates": {...}}
 - REORDER_ACTIVITIES: {"dayNumber": 1, "newOrder": [2, 0, 1]}
 - UPDATE_DAY_TITLE: {"dayNumber": 1, "title": "New Title"}
 
-Always include realistic costs in ${context.currency} and coordinates when adding activities.
-Remember: All costs should be in ${context.currency} (${currencySymbol}).
-Be conversational and helpful while being precise about changes.`;
+IMPORTANT RULES:
+1. ALL activities MUST have a "cost" field with a realistic ${context.currency} amount
+2. Include "type": "activity" for attractions, "type": "meal" for food, "type": "transport" for travel
+3. Always mention how changes affect the total budget
+4. Currency is ${context.currency} (${currencySymbol}) - do not use other currencies
+
+Be conversational and helpful while being precise about changes and costs.`;
 }
 
 /**
@@ -270,9 +310,17 @@ function parseActions(response: string): { cleanMessage: string; actions: ChatAc
   const actions: ChatAction[] = [];
   let cleanMessage = response;
 
-  // Extract action blocks - support both formats:
-  // 1. [ACTION: type]...[/ACTION] (with closing tag)
-  // 2. [ACTION: type]\n{json} (without closing tag - JSON on next line)
+  // Track which parts of the response have been processed to avoid duplicates
+  const processedRanges: Array<{ start: number; end: number }> = [];
+
+  // Helper to check if a range overlaps with already processed ranges
+  const isOverlapping = (start: number, end: number): boolean => {
+    return processedRanges.some(range =>
+      (start >= range.start && start < range.end) ||
+      (end > range.start && end <= range.end) ||
+      (start <= range.start && end >= range.end)
+    );
+  };
 
   // Helper to map action type string to ChatAction type
   const mapActionType = (actionType: string): ChatAction['type'] => {
@@ -286,12 +334,31 @@ function parseActions(response: string): { cleanMessage: string; actions: ChatAc
     }
   };
 
+  // Helper to generate a unique key for an action to detect duplicates
+  const getActionKey = (type: string, data: any): string => {
+    if (type === 'add_activity' && data?.activity?.name) {
+      return `add_${data.dayNumber}_${data.activity.name.toLowerCase().trim()}`;
+    }
+    if (type === 'remove_activity') {
+      return `remove_${data?.dayNumber}_${data?.activityIndex}`;
+    }
+    return `${type}_${JSON.stringify(data)}`;
+  };
+
+  const seenActionKeys = new Set<string>();
+
   let match;
 
   // First try with closing tags: [ACTION: type]...[/ACTION]
   const actionRegexWithClose = /\[ACTION:\s*(\w+)\]\s*([\s\S]*?)\s*\[\/ACTION\]/gi;
 
   while ((match = actionRegexWithClose.exec(response)) !== null) {
+    const matchStart = match.index;
+    const matchEnd = match.index + match[0].length;
+
+    // Skip if this range was already processed
+    if (isOverlapping(matchStart, matchEnd)) continue;
+
     const actionType = match[1];
     const actionDataStr = match[2].trim();
 
@@ -299,9 +366,18 @@ function parseActions(response: string): { cleanMessage: string; actions: ChatAc
     if (actionData) {
       const mappedType = mapActionType(actionType);
       if (mappedType !== 'none') {
-        actions.push({ type: mappedType, data: actionData });
-        cleanMessage = cleanMessage.replace(match[0], '');
-        console.log(`[AgentChat] Parsed action (with close): ${actionType}`);
+        const actionKey = getActionKey(mappedType, actionData);
+
+        // Skip if we've already seen this exact action
+        if (!seenActionKeys.has(actionKey)) {
+          seenActionKeys.add(actionKey);
+          actions.push({ type: mappedType, data: actionData });
+          processedRanges.push({ start: matchStart, end: matchEnd });
+          cleanMessage = cleanMessage.replace(match[0], '');
+          console.log(`[AgentChat] Parsed action (with close): ${actionType}`);
+        } else {
+          console.log(`[AgentChat] Skipping duplicate action: ${actionKey}`);
+        }
       }
     } else {
       console.warn('[AgentChat] Could not parse action JSON (with close tag), skipping');
@@ -312,6 +388,12 @@ function parseActions(response: string): { cleanMessage: string; actions: ChatAc
   const actionRegexNoClose = /\[ACTION:\s*(\w+)\]\s*\n\s*(\{[\s\S]*?\})/gi;
 
   while ((match = actionRegexNoClose.exec(response)) !== null) {
+    const matchStart = match.index;
+    const matchEnd = match.index + match[0].length;
+
+    // Skip if this range was already processed by the first regex
+    if (isOverlapping(matchStart, matchEnd)) continue;
+
     const actionType = match[1];
     const actionDataStr = match[2].trim();
 
@@ -319,20 +401,90 @@ function parseActions(response: string): { cleanMessage: string; actions: ChatAc
     if (actionData) {
       const mappedType = mapActionType(actionType);
       if (mappedType !== 'none') {
-        actions.push({ type: mappedType, data: actionData });
-        console.log(`[AgentChat] Parsed action (no close): ${actionType}`);
+        const actionKey = getActionKey(mappedType, actionData);
+
+        // Skip if we've already seen this exact action
+        if (!seenActionKeys.has(actionKey)) {
+          seenActionKeys.add(actionKey);
+          actions.push({ type: mappedType, data: actionData });
+          processedRanges.push({ start: matchStart, end: matchEnd });
+          cleanMessage = cleanMessage.replace(match[0], '').trim();
+          console.log(`[AgentChat] Parsed action (no close): ${actionType}`);
+        } else {
+          console.log(`[AgentChat] Skipping duplicate action: ${actionKey}`);
+        }
       }
     } else {
       console.warn('[AgentChat] Could not parse action data, skipping');
     }
-
-    // Remove action block from message
-    cleanMessage = cleanMessage.replace(match[0], '').trim();
   }
 
-  console.log(`[AgentChat] Parsed ${actions.length} actions from response`);
+  console.log(`[AgentChat] Parsed ${actions.length} unique actions from response`);
 
   return { cleanMessage, actions };
+}
+
+/**
+ * Deduplicate activities within an itinerary
+ * Removes duplicate activities based on name similarity
+ * Exported for use in cleanup endpoints
+ */
+export function deduplicateItinerary(itinerary: any): { itinerary: any; removedCount: number } {
+  if (!itinerary?.days) return { itinerary, removedCount: 0 };
+
+  let totalRemoved = 0;
+
+  for (const day of itinerary.days) {
+    if (!day.activities || !Array.isArray(day.activities)) continue;
+
+    const seen = new Map<string, number>(); // name -> index of first occurrence
+    const toKeep: number[] = [];
+
+    day.activities.forEach((activity: any, index: number) => {
+      const name = (activity.name || activity.description || '').toLowerCase().trim();
+
+      // Skip if empty name
+      if (!name) {
+        toKeep.push(index);
+        return;
+      }
+
+      // Check for exact match
+      if (seen.has(name)) {
+        console.log(`[AgentChat] Removing duplicate activity "${activity.name}" from Day ${day.day}`);
+        totalRemoved++;
+        return; // Skip this duplicate
+      }
+
+      // Check for similar names (one contains the other)
+      let isDuplicate = false;
+      for (const [existingName] of seen) {
+        if (existingName.includes(name) || name.includes(existingName)) {
+          // Additional check: if times are similar, it's likely a duplicate
+          const existingIdx = seen.get(existingName)!;
+          const existingTime = day.activities[existingIdx]?.time || '';
+          const currentTime = activity.time || '';
+
+          if (existingTime === currentTime || !currentTime || !existingTime) {
+            console.log(`[AgentChat] Removing similar duplicate "${activity.name}" (similar to existing) from Day ${day.day}`);
+            totalRemoved++;
+            isDuplicate = true;
+            break;
+          }
+        }
+      }
+
+      if (!isDuplicate) {
+        seen.set(name, index);
+        toKeep.push(index);
+      }
+    });
+
+    // Keep only non-duplicate activities
+    day.activities = toKeep.map(idx => day.activities[idx]);
+  }
+
+  return { itinerary, removedCount: totalRemoved };
 }
 
 /**
@@ -343,6 +495,13 @@ async function applyActions(tripId: number, actions: ChatAction[], context: Trip
 
   let itinerary = JSON.parse(JSON.stringify(context.itinerary || { days: [] }));
   let totalCostChange = 0;
+
+  // First, deduplicate any existing duplicates in the itinerary
+  const { itinerary: cleanedItinerary, removedCount } = deduplicateItinerary(itinerary);
+  itinerary = cleanedItinerary;
+  if (removedCount > 0) {
+    console.log(`[AgentChat] Cleaned up ${removedCount} existing duplicate(s) before applying new actions`);
+  }
 
   for (const action of actions) {
     switch (action.type) {
@@ -355,12 +514,33 @@ async function applyActions(tripId: number, actions: ChatAction[], context: Trip
             itinerary.days[dayIndex].activities = [];
           }
 
-          // Generate unique ID for activity
-          activity.id = `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          itinerary.days[dayIndex].activities.push(activity);
-          totalCostChange += activity.cost || 0;
+          // Check for duplicate activity - compare by name (case-insensitive) and time
+          const activityName = (activity.name || activity.description || '').toLowerCase().trim();
+          const activityTime = activity.time || '';
 
-          console.log(`[AgentChat] Added activity "${activity.name}" to Day ${dayNumber}`);
+          const isDuplicate = itinerary.days[dayIndex].activities.some((existing: any) => {
+            const existingName = (existing.name || existing.description || '').toLowerCase().trim();
+            const existingTime = existing.time || '';
+
+            // Consider duplicate if same name OR (same name prefix and same time)
+            if (existingName === activityName) return true;
+            if (activityTime && existingTime === activityTime &&
+                (existingName.includes(activityName) || activityName.includes(existingName))) {
+              return true;
+            }
+            return false;
+          });
+
+          if (isDuplicate) {
+            console.log(`[AgentChat] Skipping duplicate activity "${activity.name}" in Day ${dayNumber}`);
+          } else {
+            // Generate unique ID for activity
+            activity.id = `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            itinerary.days[dayIndex].activities.push(activity);
+            totalCostChange += activity.cost || 0;
+
+            console.log(`[AgentChat] Added activity "${activity.name}" to Day ${dayNumber}`);
+          }
         }
         break;
       }
@@ -465,9 +645,11 @@ export async function processChat(
     // Build messages for AI
     const systemPrompt = buildSystemPrompt(session.tripContext);
 
+    // Keep more message history for better context retention (20 messages = ~10 exchanges)
+    // The system prompt already contains full trip context, so we don't need unlimited history
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
-      ...session.messages.slice(-10), // Keep last 10 messages for context
+      ...session.messages.slice(-20), // Keep last 20 messages for better context
       { role: 'user', content: userMessage },
     ];
 
@@ -749,13 +931,14 @@ export function clearChatHistory(tripId: number): void {
 }
 
 /**
- * Get currency symbol
+ * Get currency symbol - supports all 28 currencies
  */
 function getCurrencySymbol(currency: string): string {
   const symbols: Record<string, string> = {
-    USD: '$', EUR: '€', GBP: '£', JPY: '¥', INR: '₹',
-    AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿',
-    MYR: 'RM', KRW: '₩', CNY: '¥', HKD: 'HK$', NZD: 'NZ$',
+    USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥', INR: '₹', AUD: 'A$', CAD: 'C$',
+    CHF: 'CHF', KRW: '₩', SGD: 'S$', HKD: 'HK$', NZD: 'NZ$', SEK: 'kr', NOK: 'kr', DKK: 'kr',
+    MXN: '$', BRL: 'R$', AED: 'د.إ', SAR: '﷼', THB: '฿', MYR: 'RM', IDR: 'Rp', PHP: '₱',
+    ZAR: 'R', TRY: '₺', RUB: '₽', PLN: 'zł', CZK: 'Kč', HUF: 'Ft'
   };
   return symbols[currency] || currency + ' ';
 }

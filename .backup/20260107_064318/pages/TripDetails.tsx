@@ -1,7 +1,7 @@
 import { useParams, Link } from "wouter";
 import { useTrip } from "@/hooks/use-trips";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, ArrowLeft, Download, Share2, Check, MapPin, Calendar, Users, Wallet, Plane, FileText, Map, DollarSign, ClipboardList, ChevronRight, CheckCircle, AlertTriangle, XCircle, TrendingUp, TrendingDown, Navigation, Globe, Hotel, Sparkles, CircleCheck, Pencil, ShoppingCart, ExternalLink } from "lucide-react";
+import { Loader2, ArrowLeft, Download, Share2, Check, MapPin, Calendar, Users, Wallet, Plane, FileText, Map as MapIcon, DollarSign, ClipboardList, ChevronRight, CheckCircle, AlertTriangle, XCircle, TrendingUp, TrendingDown, Navigation, Globe, Hotel, Sparkles, CircleCheck, Pencil, ShoppingCart, ExternalLink, Train, Bus, Car, Clock, Zap } from "lucide-react";
 import { FeasibilityReportView } from "@/components/FeasibilityReport";
 import { ItineraryTimeline } from "@/components/ItineraryTimeline";
 import { ItineraryMap } from "@/components/ItineraryMap";
@@ -10,14 +10,14 @@ import { BookNow } from "@/components/BookNow";
 import { TripChat } from "@/components/TripChat";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 // Progress step icons
 const PROGRESS_ICONS = [
   { icon: Globe, label: "Starting" },
   { icon: FileText, label: "Feasibility" },
-  { icon: Plane, label: "Flights" },
+  { icon: Train, label: "Transport" },  // Changed from Plane/Flights
   { icon: Hotel, label: "Hotels" },
   { icon: ClipboardList, label: "Itinerary" },
   { icon: Sparkles, label: "Finalizing" },
@@ -38,9 +38,12 @@ function useTripProgress(tripId: number, isProcessing: boolean) {
   });
 }
 
-// Currency symbol mapping
+// Currency symbol mapping - supports all 28 currencies
 const CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$', INR: '₹', EUR: '€', GBP: '£', JPY: '¥', AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ', THB: '฿'
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥', INR: '₹', AUD: 'A$', CAD: 'C$',
+  CHF: 'CHF', KRW: '₩', SGD: 'S$', HKD: 'HK$', NZD: 'NZ$', SEK: 'kr', NOK: 'kr', DKK: 'kr',
+  MXN: '$', BRL: 'R$', AED: 'د.إ', SAR: '﷼', THB: '฿', MYR: 'RM', IDR: 'Rp', PHP: '₱',
+  ZAR: 'R', TRY: '₺', RUB: '₽', PLN: 'zł', CZK: 'Kč', HUF: 'Ft'
 };
 
 function getCurrencySymbol(currency?: string): string {
@@ -192,12 +195,108 @@ const DESTINATION_IMAGES: Record<string, string> = {
   'default': 'https://images.pexels.com/photos/3155666/pexels-photo-3155666.jpeg?auto=compress&cs=tinysrgb&w=1920',
 };
 
+// Category fallback images for unknown destinations - provides variety without API calls
+const CATEGORY_FALLBACKS: Record<string, string> = {
+  beach: 'https://images.pexels.com/photos/1287460/pexels-photo-1287460.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  tropical: 'https://images.pexels.com/photos/1682748/pexels-photo-1682748.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  mountain: 'https://images.pexels.com/photos/1659438/pexels-photo-1659438.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  city: 'https://images.pexels.com/photos/466685/pexels-photo-466685.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  european: 'https://images.pexels.com/photos/2082103/pexels-photo-2082103.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  asian: 'https://images.pexels.com/photos/2506923/pexels-photo-2506923.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  desert: 'https://images.pexels.com/photos/1707310/pexels-photo-1707310.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  island: 'https://images.pexels.com/photos/1430672/pexels-photo-1430672.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  africa: 'https://images.pexels.com/photos/3889742/pexels-photo-3889742.jpeg?auto=compress&cs=tinysrgb&w=1920',
+  americas: 'https://images.pexels.com/photos/802024/pexels-photo-802024.jpeg?auto=compress&cs=tinysrgb&w=1920',
+};
+
+// Keywords for categorizing unknown destinations
+// Note: Order matters! More specific categories should come first
+const CATEGORY_KEYWORDS: Record<string, string[]> = {
+  // Mountain destinations (check first - Nepal, Bhutan are Himalayan, not generic "Asian")
+  mountain: ['mountain', 'alps', 'himalaya', 'andes', 'rockies', 'peak', 'summit', 'ski', 'highland', 'valley',
+             'nepal', 'kathmandu', 'pokhara', 'bhutan', 'thimphu', 'tibet', 'lhasa', 'everest', 'annapurna'],
+  beach: ['beach', 'coast', 'bay', 'cove', 'playa', 'praia', 'shore', 'seaside', 'reef'],
+  tropical: ['tropical', 'caribbean', 'pacific', 'tahiti', 'polynesia', 'bahamas', 'jamaica', 'aruba', 'curacao', 'palm'],
+  island: ['island', 'isle', 'archipelago', 'atoll', 'cay', 'key', 'maldives', 'fiji', 'bora bora'],
+  european: ['europe', 'poland', 'croatia', 'romania', 'bulgaria', 'serbia', 'ukraine', 'baltic', 'slovakia', 'slovenia'],
+  asian: ['china', 'taiwan', 'cambodia', 'laos', 'myanmar', 'sri lanka', 'bangladesh', 'mongolia', 'vietnam', 'hanoi'],
+  desert: ['desert', 'sahara', 'arabia', 'oman', 'jordan', 'petra', 'bedouin', 'sand', 'dune'],
+  africa: ['africa', 'tanzania', 'uganda', 'rwanda', 'ethiopia', 'ghana', 'senegal', 'safari', 'serengeti', 'zanzibar'],
+  americas: ['america', 'caribbean', 'costa rica', 'panama', 'chile', 'ecuador', 'bolivia', 'paraguay', 'uruguay', 'cuba'],
+};
+
+/**
+ * Smart destination image lookup with category-based fallbacks
+ * Priority: Exact match → Partial match → Category fallback → Default
+ */
 function getDestinationImage(destination: string): string {
   const destLower = destination.toLowerCase();
+
+  // 1. FAST PATH: Check hardcoded images (instant, ~100 popular destinations)
   for (const [key, url] of Object.entries(DESTINATION_IMAGES)) {
-    if (destLower.includes(key)) return url;
+    if (key !== 'default' && destLower.includes(key)) return url;
   }
+
+  // 2. SMART FALLBACK: Categorize the destination and use appropriate fallback
+  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (keywords.some(keyword => destLower.includes(keyword))) {
+      return CATEGORY_FALLBACKS[category];
+    }
+  }
+
+  // 3. DEFAULT: Beautiful generic travel image
   return DESTINATION_IMAGES['default'];
+}
+
+/**
+ * AI-Powered Dynamic Destination Image Hook
+ * Uses AI to suggest the most iconic landmark for each destination
+ * Priority: Local hardcoded (for speed) → AI-powered Unsplash (for accuracy)
+ */
+function useDynamicDestinationImage(destination: string | undefined) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [landmark, setLandmark] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!destination) return;
+
+    // Don't show local image first - wait for AI to provide the correct one
+    // This prevents the "flash" of wrong image before the AI image loads
+    setIsLoading(true);
+    setImageUrl(null);
+
+    // Fetch AI-suggested landmark image for the destination
+    fetch(`/api/destination-image?destination=${encodeURIComponent(destination)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.imageUrl) {
+          // AI found a relevant image - use it!
+          setImageUrl(data.imageUrl);
+          setLandmark(data.landmark || '');
+          console.log(`[AI Image] ${destination} → ${data.landmark}: ${data.searchTerm}`);
+        } else {
+          // Fallback to local image only if AI returns nothing
+          const localImage = getDestinationImage(destination);
+          setImageUrl(localImage);
+        }
+      })
+      .catch(err => {
+        console.log('AI image fetch failed, using local fallback:', err);
+        // Fallback to local hardcoded image
+        const localImage = getDestinationImage(destination);
+        setImageUrl(localImage);
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
+  }, [destination]);
+
+  return {
+    imageUrl: imageUrl || DESTINATION_IMAGES['default'],
+    landmark,
+    isLoading
+  };
 }
 
 type SectionType = 'analysis' | 'map' | 'budget' | 'itinerary' | 'booking' | null;
@@ -339,9 +438,9 @@ function ProgressIndicator({ step, message, details, elapsed, percentComplete }:
   }, []);
 
   return (
-    <div className="bg-white/10 backdrop-blur-xl rounded-2xl p-8 text-center border border-white/20 relative z-10">
-      {/* Step indicators */}
-      <div className="flex justify-center items-center gap-2 mb-6">
+    <div className="bg-white/10 backdrop-blur-xl rounded-2xl p-6 text-center border border-white/20 relative z-10">
+      {/* Modern compact step indicators */}
+      <div className="flex justify-center items-center gap-1 mb-5">
         {PROGRESS_ICONS.slice(0, 6).map((item, idx) => {
           const Icon = item.icon;
           const isActive = idx === step;
@@ -349,58 +448,54 @@ function ProgressIndicator({ step, message, details, elapsed, percentComplete }:
           return (
             <motion.div
               key={idx}
-              className={`relative flex flex-col items-center`}
-              initial={{ scale: 0.8, opacity: 0.5 }}
-              animate={{
-                scale: isActive ? 1.2 : 1,
-                opacity: isComplete || isActive ? 1 : 0.4,
-              }}
+              className="flex items-center"
+              initial={{ opacity: 0.5 }}
+              animate={{ opacity: isComplete || isActive ? 1 : 0.4 }}
               transition={{ duration: 0.3 }}
             >
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                isComplete ? 'bg-emerald-500/30 border-2 border-emerald-400' :
-                isActive ? 'bg-primary/30 border-2 border-primary animate-pulse' :
-                'bg-white/10 border border-white/20'
+              {/* Step pill */}
+              <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full transition-all ${
+                isComplete ? 'bg-emerald-500/20' :
+                isActive ? 'bg-primary/20 ring-2 ring-primary/50' :
+                'bg-white/5'
               }`}>
                 {isComplete ? (
-                  <Check className="w-5 h-5 text-emerald-400" />
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
                 ) : (
-                  <Icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-white/60'}`} />
+                  <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-primary' : 'text-white/40'}`} />
                 )}
+                <span className={`text-[11px] font-medium hidden sm:inline ${
+                  isActive ? 'text-white' : isComplete ? 'text-emerald-300' : 'text-white/40'
+                }`}>
+                  {item.label}
+                </span>
               </div>
-              <span className={`text-[10px] mt-1.5 font-medium ${
-                isActive ? 'text-white' : isComplete ? 'text-emerald-400' : 'text-white/40'
-              }`}>
-                {item.label}
-              </span>
-              {/* Connector line */}
+              {/* Connector */}
               {idx < 5 && (
-                <div className={`absolute top-5 left-[calc(100%+2px)] w-4 h-0.5 ${
-                  isComplete ? 'bg-emerald-400' : 'bg-white/20'
-                }`} />
+                <div className={`w-3 h-0.5 mx-0.5 rounded ${isComplete ? 'bg-emerald-400/50' : 'bg-white/10'}`} />
               )}
             </motion.div>
           );
         })}
       </div>
 
-      {/* Animated icon */}
+      {/* Animated spinner */}
       <motion.div
-        className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center"
-        animate={{ rotate: [0, 5, -5, 0] }}
-        transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+        className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-primary/20 to-emerald-400/10 flex items-center justify-center"
+        animate={{ rotate: 360 }}
+        transition={{ repeat: Infinity, duration: 8, ease: "linear" }}
       >
         {step < 6 ? (
-          <Loader2 className="w-10 h-10 text-primary animate-spin" />
+          <Loader2 className="w-8 h-8 text-primary animate-spin" />
         ) : (
-          <CircleCheck className="w-10 h-10 text-emerald-400" />
+          <CircleCheck className="w-8 h-8 text-emerald-400" />
         )}
       </motion.div>
 
       {/* Progress bar */}
-      <div className="w-full max-w-md mx-auto h-2 bg-white/10 rounded-full mb-4 overflow-hidden">
+      <div className="w-full max-w-sm mx-auto h-1.5 bg-white/10 rounded-full mb-3 overflow-hidden">
         <motion.div
-          className="h-full bg-gradient-to-r from-primary to-emerald-400 rounded-full"
+          className="h-full bg-gradient-to-r from-primary via-blue-400 to-emerald-400 rounded-full"
           initial={{ width: 0 }}
           animate={{ width: `${percentComplete}%` }}
           transition={{ duration: 0.5, ease: "easeOut" }}
@@ -464,8 +559,11 @@ export default function TripDetails() {
   const [expandedSection, setExpandedSection] = useState<SectionType>(null);
   const [localItinerary, setLocalItinerary] = useState<any>(null);
   const [localBudgetBreakdown, setLocalBudgetBreakdown] = useState<any>(null);
+  const [isMapExpanded, setIsMapExpanded] = useState(false);
   const [updateKey, setUpdateKey] = useState(0); // Force re-render key
   const [showUpdateAnimation, setShowUpdateAnimation] = useState(false); // Animation trigger for updates
+  const [selectedTransportMode, setSelectedTransportMode] = useState<string | null>(null); // User-selected transport mode
+  const [selectedFoods, setSelectedFoods] = useState<Map<string, any>>(new Map()); // User-selected food spots
   const { toast } = useToast();
 
   // Only reset local state when navigating to a different trip (id changes)
@@ -486,9 +584,32 @@ export default function TripDetails() {
     // Immediately update local state for instant UI feedback
     if (updatedData.itinerary) {
       setLocalItinerary(updatedData.itinerary);
-    }
-    if (updatedData.budgetBreakdown) {
-      setLocalBudgetBreakdown(updatedData.budgetBreakdown);
+
+      // Prefer costBreakdown from itinerary (has full details including transportOptions)
+      // Merge with budgetBreakdown for updated totals
+      const itineraryCostBreakdown = updatedData.itinerary?.costBreakdown;
+      if (itineraryCostBreakdown) {
+        // Merge budget totals from budgetBreakdown with detailed fields from itinerary
+        const mergedBreakdown = {
+          ...itineraryCostBreakdown,
+          ...(updatedData.budgetBreakdown ? {
+            totalSpent: updatedData.budgetBreakdown.totalSpent,
+            grandTotal: updatedData.budgetBreakdown.grandTotal || updatedData.budgetBreakdown.totalSpent,
+            remaining: updatedData.budgetBreakdown.remaining,
+            percentUsed: updatedData.budgetBreakdown.percentUsed,
+            perPerson: updatedData.budgetBreakdown.perPerson,
+            perDay: updatedData.budgetBreakdown.perDay,
+            budgetStatus: updatedData.budgetBreakdown.budgetStatus,
+          } : {}),
+        };
+        setLocalBudgetBreakdown(mergedBreakdown);
+        console.log('[TripDetails] Updated budget breakdown with merged data:', mergedBreakdown);
+      } else if (updatedData.budgetBreakdown) {
+        setLocalBudgetBreakdown(updatedData.budgetBreakdown);
+      }
+    } else if (updatedData.budgetBreakdown) {
+      // No itinerary update, just budget breakdown - merge with existing
+      setLocalBudgetBreakdown((prev: any) => prev ? { ...prev, ...updatedData.budgetBreakdown } : updatedData.budgetBreakdown);
     }
 
     // Trigger update animation
@@ -513,11 +634,221 @@ export default function TripDetails() {
 
   const handleLocationSelect = useCallback((locationId: string) => {
     setHighlightedLocation(locationId);
-    // Switch to map when a location is selected from itinerary
-    if (expandedSection === 'itinerary') {
-      setExpandedSection('map');
+    // Map is now side-by-side with itinerary, no need to switch sections
+    // The highlighted location will automatically zoom/highlight on the map
+  }, []);
+
+  // Handle user food selection - adds meal to itinerary and updates budget
+  const handleFoodSelect = useCallback((day: number, food: any) => {
+    const key = `${day}-${food.meal}`;
+
+    setSelectedFoods(prev => {
+      const newMap = new Map(prev);
+      if (newMap.has(key) && newMap.get(key)?.name === food.name) {
+        // Deselect if same food is clicked again
+        newMap.delete(key);
+        toast({
+          title: "Meal removed",
+          description: `${food.name} removed from Day ${day}`,
+        });
+      } else {
+        // Select new food
+        newMap.set(key, food);
+        toast({
+          title: "Meal added!",
+          description: `${food.name} added to Day ${day} ${food.meal}`,
+        });
+      }
+      return newMap;
+    });
+
+    // Trigger animation
+    setShowUpdateAnimation(true);
+    setTimeout(() => setShowUpdateAnimation(false), 2000);
+    setUpdateKey(prev => prev + 1);
+  }, [toast]);
+
+  // Handle user transport mode selection - recalculates budget AND updates itinerary
+  const handleTransportSelect = useCallback((selectedOption: any) => {
+    // Compute current state inside callback
+    const currentItinerary = localItinerary || trip?.itinerary as any;
+    const currentCostBreakdown = localBudgetBreakdown || currentItinerary?.costBreakdown;
+
+    if (!currentCostBreakdown?.transportOptions?.options) return;
+
+    const transportOptions = currentCostBreakdown.transportOptions.options;
+    const selectedMode = selectedOption.mode;
+    const selectedCost = selectedOption.estimatedCost;
+    const selectedDuration = selectedOption.duration;
+
+    // Determine the arrival/departure point based on transport mode
+    const getTransportHub = (mode: string, destination: string) => {
+      const city = destination?.split(',')[0]?.trim() || destination;
+      const baseMode = mode.toLowerCase().replace(/[^a-z]/g, '');
+
+      if (baseMode.includes('train') || baseMode.includes('rail')) {
+        return {
+          type: 'Railway Station',
+          name: `${city} Railway Station`,
+          // Common railway station coordinates for major Indian cities
+          getCoords: () => {
+            const stationCoords: Record<string, { lat: number; lng: number }> = {
+              'vijayawada': { lat: 16.5175, lng: 80.6167 },
+              'mumbai': { lat: 18.9402, lng: 72.8356 }, // CST
+              'delhi': { lat: 28.6421, lng: 77.2190 }, // New Delhi
+              'chennai': { lat: 13.0827, lng: 80.2707 },
+              'kolkata': { lat: 22.5551, lng: 88.3512 }, // Howrah
+              'bangalore': { lat: 12.9778, lng: 77.5713 },
+              'hyderabad': { lat: 17.4319, lng: 78.5016 },
+              'goa': { lat: 15.2713, lng: 73.9572 }, // Madgaon
+              'tirupati': { lat: 13.6328, lng: 79.4192 },
+              'lucknow': { lat: 26.8310, lng: 80.9163 },
+              'jaipur': { lat: 26.9202, lng: 75.7873 },
+              'hampi': { lat: 15.3317, lng: 76.4614 }, // Hospet
+              'agra': { lat: 27.1883, lng: 78.0049 },
+            };
+            const cityLower = city.toLowerCase();
+            return stationCoords[cityLower] || null;
+          }
+        };
+      } else if (baseMode.includes('bus')) {
+        return {
+          type: 'Bus Station',
+          name: `${city} Bus Stand`,
+          getCoords: () => {
+            const busCoords: Record<string, { lat: number; lng: number }> = {
+              'vijayawada': { lat: 16.5065, lng: 80.6462 },
+              'mumbai': { lat: 19.0176, lng: 72.8562 },
+              'delhi': { lat: 28.6328, lng: 77.2205 }, // ISBT
+              'goa': { lat: 15.4989, lng: 73.8278 }, // Panaji
+              'tirupati': { lat: 13.6356, lng: 79.4236 },
+              'hampi': { lat: 15.3350, lng: 76.4600 },
+            };
+            const cityLower = city.toLowerCase();
+            return busCoords[cityLower] || null;
+          }
+        };
+      } else if (baseMode.includes('cab') || baseMode.includes('ola') || baseMode.includes('taxi')) {
+        return {
+          type: 'Pickup Point',
+          name: `${city} City Center`,
+          getCoords: () => null
+        };
+      }
+      // Default to airport for flights
+      return {
+        type: 'Airport',
+        name: `${city} Airport`,
+        getCoords: () => null
+      };
+    };
+
+    const destinationHub = getTransportHub(selectedMode, trip?.destination || '');
+    const originHub = getTransportHub(selectedMode, trip?.origin || '');
+
+    // Calculate the difference between current transport and new transport
+    const currentTransportCost = currentCostBreakdown.flights?.total || 0;
+    const costDifference = selectedCost - currentTransportCost;
+
+    // Update transport options to mark selected one
+    const updatedTransportOptions = transportOptions.map((opt: any) => ({
+      ...opt,
+      selected: opt.mode === selectedMode,
+      recommended: false, // Clear recommended when user makes manual selection
+    }));
+
+    // Update itinerary activities to reflect new transport mode
+    let updatedDays = currentItinerary?.days || [];
+    let removedTransferCost = 0; // Track removed airport transfer costs
+
+    if (updatedDays.length > 0) {
+      updatedDays = updatedDays.map((day: any, dayIdx: number) => {
+        const updatedActivities = day.activities?.map((activity: any) => {
+          const activityLower = (activity.name || '').toLowerCase();
+          const locationLower = (activity.location || '').toLowerCase();
+
+          // Check if this is an arrival/departure activity that needs updating
+          const isArrival = activityLower.includes('arrive') || activityLower.includes('arrival');
+          const isDepart = activityLower.includes('depart') || activityLower.includes('departure');
+          const isAirportActivity = activityLower.includes('airport') || locationLower.includes('airport');
+
+          if ((isArrival || isDepart) && isAirportActivity) {
+            const hub = isArrival ? destinationHub : originHub;
+            const hubCoords = hub.getCoords();
+
+            // If switching away from flight, remove airport transfer cost (typically ₹180-500)
+            const oldCost = activity.cost || 0;
+            if (!selectedMode.toLowerCase().includes('flight') && oldCost > 0) {
+              removedTransferCost += oldCost;
+            }
+
+            return {
+              ...activity,
+              name: isArrival ? `Arrive at ${hub.name}` : `Depart from ${hub.name}`,
+              location: hub.name,
+              // Set cost to 0 for train/bus (no transfer needed), keep for flights
+              cost: selectedMode.toLowerCase().includes('flight') ? oldCost : 0,
+              coordinates: hubCoords ? hubCoords : activity.coordinates,
+            };
+          }
+          return activity;
+        }) || [];
+
+        return { ...day, activities: updatedActivities };
+      });
     }
-  }, [expandedSection]);
+
+    // Adjust grand total to account for removed transfer costs
+    const adjustedCostDifference = costDifference - removedTransferCost;
+
+    // Create updated cost breakdown
+    const updatedBreakdown = {
+      ...currentCostBreakdown,
+      flights: {
+        ...currentCostBreakdown.flights,
+        total: selectedCost,
+        perPerson: Math.round(selectedCost / (trip?.groupSize || 1)),
+        airline: selectedMode.charAt(0).toUpperCase() + selectedMode.slice(1),
+        duration: selectedDuration,
+        note: `${selectedMode.toLowerCase().includes('flight') ? 'Round-trip flights' : selectedMode.charAt(0).toUpperCase() + selectedMode.slice(1) + ' travel'} from ${trip?.origin}`,
+        selectedMode: selectedMode,
+      },
+      transportOptions: {
+        ...currentCostBreakdown.transportOptions,
+        selectedMode: selectedMode,
+        options: updatedTransportOptions,
+      },
+      grandTotal: (currentCostBreakdown.grandTotal || 0) + adjustedCostDifference,
+      perPerson: Math.round(((currentCostBreakdown.grandTotal || 0) + adjustedCostDifference) / (trip?.groupSize || 1)),
+    };
+
+    // Update local state
+    setSelectedTransportMode(selectedMode);
+    setLocalBudgetBreakdown(updatedBreakdown);
+
+    // Update itinerary with new cost breakdown AND updated activities
+    if (currentItinerary) {
+      const updatedItinerary = {
+        ...currentItinerary,
+        days: updatedDays,
+        costBreakdown: updatedBreakdown,
+      };
+      setLocalItinerary(updatedItinerary);
+    }
+
+    // Show update animation
+    setShowUpdateAnimation(true);
+    setTimeout(() => setShowUpdateAnimation(false), 2000);
+    setUpdateKey(prev => prev + 1);
+
+    // Show toast notification with details about what changed
+    const transferNote = removedTransferCost > 0 ? ` (saved ${currentCostBreakdown.currencySymbol}${removedTransferCost} on transfers)` : '';
+    toast({
+      title: `Transport updated to ${selectedMode}`,
+      description: `New estimated total: ${currentCostBreakdown.currencySymbol}${updatedBreakdown.grandTotal.toLocaleString()}${transferNote}`,
+    });
+
+  }, [localBudgetBreakdown, trip, localItinerary, toast]);
 
   // Extract data for preview cards (use local updates for immediate feedback)
   const itineraryData = localItinerary || trip?.itinerary as any;
@@ -529,10 +860,9 @@ export default function TripDetails() {
   const locationsCount = itineraryData?.days?.reduce((sum: number, d: any) =>
     sum + (d.activities?.filter((a: any) => a.coordinates?.lat).length || 0), 0) || 0;
 
-  const backgroundUrl = useMemo(() =>
-    trip ? getDestinationImage(trip.destination) : DESTINATION_IMAGES['default'],
-    [trip?.destination]
-  );
+  // Use dynamic hook for destination image - hybrid approach:
+  // Instant for popular destinations, API-enhanced for unknown ones
+  const { imageUrl: backgroundUrl, isLoading: imageIsLoading } = useDynamicDestinationImage(trip?.destination);
 
   // Preload background image
   useEffect(() => {
@@ -724,8 +1054,8 @@ export default function TripDetails() {
               </div>
               <div class="overview-item">
                 <div class="icon">💰</div>
-                <div class="value">${currencySymbol}${trip.budget?.toLocaleString()}</div>
-                <div class="label">Budget</div>
+                <div class="value">${trip.travelStyle === 'custom' ? `${currencySymbol}${trip.budget?.toLocaleString()}` : (trip.travelStyle === 'budget' ? 'Budget' : trip.travelStyle === 'standard' ? 'Comfort' : trip.travelStyle === 'luxury' ? 'Luxury' : `${currencySymbol}${trip.budget?.toLocaleString()}`)}</div>
+                <div class="label">${trip.travelStyle === 'custom' ? 'Budget' : 'Travel Style'}</div>
               </div>
             </div>
           </div>
@@ -786,7 +1116,10 @@ export default function TripDetails() {
             <div class="budget-total">
               <div class="label">Total Estimated Cost</div>
               <div class="amount">${currencySymbol}${(breakdown.grandTotal || breakdown.totalSpent || 0).toLocaleString()}</div>
-              <div class="status">${breakdown.budgetStatus === 'within_budget' ? '✓ Within Budget' : breakdown.budgetStatus === 'tight' ? '⚡ Tight Budget' : '⚠️ Over Budget'}</div>
+              ${trip.travelStyle === 'custom'
+                ? `<div class="status">${breakdown.budgetStatus === 'within_budget' ? '✓ Within Budget' : breakdown.budgetStatus === 'tight' ? '⚡ Tight Budget' : '⚠️ Over Budget'}</div>`
+                : `<div class="status" style="background: rgba(255,255,255,0.3);">${trip.travelStyle === 'budget' ? '💰 Budget Travel' : trip.travelStyle === 'luxury' ? '✨ Luxury Travel' : '🎯 Comfort Travel'}</div>`
+              }
             </div>
           </div>
           ` : ''}
@@ -864,13 +1197,62 @@ export default function TripDetails() {
 
   if (error || !trip) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-white mb-4">Trip Not Found</h1>
-          <p className="text-slate-400 mb-6">This trip doesn't exist or has been removed.</p>
+      <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
+        {/* Colorful travel-themed gradient background */}
+        <div className="absolute inset-0 bg-gradient-to-br from-orange-400 via-pink-500 to-purple-600" />
+
+        {/* Animated floating travel icons */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {/* Floating airplane */}
+          <div className="absolute top-[10%] left-[10%] text-6xl opacity-20 animate-bounce" style={{ animationDuration: '3s' }}>
+            ✈️
+          </div>
+          {/* Floating compass */}
+          <div className="absolute top-[20%] right-[15%] text-5xl opacity-25 animate-pulse" style={{ animationDuration: '2s' }}>
+            🧭
+          </div>
+          {/* Floating map */}
+          <div className="absolute bottom-[25%] left-[8%] text-5xl opacity-20 animate-bounce" style={{ animationDuration: '4s', animationDelay: '1s' }}>
+            🗺️
+          </div>
+          {/* Floating suitcase */}
+          <div className="absolute bottom-[15%] right-[20%] text-6xl opacity-25 animate-pulse" style={{ animationDuration: '2.5s' }}>
+            🧳
+          </div>
+          {/* Floating globe */}
+          <div className="absolute top-[50%] left-[5%] text-4xl opacity-15 animate-spin" style={{ animationDuration: '20s' }}>
+            🌍
+          </div>
+          {/* Floating passport */}
+          <div className="absolute top-[60%] right-[8%] text-5xl opacity-20 animate-bounce" style={{ animationDuration: '3.5s' }}>
+            🛂
+          </div>
+          {/* Question marks floating */}
+          <div className="absolute top-[35%] left-[25%] text-3xl opacity-30 animate-ping" style={{ animationDuration: '2s' }}>
+            ❓
+          </div>
+          <div className="absolute bottom-[40%] right-[30%] text-4xl opacity-25 animate-ping" style={{ animationDuration: '3s', animationDelay: '0.5s' }}>
+            ❓
+          </div>
+        </div>
+
+        {/* Decorative circles */}
+        <div className="absolute top-[-10%] right-[-10%] w-96 h-96 bg-yellow-300/20 rounded-full blur-3xl" />
+        <div className="absolute bottom-[-15%] left-[-10%] w-80 h-80 bg-blue-400/20 rounded-full blur-3xl" />
+
+        {/* Content card */}
+        <div className="relative z-10 text-center bg-white/10 backdrop-blur-xl rounded-3xl p-12 mx-4 border border-white/20 shadow-2xl max-w-md">
+          {/* Lost traveler illustration */}
+          <div className="text-8xl mb-6 animate-bounce" style={{ animationDuration: '2s' }}>
+            🏝️
+          </div>
+          <h1 className="text-4xl font-bold text-white mb-4 drop-shadow-lg">Trip Not Found</h1>
+          <p className="text-white/80 mb-8 text-lg">
+            Oops! This trip seems to have wandered off the map. It doesn't exist or has been removed.
+          </p>
           <Link href="/">
-            <Button className="bg-white text-slate-900 hover:bg-slate-100">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Back to Home
+            <Button className="bg-white text-purple-600 hover:bg-white/90 font-semibold px-8 py-3 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105">
+              <ArrowLeft className="w-5 h-5 mr-2" /> Back to Home
             </Button>
           </Link>
         </div>
@@ -891,8 +1273,9 @@ export default function TripDetails() {
         {!imageLoaded && (
           <div className="absolute inset-0 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-900 animate-pulse" />
         )}
-        <div className="absolute inset-0 bg-black/60" />
-        <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/50" />
+        {/* Reduced overlay for brighter backgrounds - was bg-black/60 */}
+        <div className="absolute inset-0 bg-black/25" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/30" />
       </div>
 
       {/* Fixed Header */}
@@ -964,7 +1347,7 @@ export default function TripDetails() {
                     <Plane className="w-4 h-4 text-white" />
                     <span className="text-white/90 text-sm font-medium">Your Trip Plan</span>
                   </div>
-                  <h1 className="text-4xl md:text-5xl font-display font-bold text-white drop-shadow-lg mb-4">
+                  <h1 className="text-4xl md:text-5xl font-display font-bold text-white mb-4" style={{ textShadow: '0 2px 10px rgba(0,0,0,0.5), 0 4px 20px rgba(0,0,0,0.3)' }}>
                     {trip.destination}
                   </h1>
                   <div className="flex items-center justify-center gap-6 text-white/80 text-sm">
@@ -978,7 +1361,9 @@ export default function TripDetails() {
                     </span>
                     <span className="flex items-center gap-2">
                       <Wallet className="w-4 h-4" />
-                      {getCurrencySymbol(trip.currency ?? undefined)}{trip.budget.toLocaleString()} budget
+                      {trip.travelStyle === 'custom'
+                        ? `${getCurrencySymbol(trip.currency ?? undefined)}${trip.budget.toLocaleString()} budget`
+                        : `${trip.travelStyle === 'budget' ? 'Budget' : trip.travelStyle === 'standard' ? 'Comfort' : trip.travelStyle === 'luxury' ? 'Luxury' : trip.travelStyle} travel`}
                     </span>
                   </div>
                 </motion.div>
@@ -1042,45 +1427,11 @@ export default function TripDetails() {
                       </div>
                     </motion.button>
 
-                    {/* Map Card */}
-                    <motion.button
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.2 }}
-                      onClick={() => isFeasible && setExpandedSection('map')}
-                      disabled={!isFeasible}
-                      className={`group bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20 transition-all text-left ${
-                        isFeasible ? 'hover:bg-white/20 hover:border-white/30' : 'opacity-50 cursor-not-allowed'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="p-3 rounded-xl bg-blue-500/20">
-                          <Map className="w-6 h-6 text-blue-400" />
-                        </div>
-                        <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white/80 group-hover:translate-x-1 transition-all" />
-                      </div>
-                      <h3 className="text-lg font-semibold text-white mb-2">Interactive Map</h3>
-                      <p className="text-white/60 text-sm mb-4">Explore all your destinations on an interactive map</p>
-                      {/* Stats Preview */}
-                      <div className={`flex items-center gap-4 px-3 py-2 rounded-lg transition-all duration-500 ${
-                        showUpdateAnimation ? 'bg-emerald-500/30 ring-2 ring-emerald-400/50 animate-pulse' : ''
-                      }`}>
-                        <div className="flex items-center gap-2">
-                          <Navigation className="w-4 h-4 text-blue-400" />
-                          <span className={`text-sm transition-all duration-300 ${showUpdateAnimation ? 'text-emerald-300 font-semibold' : 'text-white/80'}`}>{locationsCount} locations</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <MapPin className="w-4 h-4 text-blue-400" />
-                          <span className={`text-sm transition-all duration-300 ${showUpdateAnimation ? 'text-emerald-300 font-semibold' : 'text-white/80'}`}>{daysCount} days</span>
-                        </div>
-                      </div>
-                    </motion.button>
-
                     {/* Budget Card */}
                     <motion.button
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.3 }}
+                      transition={{ delay: 0.2 }}
                       onClick={() => isFeasible && setExpandedSection('budget')}
                       disabled={!isFeasible}
                       className={`group bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20 transition-all text-left ${
@@ -1106,14 +1457,25 @@ export default function TripDetails() {
                             </span>
                             <span className="text-white/60 text-sm ml-2">estimated</span>
                           </div>
-                          {costBreakdown.budgetStatus === 'within_budget' && (
+                          {/* Only show budget comparison for custom budget trips */}
+                          {trip.travelStyle === 'custom' && costBreakdown.budgetStatus === 'within_budget' && (
                             <span className="flex items-center gap-1 text-emerald-400 text-sm">
                               <TrendingDown className="w-4 h-4" /> Under budget
                             </span>
                           )}
-                          {costBreakdown.budgetStatus === 'over_budget' && (
+                          {trip.travelStyle === 'custom' && costBreakdown.budgetStatus === 'over_budget' && (
                             <span className="flex items-center gap-1 text-red-400 text-sm">
                               <TrendingUp className="w-4 h-4" /> Over budget
+                            </span>
+                          )}
+                          {/* For non-custom styles, show travel style badge */}
+                          {trip.travelStyle !== 'custom' && (
+                            <span className={`flex items-center gap-1 text-sm px-2 py-1 rounded-full ${
+                              trip.travelStyle === 'budget' ? 'bg-emerald-500/20 text-emerald-400' :
+                              trip.travelStyle === 'luxury' ? 'bg-amber-500/20 text-amber-400' :
+                              'bg-blue-500/20 text-blue-400'
+                            }`}>
+                              {trip.travelStyle === 'budget' ? 'Budget' : trip.travelStyle === 'luxury' ? 'Luxury' : 'Comfort'}
                             </span>
                           )}
                         </div>
@@ -1125,11 +1487,192 @@ export default function TripDetails() {
                       )}
                     </motion.button>
 
+                    {/* Transport Options Card - Getting There */}
+                    {costBreakdown?.transportOptions && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.25 }}
+                        className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 backdrop-blur-xl rounded-2xl p-6 border border-cyan-400/20"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="p-3 rounded-xl bg-cyan-500/20">
+                              {costBreakdown.transportOptions.primaryMode === 'train' ? (
+                                <Train className="w-6 h-6 text-cyan-400" />
+                              ) : costBreakdown.transportOptions.primaryMode === 'bus' ? (
+                                <Bus className="w-6 h-6 text-cyan-400" />
+                              ) : (
+                                <Plane className="w-6 h-6 text-cyan-400" />
+                              )}
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-semibold text-white">Getting There</h3>
+                              <p className="text-white/60 text-xs">{costBreakdown.transportOptions.distanceCategory} {costBreakdown.transportOptions.isDomestic ? 'domestic' : 'international'} journey</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Transport Options Comparison - CLICKABLE */}
+                        <p className="text-[10px] text-white/40 mb-2 flex items-center gap-1">
+                          <Zap className="w-3 h-3" /> Click to select transport mode & update budget
+                        </p>
+                        <div className="space-y-2">
+                          {costBreakdown.transportOptions.options?.slice(0, 3).map((opt: any, idx: number) => {
+                            const isCheapest = costBreakdown.transportOptions.options.every((o: any) => opt.estimatedCost <= o.estimatedCost);
+                            const isFastest = costBreakdown.transportOptions.options.every((o: any) =>
+                              parseFloat(opt.duration) <= parseFloat(o.duration));
+                            const isSelected = opt.selected || (selectedTransportMode === opt.mode) ||
+                              (!selectedTransportMode && costBreakdown.transportOptions.selectedMode === opt.mode);
+                            const TransportIcon = opt.mode.toLowerCase().includes('train') ? Train :
+                              opt.mode.toLowerCase().includes('bus') ? Bus :
+                              opt.mode.toLowerCase().includes('cab') || opt.mode.toLowerCase().includes('taxi') ? Car : Plane;
+
+                            return (
+                              <button
+                                key={idx}
+                                onClick={() => handleTransportSelect(opt)}
+                                className={`w-full flex items-center justify-between p-3 rounded-lg transition-all cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-emerald-500/30 border-2 border-emerald-400/50 ring-2 ring-emerald-500/20'
+                                    : opt.recommended
+                                    ? 'bg-cyan-500/20 border border-cyan-400/30 hover:bg-cyan-500/30'
+                                    : 'bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <TransportIcon className={`w-5 h-5 ${isSelected ? 'text-emerald-400' : opt.recommended ? 'text-cyan-400' : 'text-white/60'}`} />
+                                  <div className="text-left">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`font-medium ${isSelected ? 'text-emerald-300' : opt.recommended ? 'text-cyan-300' : 'text-white/80'}`}>
+                                        {opt.mode}
+                                      </span>
+                                      {isSelected && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 flex items-center gap-0.5">
+                                          <Check className="w-2.5 h-2.5" /> Selected
+                                        </span>
+                                      )}
+                                      {isCheapest && !isSelected && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">
+                                          Cheapest
+                                        </span>
+                                      )}
+                                      {isFastest && !isCheapest && !isSelected && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400">
+                                          Fastest
+                                        </span>
+                                      )}
+                                      {opt.recommended && !isSelected && (
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-cyan-500/30 text-cyan-300">
+                                          AI Pick
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-xs text-white/50">{opt.duration}</span>
+                                  </div>
+                                </div>
+                                <span className={`font-bold ${isSelected ? 'text-emerald-300' : opt.recommended ? 'text-cyan-300' : 'text-white/70'}`}>
+                                  {costBreakdown.currencySymbol}{opt.estimatedCost?.toLocaleString()}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Recommendation */}
+                        <p className="text-xs text-white/50 mt-3 italic">
+                          {costBreakdown.transportOptions.recommendation}
+                        </p>
+
+                        {/* Local Transport Preview */}
+                        {costBreakdown.localTransport?.options && (
+                          <div className="mt-4 pt-4 border-t border-white/10">
+                            <p className="text-xs text-white/60 mb-2">Local transport at destination:</p>
+                            <div className="flex flex-wrap gap-1">
+                              {costBreakdown.localTransport.options.slice(0, 4).map((opt: string, idx: number) => (
+                                <span key={idx} className="text-[10px] px-2 py-1 rounded-full bg-white/10 text-white/70">
+                                  {opt}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+
+                    {/* Getting Around Card - Local Transport & Connectivity */}
+                    {costBreakdown?.bookingApps && costBreakdown.bookingApps.length > 0 && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.3 }}
+                        className="bg-gradient-to-br from-emerald-900/40 to-teal-900/40 backdrop-blur-xl rounded-2xl p-6 border border-emerald-500/30"
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="p-3 rounded-xl bg-emerald-500/20">
+                              <Navigation className="w-6 h-6 text-emerald-400" />
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-semibold text-white">Getting Around</h3>
+                              <p className="text-white/60 text-xs">Book local transport & stay connected</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Transport Booking Apps */}
+                        <div className="space-y-3">
+                          {costBreakdown.bookingApps.map((modeApps: any, idx: number) => (
+                            <div key={idx} className="bg-white/5 rounded-lg p-3">
+                              <p className="text-xs text-emerald-300 font-medium mb-2 uppercase tracking-wide">
+                                {modeApps.mode}
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {modeApps.apps?.slice(0, 3).map((app: any, appIdx: number) => (
+                                  <a
+                                    key={appIdx}
+                                    href={app.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/20 rounded-full text-xs text-white hover:bg-emerald-500/40 transition-colors"
+                                  >
+                                    <span>{app.name}</span>
+                                    <ExternalLink className="w-3 h-3 text-emerald-300" />
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Mobile/SIM Plans */}
+                        {costBreakdown.mobilePlans && costBreakdown.mobilePlans.length > 0 && (
+                          <div className="mt-4 pt-4 border-t border-white/10">
+                            <p className="text-xs text-white/60 mb-2 flex items-center gap-1">
+                              <Globe className="w-3 h-3" /> Stay Connected - Tourist SIM Cards
+                            </p>
+                            <div className="grid gap-2">
+                              {costBreakdown.mobilePlans.slice(0, 2).map((plan: any, idx: number) => (
+                                <div key={idx} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2 text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white font-medium">{plan.provider}</span>
+                                    <span className="text-white/50">{plan.data || plan.plan}</span>
+                                  </div>
+                                  <span className="text-emerald-400 font-semibold">{plan.price}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <p className="text-[10px] text-white/40 mt-2 italic">Buy at airport or train station for best rates</p>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+
                     {/* Itinerary Card */}
                     <motion.button
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.4 }}
+                      transition={{ delay: 0.35 }}
                       onClick={() => isFeasible && setExpandedSection('itinerary')}
                       disabled={!isFeasible}
                       className={`group bg-white/10 backdrop-blur-xl rounded-2xl p-6 border border-white/20 transition-all text-left ${
@@ -1222,24 +1765,6 @@ export default function TripDetails() {
                   </div>
                 )}
 
-                {/* Map Section */}
-                {expandedSection === 'map' && isFeasible && (
-                  <div className="bg-white/95 backdrop-blur-xl rounded-2xl overflow-hidden shadow-xl border border-white/20" style={{ height: 'calc(100vh - 200px)' }}>
-                    <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-5 py-3">
-                      <h3 className="text-lg font-display font-bold text-white">Interactive Trip Map</h3>
-                      <p className="text-slate-300 text-xs">Click markers to explore locations</p>
-                    </div>
-                    <div className="h-[calc(100%-60px)] p-2">
-                      <ItineraryMap
-                        key={`map-${updateKey}`}
-                        trip={localItinerary ? { ...trip, itinerary: localItinerary } : trip}
-                        highlightedLocation={highlightedLocation}
-                        onLocationSelect={handleLocationSelect}
-                      />
-                    </div>
-                  </div>
-                )}
-
                 {/* Budget Section */}
                 {expandedSection === 'budget' && isFeasible && (
                   <div className="bg-white/95 backdrop-blur-xl rounded-2xl p-6 shadow-xl border border-white/20">
@@ -1251,25 +1776,54 @@ export default function TripDetails() {
                   </div>
                 )}
 
-                {/* Itinerary Section */}
+                {/* Itinerary Section with Map */}
                 {expandedSection === 'itinerary' && isFeasible && (
-                  <div className="bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20">
-                    <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-5 py-3 rounded-t-2xl flex items-center justify-between">
-                      <div>
-                        <h3 className="text-lg font-display font-bold text-white">Day-by-Day Itinerary</h3>
-                        <p className="text-slate-300 text-xs flex items-center gap-1">
-                          <Plane className="w-3 h-3" /> AI Generated
-                        </p>
+                  <div className="flex gap-4" style={{ height: 'calc(100vh - 180px)' }}>
+                    {/* Left: Scrollable Itinerary - hide when map is expanded */}
+                    {!isMapExpanded && (
+                      <div className="flex-1 bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20 flex flex-col overflow-hidden">
+                        <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-5 py-3 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+                          <div>
+                            <h3 className="text-lg font-display font-bold text-white">Day-by-Day Itinerary</h3>
+                            <p className="text-slate-300 text-xs flex items-center gap-1">
+                              <Plane className="w-3 h-3" /> AI Generated • Click activity to view on map
+                            </p>
+                          </div>
+                          <div className="text-white/60 text-sm">{daysCount} days</div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                          <ItineraryTimeline
+                            key={`itinerary-${updateKey}`}
+                            trip={localItinerary ? { ...trip, itinerary: localItinerary } : trip}
+                            highlightedLocation={highlightedLocation}
+                            onActivityClick={handleLocationSelect}
+                            onFoodSelect={handleFoodSelect}
+                            selectedFoods={selectedFoods}
+                          />
+                        </div>
                       </div>
-                      <div className="text-white/60 text-sm">{daysCount} days</div>
-                    </div>
-                    <div className="p-4">
-                      <ItineraryTimeline
-                        key={`itinerary-${updateKey}`}
-                        trip={localItinerary ? { ...trip, itinerary: localItinerary } : trip}
-                        highlightedLocation={highlightedLocation}
-                        onActivityClick={handleLocationSelect}
-                      />
+                    )}
+
+                    {/* Right: Map - expands to full width when isMapExpanded */}
+                    <div className={`${isMapExpanded ? 'flex-1' : 'w-[45%]'} bg-white/95 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20 overflow-hidden hidden lg:flex flex-col`}>
+                      <div className="bg-gradient-to-r from-blue-900 to-slate-800 px-5 py-3 flex items-center justify-between flex-shrink-0">
+                        <div>
+                          <h3 className="text-lg font-display font-bold text-white flex items-center gap-2">
+                            <MapIcon className="w-5 h-5" /> Trip Map
+                          </h3>
+                          <p className="text-slate-300 text-xs">{locationsCount} locations • Click to explore</p>
+                        </div>
+                      </div>
+                      <div className="flex-1 p-2">
+                        <ItineraryMap
+                          key={`map-${updateKey}`}
+                          trip={localItinerary ? { ...trip, itinerary: localItinerary } : trip}
+                          highlightedLocation={highlightedLocation}
+                          onLocationSelect={handleLocationSelect}
+                          isExpanded={isMapExpanded}
+                          onExpandToggle={() => setIsMapExpanded(!isMapExpanded)}
+                        />
+                      </div>
                     </div>
                   </div>
                 )}
