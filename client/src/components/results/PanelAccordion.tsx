@@ -5,7 +5,7 @@
  * Used for: True Cost, Action Items, Chat
  */
 
-import { useState, ReactNode } from "react";
+import { useState, useEffect, ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
 
@@ -15,6 +15,8 @@ interface PanelAccordionProps {
   badge?: ReactNode;
   collapsedSummary?: ReactNode; // NEW: shown when closed
   defaultOpen?: boolean;
+  /** When set to true, forces the panel open. Use to programmatically open. */
+  forceOpen?: boolean;
   children: ReactNode;
   className?: string;
   onToggle?: (isOpen: boolean) => void;
@@ -26,11 +28,20 @@ export function PanelAccordion({
   badge,
   collapsedSummary,
   defaultOpen = false,
+  forceOpen,
   children,
   className = "",
   onToggle,
 }: PanelAccordionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  // Handle forceOpen prop changes
+  useEffect(() => {
+    if (forceOpen === true && !isOpen) {
+      setIsOpen(true);
+      onToggle?.(true);
+    }
+  }, [forceOpen]);
 
   const handleToggle = () => {
     const newState = !isOpen;

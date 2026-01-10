@@ -7,11 +7,12 @@
  * Performance: TripChat is lazy loaded, component is memoized.
  */
 
-import React, { lazy, Suspense } from "react";
-import { DollarSign, CheckCircle, MessageSquare, Undo2 } from "lucide-react";
+import React, { lazy, Suspense, useState, useRef } from "react";
+import { DollarSign, CheckCircle, MessageSquare, Undo2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PanelAccordion } from "./PanelAccordion";
 import { ActionItems } from "./ActionItems";
+import { VersionsPanel } from "./VersionsPanel";
 
 // Use existing CostBreakdown component
 import { CostBreakdown } from "@/components/CostBreakdown";
@@ -22,8 +23,93 @@ const TripChat = lazy(() =>
 );
 
 import type { TripResponse } from "@shared/schema";
-import type { CostViewModel } from "@/hooks/useTripViewModel";
+import type { CostViewModel, BudgetStatus } from "@/hooks/useTripViewModel";
 import type { BlockerDeltaUI } from "@/lib/blockerDeltas";
+
+// ============================================================================
+// BUDGET ALERT COMPONENT
+// ============================================================================
+
+interface BudgetAlertProps {
+  overByAmount: number;
+  overByPercent: number;
+  budgetStatus: BudgetStatus;
+  currency: string;
+  /** Callback when a suggestion chip is clicked */
+  onSuggestion?: (prompt: string) => void;
+}
+
+// Map chip labels to AI prompts
+const SUGGESTION_PROMPTS: Record<string, string> = {
+  'Fewer days': 'Reduce the trip by 1-2 days to lower costs. Keep the best experiences.',
+  'Budget hotels': 'Switch all accommodations to budget-friendly hotels or hostels. Keep the same itinerary.',
+  'Skip flights': 'Remove internal flights and use ground transport (bus, train) instead to save money.',
+  'Cheaper hotels': 'Find more affordable hotel options while keeping the same locations and dates.',
+  'Fewer activities': 'Remove some paid activities and suggest free alternatives. Focus on must-see attractions.',
+  'Local food': 'Replace expensive restaurants with local street food and casual eateries to reduce food costs.',
+};
+
+/**
+ * Prominent alert when trip is over budget.
+ * Shows amount over and suggestion chips for common fixes.
+ */
+function BudgetAlert({ overByAmount, overByPercent, budgetStatus, currency, onSuggestion }: BudgetAlertProps) {
+  if (budgetStatus !== 'over20' && budgetStatus !== 'over50') {
+    return null;
+  }
+
+  const isSevere = budgetStatus === 'over50';
+  const bgClass = isSevere ? 'bg-red-500/15' : 'bg-amber-500/15';
+  const borderClass = isSevere ? 'border-red-500/30' : 'border-amber-500/30';
+  const textClass = isSevere ? 'text-red-400' : 'text-amber-400';
+  const iconClass = isSevere ? 'text-red-400' : 'text-amber-400';
+
+  // Suggestion chips based on severity
+  const suggestions = isSevere
+    ? [
+        { label: 'Fewer days', icon: '📅' },
+        { label: 'Budget hotels', icon: '🏨' },
+        { label: 'Skip flights', icon: '🚌' },
+      ]
+    : [
+        { label: 'Cheaper hotels', icon: '🏨' },
+        { label: 'Fewer activities', icon: '🎯' },
+        { label: 'Local food', icon: '🍜' },
+      ];
+
+  return (
+    <div className={`${bgClass} ${borderClass} border rounded-xl p-4 mb-4`}>
+      <div className="flex items-start gap-3">
+        <AlertTriangle className={`w-5 h-5 ${iconClass} shrink-0 mt-0.5`} />
+        <div className="flex-1 min-w-0">
+          <p className={`font-semibold ${textClass}`}>
+            {isSevere ? 'Significantly over budget' : 'Over budget'}
+          </p>
+          <p className="text-sm text-white/60 mt-0.5">
+            {currency}{Math.abs(Math.round(overByAmount)).toLocaleString()} over ({Math.round(overByPercent)}%)
+          </p>
+
+          {/* Suggestion chips */}
+          <div className="flex flex-wrap gap-2 mt-3">
+            {suggestions.map((s) => (
+              <button
+                key={s.label}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white/10 text-white/70 hover:bg-white/20 hover:text-white transition-colors"
+                onClick={() => {
+                  const prompt = SUGGESTION_PROMPTS[s.label] || s.label;
+                  onSuggestion?.(prompt);
+                }}
+              >
+                <span>{s.icon}</span>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface RightRailPanelsProps {
   trip: TripResponse;
@@ -35,6 +121,8 @@ interface RightRailPanelsProps {
   onUndo: () => void;
   isDemo?: boolean;
   blockerDelta?: BlockerDeltaUI | null;
+  onVersionRestore?: () => void;
+  onVersionExport?: (versionId: number) => void;
 }
 
 function RightRailPanelsComponent({
@@ -46,10 +134,56 @@ function RightRailPanelsComponent({
   hasUndoableChange,
   onUndo,
   isDemo = false,
-  blockerDelta
+  blockerDelta,
+  onVersionRestore,
+  onVersionExport,
 }: RightRailPanelsProps) {
+  // State for chip-to-chat flow
+  const [chatPrefill, setChatPrefill] = useState<string>('');
+  const [forceChatOpen, setForceChatOpen] = useState(false);
+
+  // Track if we've consumed the forceOpen to prevent reopening on every render
+  const forceOpenConsumedRef = useRef(false);
+
+  // Get currency symbol for display
+  const currencySymbol = costs?.currency === 'EUR' ? '€' :
+    costs?.currency === 'GBP' ? '£' :
+    costs?.currency === 'JPY' ? '¥' :
+    costs?.currency === 'INR' ? '₹' : '$';
+
+  // Handle budget suggestion chip click
+  const handleBudgetSuggestion = (prompt: string) => {
+    setChatPrefill(prompt);
+    setForceChatOpen(true);
+    forceOpenConsumedRef.current = false;
+    onChatOpen?.(); // Notify parent
+  };
+
+  // Reset forceOpen after it's been consumed
+  const handleChatPanelToggle = (isOpen: boolean) => {
+    if (isOpen && forceChatOpen && !forceOpenConsumedRef.current) {
+      forceOpenConsumedRef.current = true;
+      // Reset forceChatOpen after a short delay so it can be triggered again
+      setTimeout(() => setForceChatOpen(false), 100);
+    }
+    if (isOpen) {
+      onChatOpen?.();
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {/* Budget Alert - Show prominently when over budget */}
+      {costs && (costs.budgetStatus === 'over20' || costs.budgetStatus === 'over50') && (
+        <BudgetAlert
+          overByAmount={costs.overByAmount}
+          overByPercent={costs.overByPercent}
+          budgetStatus={costs.budgetStatus}
+          currency={currencySymbol}
+          onSuggestion={isDemo ? undefined : handleBudgetSuggestion}
+        />
+      )}
+
       {/* True Cost Panel - Default OPEN */}
       <div data-section="cost-breakdown">
         <PanelAccordion
@@ -81,13 +215,23 @@ function RightRailPanelsComponent({
         </PanelAccordion>
       </div>
 
+      {/* Version History Panel - Default CLOSED */}
+      {!isDemo && (
+        <VersionsPanel
+          tripId={trip.id}
+          onRestore={onVersionRestore}
+          onExport={onVersionExport}
+        />
+      )}
+
       {/* Modify with AI Panel - Default CLOSED */}
       <PanelAccordion
         title="Modify with AI"
         icon={<MessageSquare className="w-4 h-4" />}
         defaultOpen={false}
+        forceOpen={forceChatOpen}
         collapsedSummary={isDemo ? "Available on your own trip" : "Swap days, reduce cost, change pace"}
-        onToggle={(isOpen) => isOpen && onChatOpen?.()}
+        onToggle={handleChatPanelToggle}
       >
         {isDemo ? (
           <div className="py-8 text-center">
@@ -115,6 +259,7 @@ function RightRailPanelsComponent({
                 tripId={trip.id}
                 destination={trip.destination}
                 onTripUpdate={onTripUpdate}
+                prefillMessage={chatPrefill}
               />
             </Suspense>
           </div>

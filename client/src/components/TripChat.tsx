@@ -56,6 +56,8 @@ interface TripChatProps {
     budgetBreakdown?: any;
     mapMarkers?: any[];
   }) => void;
+  /** Optional prefilled message to populate input field */
+  prefillMessage?: string;
 }
 
 // Quick suggestion buttons for common refinements
@@ -68,7 +70,7 @@ const QUICK_SUGGESTIONS = [
   'Include hidden gems',
 ];
 
-export function TripChat({ tripId, destination, tripContext, onTripUpdate }: TripChatProps) {
+export function TripChat({ tripId, destination, tripContext, onTripUpdate, prefillMessage }: TripChatProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -99,6 +101,15 @@ export function TripChat({ tripId, destination, tripContext, onTripUpdate }: Tri
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isOpen]);
+
+  // Handle prefilled message from budget suggestion chips
+  useEffect(() => {
+    if (prefillMessage && prefillMessage.trim()) {
+      setInput(prefillMessage);
+      // Focus the input so user can see and edit
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [prefillMessage]);
 
   async function loadConversation() {
     try {

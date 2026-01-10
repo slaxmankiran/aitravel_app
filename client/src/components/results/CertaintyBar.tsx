@@ -13,7 +13,7 @@
  * Performance: Memoized to prevent page-wide cascades.
  */
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldCheck,
@@ -31,6 +31,8 @@ import { Button } from "@/components/ui/button";
 import type { TripResponse, VisaDetails } from "@shared/schema";
 import { CertaintyTimeline } from "./CertaintyTimeline";
 import type { CertaintyPoint } from "@/pages/TripResultsV1";
+import { CertaintyBreakdown } from "./CertaintyBreakdown";
+import { buildCertaintyBreakdown } from "@/lib/certaintyBreakdown";
 
 interface CertaintyBarProps {
   trip: TripResponse;
@@ -104,6 +106,9 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
   // Determine status chip
   const isVerified = overall === 'yes';
   const hasWarnings = overall === 'warning';
+
+  // Build certainty breakdown (memoized for performance)
+  const breakdown = useMemo(() => buildCertaintyBreakdown(trip), [trip]);
 
   return (
     <div className={`sticky top-[56px] z-40 ${className}`}>
@@ -227,6 +232,14 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
                   </div>
                 </div>
               )}
+
+              {/* Certainty Breakdown - shows factor scores */}
+              <div className="mb-4 p-4 bg-white/5 rounded-lg">
+                <CertaintyBreakdown
+                  factors={breakdown.factors}
+                  totalScore={breakdown.totalScore}
+                />
+              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Visa Requirements */}

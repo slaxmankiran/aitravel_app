@@ -62,7 +62,8 @@ function HeaderBarComponent({ trip, onShare, onExport }: HeaderBarProps) {
     if (onExport) {
       onExport();
     } else {
-      window.print();
+      // Open print-friendly export page in new tab
+      window.open(`/trips/${trip.id}/export`, '_blank');
     }
   };
 

@@ -782,12 +782,13 @@ Smart agent that detects user changes after seeing results, recomputes only impa
 
 | Category      | Count | Key Endpoints                                         |
 |---------------|-------|-------------------------------------------------------|
-| Trips         | 8     | `POST /api/trips`, `GET /api/trips/:id`, `/progress`, `/chat` |
+| Trips         | 9     | `POST /api/trips`, `GET /api/trips/:id`, `/progress`, `/chat`, `/my-trips` |
 | Auth          | 9     | `/register`, `/login`, `/logout`, `/google`, `/apple` |
 | Collaboration | 5     | `/collaborators`, `/comments`, `/votes`               |
 | Price Alerts  | 4     | CRUD operations                                       |
 | Analytics     | 8     | `/trip-events`, `/affiliate-click`, `/dashboard`      |
 | Templates     | 4     | List, get, use, rate                                  |
+| Versions      | 4     | `GET/POST /api/trips/:id/versions`, `/restore`        |
 
 ---
 
@@ -1148,7 +1149,100 @@ Visual timeline showing certainty score evolution across changes.
 
 ---
 
-## Files Summary (Today's Session)
+## Version History - Item 18 (2026-01-09)
+
+### Status: Implemented
+
+Full specification: [`docs/VERSION_HISTORY_IMPLEMENTATION.md`](docs/VERSION_HISTORY_IMPLEMENTATION.md)
+
+### Overview
+
+Trip version history enables users to see a timeline of changes, restore previous versions, and export any version as PDF.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `shared/schema.ts` | `tripVersions` table + TypeScript types |
+| `server/routes/versions.ts` | API endpoints: create, list, get, restore |
+| `client/src/hooks/useTripVersions.ts` | React hook for version operations |
+| `client/src/components/results/VersionsPanel.tsx` | UI panel in right rail |
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/trips/:id/versions` | POST | Create/upsert version |
+| `/api/trips/:id/versions` | GET | List versions (newest first) |
+| `/api/trips/:id/versions/:versionId` | GET | Get single version with snapshot |
+| `/api/trips/:id/versions/:versionId/restore` | POST | Restore a version |
+
+### Version Sources
+
+| Source | When Created |
+|--------|--------------|
+| `change_plan` | Change Planner applies changes |
+| `next_fix` | Fix suggestion applied |
+| `manual_save` | User clicks "Save" (future) |
+| `restore` | Version restored |
+| `system` | Auto-save (future) |
+
+### Export Integration
+
+Export any version as PDF: `/trips/:id/export?version=<versionId>`
+
+---
+
+## Certainty Breakdown - Item 20 (2026-01-09)
+
+### Status: Implemented
+
+Full specification: [`docs/CERTAINTY_BREAKDOWN_IMPLEMENTATION.md`](docs/CERTAINTY_BREAKDOWN_IMPLEMENTATION.md)
+
+### Overview
+
+Visual breakdown explaining *why* a trip has its certainty score. Shows 4 weighted factors with progress bars and status indicators.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `client/src/lib/certaintyBreakdown.ts` | Types + `buildCertaintyBreakdown()` function |
+| `client/src/components/results/CertaintyBreakdown.tsx` | UI component with animated bars |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/components/results/CertaintyBar.tsx` | Added breakdown to expandable section |
+| `client/src/pages/TripExport.tsx` | Added "Why This Certainty Score?" PDF section |
+
+### Certainty Factors
+
+| Factor | Weight | Source |
+|--------|--------|--------|
+| `visa_timing` | 35% | `visaDetails.timing.urgency` |
+| `buffer_days` | 25% | Days until trip vs processing time |
+| `cost_stability` | 25% | `feasibility.breakdown.budget.status` |
+| `itinerary_density` | 15% | Activities per day (ideal: 3-5) |
+
+### Usage
+
+```tsx
+import { buildCertaintyBreakdown } from "@/lib/certaintyBreakdown";
+import { CertaintyBreakdown } from "@/components/results/CertaintyBreakdown";
+
+const breakdown = useMemo(() => buildCertaintyBreakdown(trip), [trip]);
+
+<CertaintyBreakdown
+  factors={breakdown.factors}
+  totalScore={breakdown.totalScore}
+/>
+```
+
+---
+
+## Files Summary (Recent Sessions)
 
 ### New Files Created
 
@@ -1160,35 +1254,516 @@ client/src/lib/
   blockerDeltas.ts      # Blocker diff
   tripInput.ts          # Build UserTripInput
   uiEvents.ts           # Pub/sub events
-  certaintyExplain.ts   # Certainty breakdown
+  certaintyExplain.ts   # Certainty explanation drawer
+  certaintyBreakdown.ts # Item 20: Factor breakdown + buildCertaintyBreakdown()
   actionItems.ts        # Action item helpers
+  voyageUid.ts          # Item 21: Anonymous user ID helper
+  verdict.ts            # Phase 1: computeVerdict(), buildVerdictInput(), display helpers
+  verdict.test.ts       # Phase 1: 25 unit tests for verdict rules
 
 client/src/components/results/
   ChangePlanBanner.tsx         # Delta banner with suggestions
   ComparePlansModal.tsx        # Side-by-side comparison
+  CertaintyBreakdown.tsx       # Item 20: Factor bars UI
   CertaintyExplanationDrawer.tsx
   CertaintyTimeline.tsx
   FixBlockersCTA.tsx
   FixBlockersController.tsx
   TripUpdateBanner.tsx
+  VersionsPanel.tsx            # Version history panel
+  VerdictCard.tsx              # Phase 1: GO/POSSIBLE/DIFFICULT verdict UI
+  ResultsSkeletons.tsx         # Streaming: Section-level skeleton components
 
 client/src/hooks/
   useChangePlanner.ts
   usePlanningMode.ts
+  useTripVersions.ts           # Version history hook
 
 server/routes/
   changePlan.ts         # POST /api/change-plan
   fixOptions.ts         # POST /api/trips/:id/fix-options
   appliedPlans.ts       # GET/POST /api/trips/:id/applied-plans
+  versions.ts           # Version history endpoints + ownership checks
 ```
 
 ### Modified Files
 
 ```
-client/src/pages/TripResultsV1.tsx    # Main integration
-client/src/components/results/RightRailPanels.tsx  # data-section
+client/src/pages/TripResultsV1.tsx    # Main integration, verdict, skeletons, budget delta
+client/src/pages/MyTrips.tsx          # Item 21: TripSummary, empty state banner
+client/src/pages/CreateTrip.tsx       # "Trip saved!" toast
+client/src/pages/ChatTripV2.tsx       # "Trip saved!" toast
+client/src/components/results/RightRailPanels.tsx  # data-section, BudgetAlert component
 client/src/components/results/HeaderBar.tsx        # data-section
 client/src/components/results/ActionItems.tsx      # FixBlockersCTA
-shared/schema.ts                                   # Change planner types
-server/routes.ts                                   # Analytics, routes
+client/src/hooks/useTripViewModel.ts  # BudgetStatus type, budget delta fields
+client/src/lib/queryClient.ts         # Item 21: voyage headers on all requests
+client/src/hooks/use-trips.ts         # Item 21: voyage headers
+shared/schema.ts                      # Change planner types, voyageUid column
+server/routes.ts                      # Analytics, /api/my-trips, ownership checks
+server/storage.ts                     # listTripsByUid(), adoptTrip()
 ```
+
+---
+
+## Item 21: Account-lite MVP (2026-01-09)
+
+### Status: Implemented and Tested
+
+Anonymous user identification enabling trip persistence without authentication.
+
+### How It Works
+
+1. **First Visit**: `getVoyageUid()` generates a UUID and stores in localStorage
+2. **Every Request**: `x-voyage-uid` header automatically included via `getVoyageHeaders()`
+3. **Trip Creation**: Server stores `voyageUid` on trip record
+4. **My Trips**: `/api/my-trips` endpoint filters trips by user's voyageUid
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `client/src/lib/voyageUid.ts` | UUID generation, localStorage storage, header helper |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/lib/queryClient.ts` | Added voyage headers to all API requests |
+| `shared/schema.ts` | Added `voyageUid` column + index to trips table |
+| `server/routes.ts` | Extract UID header, store on trips, `/api/my-trips` endpoint |
+| `server/storage.ts` | Added `listTripsByUid()` method |
+| `client/src/hooks/use-trips.ts` | Added voyage headers to fetch calls |
+| `client/src/pages/MyTrips.tsx` | Updated for TripSummary with certainty badges |
+
+### API Endpoint
+
+**GET /api/my-trips**
+- Header: `x-voyage-uid` (required)
+- Returns: `{ trips: TripSummary[] }`
+
+```typescript
+interface TripSummary {
+  id: number;
+  destination: string;
+  dates: string;
+  certaintyScore: number | null;
+  certaintyLabel: 'high' | 'medium' | 'low' | null;
+  estimatedCost: number | null;
+  currency: string;
+  travelers: number;
+  feasibilityStatus: string | null;
+  createdAt: string | null;
+}
+```
+
+### Client Helper
+
+```typescript
+// client/src/lib/voyageUid.ts
+import { getVoyageUid, getVoyageHeaders } from "@/lib/voyageUid";
+
+// Get or create user ID
+const uid = getVoyageUid(); // Returns UUID from localStorage
+
+// Get headers for API requests
+const headers = getVoyageHeaders(); // { "x-voyage-uid": "..." }
+```
+
+### Database Migration
+
+For production, run schema push to add the `voyageUid` column:
+```bash
+DATABASE_URL="..." npx drizzle-kit push
+```
+
+---
+
+## Production Finishing (2026-01-09)
+
+### Status: Implemented and Tested
+
+Security hardening and UX polish for production readiness.
+
+### 1. Soft Backfill on Trip Access
+
+Legacy trips (null voyageUid) are automatically adopted when accessed:
+
+```typescript
+// server/routes.ts - GET /api/trips/:id
+if (!trip.voyageUid && voyageUid) {
+  const adopted = await storage.adoptTrip(tripId, voyageUid);
+  // Trip now belongs to this user
+}
+```
+
+**Storage Method:**
+```typescript
+// server/storage.ts
+async adoptTrip(id: number, voyageUid: string): Promise<Trip | null>
+// Only updates if voyageUid is currently null
+```
+
+### 2. Ownership Checks on Sensitive Endpoints
+
+**Rule:** If trip has `voyageUid` and it doesn't match request header → return 404
+
+**Protected Endpoints:**
+| Endpoint | File |
+|----------|------|
+| `GET /api/trips/:id` | `server/routes.ts` |
+| `POST /api/trips/:tripId/versions` | `server/routes/versions.ts` |
+| `GET /api/trips/:tripId/versions` | `server/routes/versions.ts` |
+| `GET /api/trips/:tripId/versions/:versionId` | `server/routes/versions.ts` |
+| `POST /api/trips/:tripId/versions/:versionId/restore` | `server/routes/versions.ts` |
+
+**Logic:**
+```typescript
+// Legacy trips (null voyageUid) remain accessible to everyone (for share links)
+// Owned trips (has voyageUid) only accessible to owner
+if (trip.voyageUid && voyageUid && trip.voyageUid !== voyageUid) {
+  return res.status(404).json({ message: 'Trip not found' });
+}
+```
+
+### 3. Empty State Banner
+
+My Trips page shows helpful notice when empty:
+
+> "On a new device or cleared your browser? Your trips are stored locally. If you have a trip link saved, you can still access it directly."
+
+### 4. "Trip Saved" Toast
+
+Toast notification on trip creation:
+- **Title:** "Trip saved!"
+- **Description:** "Find it anytime in My Trips."
+
+Added to both `CreateTrip.tsx` and `ChatTripV2.tsx`.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `server/storage.ts` | Added `adoptTrip()` method to interface + implementations |
+| `server/routes.ts` | Ownership check + soft backfill on GET /api/trips/:id |
+| `server/routes/versions.ts` | Added `checkTripOwnership()` helper, applied to all 4 endpoints |
+| `client/src/pages/MyTrips.tsx` | Empty state banner with localStorage notice |
+| `client/src/pages/CreateTrip.tsx` | Added useToast import + "Trip saved!" notification |
+| `client/src/pages/ChatTripV2.tsx` | Added "Trip saved!" notification |
+
+### Test Results
+
+```bash
+# User A creates trip
+curl -X POST /api/trips -H "x-voyage-uid: user-A" → Trip 2 created
+
+# User A can access their trip
+curl /api/trips/2 -H "x-voyage-uid: user-A" → 200 OK
+
+# User B cannot access User A's trip
+curl /api/trips/2 -H "x-voyage-uid: user-B" → 404 Not Found
+
+# Legacy trip (null uid) gets adopted on first access
+curl /api/trips/1 -H "x-voyage-uid: user-C" → Trip adopted, now owned by user-C
+```
+
+---
+
+## Current Feature Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Planning Loop | ✅ Complete | Feasibility → Itinerary → Results |
+| Compare Plans | ✅ Complete | Side-by-side modal |
+| Guided Fixes | ✅ Complete | Auto-suggest next fix |
+| Versions | ✅ Complete | Version history panel |
+| Exports | ✅ Complete | PDF with certainty breakdown |
+| My Trips | ✅ Complete | Account-lite with voyage_uid |
+| Ownership Guards | ✅ Complete | Soft security for trips |
+| **Phase 1: Verdict System** | ✅ Complete | GO/POSSIBLE/DIFFICULT with override rules |
+| **Streaming Skeletons** | ✅ Complete | Progressive reveal, no blank screens |
+| **Budget Alerts** | ✅ Complete | Decision-grade right rail with suggestion chips |
+
+### Production Checklist
+
+- [x] Anonymous user tracking (voyage_uid)
+- [x] Trip ownership isolation
+- [x] Soft backfill for legacy trips
+- [x] Empty state UX for new devices
+- [x] "Trip saved" confirmation toast
+- [ ] Database migration for voyageUid column (run `drizzle-kit push`)
+- [ ] Optional: Email capture for cross-device persistence
+
+---
+
+## Phase 1: Verdict System (2026-01-10)
+
+### Status: Implemented and Tested
+
+The Verdict System provides a single source of truth for trip feasibility verdicts (GO / POSSIBLE / DIFFICULT).
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `client/src/lib/verdict.ts` | Core `computeVerdict()` function, `buildVerdictInput()`, display helpers |
+| `client/src/lib/verdict.test.ts` | 25 unit tests covering all rules and edge cases |
+| `client/src/components/results/VerdictCard.tsx` | UI component with full and compact variants |
+
+### Verdict Rules
+
+**Base Score Thresholds:**
+| Score Range | Base Verdict |
+|-------------|--------------|
+| 80-100 | GO |
+| 50-79 | POSSIBLE |
+| 0-49 | DIFFICULT |
+
+**Override Rules (Applied in Priority Order):**
+
+| Rule | Condition | Result |
+|------|-----------|--------|
+| VISA_TIMING_BLOCKER | Visa min days > days until travel | → DIFFICULT |
+| VISA_HIGH_RISK | visaRisk = 'high' | GO → POSSIBLE |
+| OVER_BUDGET_50 | cost > budget × 1.5 | → DIFFICULT |
+| OVER_BUDGET_20 | cost > budget × 1.2 | GO → POSSIBLE |
+| SAFETY_L3_PLUS | safetyLevel ≥ 3 | → DIFFICULT |
+| UNDER_7_DAYS_VISA | < 7 days + visa required | GO → POSSIBLE |
+
+### Types
+
+```typescript
+export type Verdict = 'GO' | 'POSSIBLE' | 'DIFFICULT';
+
+export interface VerdictResult {
+  verdict: Verdict;
+  score: number;
+  overridesApplied: OverrideId[];
+  reasons: string[];
+  riskFlags: RiskFlags;
+  budgetDelta: number;
+  budgetRatio: number;
+}
+```
+
+### Integration in TripResultsV1.tsx
+
+```tsx
+import { computeVerdict, buildVerdictInput } from "@/lib/verdict";
+import { VerdictCard } from "@/components/results/VerdictCard";
+
+// In component:
+const verdictResult = useMemo(() => {
+  if (!workingTrip) return null;
+  const verdictInput = buildVerdictInput(trip, travelDate);
+  return computeVerdict(verdictInput);
+}, [workingTrip]);
+
+// In JSX (above itinerary):
+{verdictResult && <VerdictCard verdictResult={verdictResult} />}
+```
+
+---
+
+## Streaming Skeleton Framework (2026-01-10)
+
+### Status: Implemented
+
+Section-level skeleton components for instant visual feedback during trip generation.
+
+### Files Created
+
+| File | Purpose |
+|------|---------|
+| `client/src/components/results/ResultsSkeletons.tsx` | All skeleton components |
+
+### Components
+
+| Component | Shows When |
+|-----------|------------|
+| `CertaintyBarSkeleton` | No feasibility report yet |
+| `VerdictCardSkeleton` | Generating + no verdict |
+| `ItinerarySkeleton` | Generating + no days |
+| `DayCardSkeleton` | Single day placeholder |
+| `MapSkeleton` | Generating + no days |
+| `CostPanelSkeleton` | Costs loading |
+| `ActionItemsSkeleton` | Action items loading |
+| `RightRailSkeleton` | Cost + Action items combined |
+| `StreamingProgress` | Animated progress indicator |
+
+### Progressive Reveal Pattern
+
+```tsx
+// CertaintyBar
+{workingTrip.feasibilityReport ? (
+  <CertaintyBar trip={workingTrip} />
+) : (
+  <CertaintyBarSkeleton />
+)}
+
+// VerdictCard
+{verdictResult ? (
+  <VerdictCard verdictResult={verdictResult} />
+) : isGenerating ? (
+  <VerdictCardSkeleton />
+) : null}
+
+// Itinerary
+{isGenerating || !itinerary?.days?.length ? (
+  <ItinerarySkeleton />
+) : (
+  <DayCardList ... />
+)}
+```
+
+### Success Criteria Met
+
+- ✅ User sees progress within 2-3 seconds (skeletons render immediately)
+- ✅ No empty page ever renders (all sections have skeleton states)
+
+---
+
+## Phase 1.5: Right Rail Decision Grade (2026-01-10)
+
+### Status: Implemented
+
+Enhanced the True Cost sidebar to feel "decision grade" with prominent budget alerts and suggestion chips.
+
+### Budget Status Type
+
+```typescript
+export type BudgetStatus = 'under' | 'near' | 'over20' | 'over50';
+```
+
+### Budget Delta Calculation
+
+Added to `costs` memo in `TripResultsV1.tsx`:
+
+```typescript
+const costs = useMemo(() => {
+  // ... existing cost extraction ...
+
+  const overByAmount = grand - userBudget;
+  const overByPercent = userBudget > 0 ? (overByAmount / userBudget) * 100 : 0;
+
+  let budgetStatus: BudgetStatus = 'under';
+  if (overByPercent >= 50) budgetStatus = 'over50';
+  else if (overByPercent >= 20) budgetStatus = 'over20';
+  else if (overByPercent > -10) budgetStatus = 'near';
+
+  return {
+    // ... existing fields ...
+    userBudget,
+    overByAmount,
+    overByPercent,
+    budgetStatus,
+  };
+}, [workingTrip]);
+```
+
+### BudgetAlert Component
+
+Added to `RightRailPanels.tsx`:
+
+| Budget Status | Alert Color | Suggestion Chips |
+|---------------|-------------|------------------|
+| `over20` | Amber | "Cheaper hotels", "Fewer activities", "Local food" |
+| `over50` | Red | "Fewer days", "Budget hotels", "Skip flights" |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/pages/TripResultsV1.tsx` | Budget delta in costs memo, improved date parsing |
+| `client/src/hooks/useTripViewModel.ts` | Added `BudgetStatus` type and budget fields |
+| `client/src/components/results/RightRailPanels.tsx` | Added `BudgetAlert` component |
+
+### Date Parsing Improvement
+
+Fixed parsing for formats like "Dec 15-22, 2025":
+
+```typescript
+// Strategy 1: ISO format "2025-12-15"
+// Strategy 2: Month range "Dec 15-22, 2025" → "Dec 15, 2025"
+// Strategy 3: Full date range "May 15, 2025 - May 22, 2025"
+// Strategy 4: Native Date parsing fallback
+```
+
+### Small Fixes
+
+- Replaced em dash `'—'` with `'...'` in itinerary title fallback
+
+---
+
+## Chip-to-Chat Flow (2026-01-10)
+
+### Status: Implemented
+
+Budget suggestion chips now open the AI chat panel with a prefilled prompt.
+
+### How It Works
+
+1. User sees BudgetAlert (when over budget by 20%+ or 50%+)
+2. Clicks a suggestion chip (e.g., "Cheaper hotels")
+3. Chat panel auto-opens via `forceOpen` prop
+4. Input prefilled with actionable prompt
+5. User can edit and send
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/components/TripChat.tsx` | Added `prefillMessage` prop |
+| `client/src/components/results/PanelAccordion.tsx` | Added `forceOpen` prop for programmatic open |
+| `client/src/components/results/RightRailPanels.tsx` | Added `handleBudgetSuggestion`, state management, wiring |
+
+### Prompt Mappings
+
+```typescript
+const SUGGESTION_PROMPTS: Record<string, string> = {
+  'Fewer days': 'Reduce the trip by 1-2 days to lower costs. Keep the best experiences.',
+  'Budget hotels': 'Switch all accommodations to budget-friendly hotels or hostels. Keep the same itinerary.',
+  'Skip flights': 'Remove internal flights and use ground transport (bus, train) instead to save money.',
+  'Cheaper hotels': 'Find more affordable hotel options while keeping the same locations and dates.',
+  'Fewer activities': 'Remove some paid activities and suggest free alternatives. Focus on must-see attractions.',
+  'Local food': 'Replace expensive restaurants with local street food and casual eateries to reduce food costs.',
+};
+```
+
+---
+
+## Budget Parsing Fix (2026-01-10)
+
+### Status: Implemented
+
+Fixed budget parsing to handle string formats like `"$2,000"` or `"2000.50"`.
+
+### Files Modified
+
+| File | Line | Fix |
+|------|------|-----|
+| `client/src/hooks/useTripViewModel.ts` | 197-200 | Robust parsing |
+| `client/src/pages/TripResultsV1.tsx` | 1070-1073 | Same robust parsing |
+
+### Code Pattern
+
+```typescript
+// Robust budget parsing: handle strings like "2000", "$2,000", "2000.50"
+const userBudget = typeof trip.budget === 'number'
+  ? trip.budget
+  : Number(String(trip.budget || '').replace(/[^\d.]/g, '')) || 0;
+```
+
+---
+
+## Phase 1 + 1.5 Complete (2026-01-10)
+
+All exit criteria satisfied:
+
+- ✅ Verdict system with 6 override rules (25 tests passing)
+- ✅ Streaming skeletons for progressive reveal
+- ✅ Budget alerts with severity levels and suggestion chips
+- ✅ Chip-to-chat flow (chips open AI panel with prefilled prompt)
+- ✅ Robust budget parsing in both view model and page
+
+**Ready for Phase 2**: Activity images, distance display reliability, preference capture

@@ -45,6 +45,20 @@ import { DayCardList, type Itinerary } from "@/components/results-v1/DayCardList
 // Analytics
 import { trackTripEvent, buildTripContext, type TripEventContext } from "@/lib/analytics";
 
+// Verdict system
+import { computeVerdict, buildVerdictInput } from "@/lib/verdict";
+import { VerdictCard } from "@/components/results/VerdictCard";
+
+// Streaming skeletons
+import {
+  CertaintyBarSkeleton,
+  VerdictCardSkeleton,
+  ItinerarySkeleton,
+  MapSkeleton,
+  RightRailSkeleton,
+  StreamingProgress,
+} from "@/components/results/ResultsSkeletons";
+
 // Blocker deltas
 import { getBlockerDeltaUI, type BlockerDeltaUI } from "@/lib/blockerDeltas";
 
@@ -57,6 +71,9 @@ import { suggestNextFix, getSuggestionAnalyticsData, type NextFixSuggestion } fr
 import { applyFix, type ApplyFixContext, type ApplyFixResult } from "@/lib/applyFix";
 import type { ChangePlannerResponse } from "@shared/schema";
 import { api } from "@shared/routes";
+
+// Version history
+import { useTripVersions } from "@/hooks/useTripVersions";
 
 import type { TripResponse, UserTripInput } from "@shared/schema";
 
@@ -257,6 +274,23 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   const { isReplanning, planChanges, applyChanges } = useChangePlanner();
   const [changePlanBanner, setChangePlanBanner] = useState<ChangePlannerResponse | null>(null);
 
+  // Version History hook - creates versions on plan apply
+  const { createVersion } = useTripVersions(tripId);
+
+  // Version creation callback for applyChanges
+  const handleVersionCreate = useCallback(async (args: {
+    source: "change_plan" | "next_fix" | "manual_save" | "system" | "restore";
+    changeId: string;
+    snapshot: any;
+    summary: any;
+  }) => {
+    try {
+      await createVersion(args);
+    } catch (err) {
+      console.error('[TripResultsV1] Failed to create version:', err);
+    }
+  }, [createVersion]);
+
   // Certainty Explanation Drawer state
   const [certaintyDrawerOpen, setCertaintyDrawerOpen] = useState(false);
 
@@ -391,7 +425,44 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   const [generationStartTime] = useState(() => Date.now());
   const [showTimeout, setShowTimeout] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
-  const TIMEOUT_THRESHOLD_MS = 90000; // 90 seconds
+
+  // Calculate trip duration from dates for dynamic timeout
+  const tripDurationDays = useMemo(() => {
+    if (!workingTrip?.dates) return 7; // default
+    const dates = workingTrip.dates;
+
+    // Try to extract duration from various formats
+    // "May 15, 2026 - May 31, 2026" or "2025-02-15 to 2025-02-22" or "7 days"
+    const daysMatch = dates.match(/(\d+)\s*days?/i);
+    if (daysMatch) return parseInt(daysMatch[1], 10);
+
+    // Try to parse date range
+    const parts = dates.split(/\s*(?:to|-|–)\s*/);
+    if (parts.length === 2) {
+      try {
+        const start = new Date(parts[0].trim());
+        const end = new Date(parts[1].trim());
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+          const diffMs = end.getTime() - start.getTime();
+          const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24)) + 1;
+          if (days > 0 && days < 100) return days;
+        }
+      } catch {
+        // parsing failed, use default
+      }
+    }
+
+    return 7; // default
+  }, [workingTrip?.dates]);
+
+  // Dynamic timeout threshold based on trip complexity
+  // Base: 60s + 8s per day, min 90s, max 300s (5 min)
+  const TIMEOUT_THRESHOLD_MS = useMemo(() => {
+    const baseMs = 60000;
+    const perDayMs = 8000;
+    const calculated = baseMs + (tripDurationDays * perDayMs);
+    return Math.min(Math.max(calculated, 90000), 300000);
+  }, [tripDurationDays]);
 
   // Safe merge from server into working state
   useEffect(() => {
@@ -495,6 +566,12 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     // Reset retry state after a moment
     setTimeout(() => setIsRetrying(false), 2000);
   }, [queryClient, tripId]);
+
+  // Keep waiting handler - dismiss popup and continue polling
+  const handleKeepWaiting = useCallback(() => {
+    setShowTimeout(false);
+    // Give user another full timeout period before showing again
+  }, []);
 
   // Track generation events
   useEffect(() => {
@@ -771,13 +848,14 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
         source: "quick_chip",
       });
 
-      // Apply reverse plan
+      // Apply reverse plan (with version creation)
       applyChanges({
         tripId,
         plan,
         setWorkingTrip,
         setBannerPlan: handleSetBannerPlan,
         source: "undo",
+        onVersionCreate: handleVersionCreate,
       });
 
       // Add certainty point for undo
@@ -806,7 +884,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     } finally {
       setIsUndoing(false);
     }
-  }, [undoCtx, workingTrip, isUndoing, tripId, analyticsContext, planChanges, applyChanges, setWorkingTrip, handleSetBannerPlan, addCertaintyPoint]);
+  }, [undoCtx, workingTrip, isUndoing, tripId, analyticsContext, planChanges, applyChanges, setWorkingTrip, handleSetBannerPlan, addCertaintyPoint, handleVersionCreate]);
 
   // ============================================================================
   // ITEM 16: NEXT FIX SUGGESTION
@@ -884,6 +962,9 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
         setWorkingTrip,
         setBannerPlan: handleSetBannerPlan,
 
+        // Version creation integration
+        onVersionCreate: handleVersionCreate,
+
         // Undo integration
         handleUndo: undoCtx ? handleUndo : undefined,
 
@@ -953,7 +1034,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     } finally {
       setIsApplyingFix(false);
     }
-  }, [tripId, changePlanBanner?.changeId, analyticsContext, undoCtx, handleUndo, isApplyingFix, workingTrip, planChanges, applyChanges, setWorkingTrip, handleSetBannerPlan, queryClient, addCertaintyPoint]);
+  }, [tripId, changePlanBanner?.changeId, analyticsContext, undoCtx, handleUndo, isApplyingFix, workingTrip, planChanges, applyChanges, setWorkingTrip, handleSetBannerPlan, queryClient, addCertaintyPoint, handleVersionCreate]);
 
   // Handle snooze suggestion (hides until next plan change)
   const handleSnoozeSuggestion = useCallback((suggestion: NextFixSuggestion) => {
@@ -976,7 +1057,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   // Effective suggestion to show (null if snoozed)
   const effectiveSuggestion = isSuggestionSnoozed ? null : nextFixSuggestion;
 
-  // Memoize costs (must be before early returns for hook rules)
+  // Memoize costs with budget delta (must be before early returns for hook rules)
   const costs = useMemo(() => {
     if (!workingTrip) return null;
     const itinerary = workingTrip.itinerary as any;
@@ -986,6 +1067,25 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     const grand = Number(costBreakdown.total ?? costBreakdown.grandTotal) || 0;
     const size = workingTrip.groupSize || 1;
     const currency = workingTrip.currency || 'USD';
+    // Robust budget parsing: handle strings like "2000", "$2,000", "2000.50"
+    const userBudget = typeof workingTrip.budget === 'number'
+      ? workingTrip.budget
+      : Number(String(workingTrip.budget || '').replace(/[^\d.]/g, '')) || 0;
+
+    // Budget delta calculations
+    const overByAmount = grand - userBudget;
+    const overByPercent = userBudget > 0 ? (overByAmount / userBudget) * 100 : 0;
+
+    // Budget status: under | near | over20 | over50
+    let budgetStatus: 'under' | 'near' | 'over20' | 'over50' = 'under';
+    if (overByPercent >= 50) {
+      budgetStatus = 'over50';
+    } else if (overByPercent >= 20) {
+      budgetStatus = 'over20';
+    } else if (overByPercent > -10) {
+      // Within 10% under budget = "near"
+      budgetStatus = 'near';
+    }
 
     return {
       flights: Number(costBreakdown.flights) || 0,
@@ -999,6 +1099,11 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
       grandTotal: grand,
       perPerson: Math.round(grand / size) || 0,
       currency,
+      // Budget delta
+      userBudget,
+      overByAmount,
+      overByPercent,
+      budgetStatus,
     };
   }, [workingTrip]);
 
@@ -1010,6 +1115,70 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     if (!itinerary?.days?.length) return null;
     return generateNarrativeSubtitle(workingTrip, itinerary);
   }, [workingTrip, isGenerating]);
+
+  // Memoize verdict computation (must be before early returns)
+  const verdictResult = useMemo(() => {
+    if (!workingTrip) return null;
+
+    // Try to extract travel date from trip dates
+    // Formats: "Dec 15-22, 2025", "2025-12-15 to 2025-12-22", "May 15, 2025 - May 22, 2025"
+    let travelDate: Date | undefined;
+    const dateStr = workingTrip.dates;
+
+    if (dateStr) {
+      // Strategy 1: Try ISO format first (most reliable)
+      const isoMatch = dateStr.match(/(\d{4}-\d{2}-\d{2})/);
+      if (isoMatch) {
+        const parsed = new Date(isoMatch[1]);
+        if (!isNaN(parsed.getTime())) {
+          travelDate = parsed;
+        }
+      }
+
+      // Strategy 2: "Dec 15-22, 2025" format - extract start day and year
+      if (!travelDate) {
+        const rangeMatch = dateStr.match(/^(\w+)\s+(\d+)(?:-\d+)?,?\s*(\d{4})$/);
+        if (rangeMatch) {
+          // Reconstruct as "Dec 15, 2025"
+          const parsed = new Date(`${rangeMatch[1]} ${rangeMatch[2]}, ${rangeMatch[3]}`);
+          if (!isNaN(parsed.getTime())) {
+            travelDate = parsed;
+          }
+        }
+      }
+
+      // Strategy 3: "May 15, 2025 - May 22, 2025" - split on " - " or " to "
+      if (!travelDate) {
+        const parts = dateStr.split(/\s+(?:to|-|–)\s+/);
+        if (parts.length >= 1) {
+          const parsed = new Date(parts[0].trim());
+          if (!isNaN(parsed.getTime())) {
+            travelDate = parsed;
+          }
+        }
+      }
+
+      // Strategy 4: Last resort - try native parsing of whole string
+      if (!travelDate) {
+        const parsed = new Date(dateStr);
+        if (!isNaN(parsed.getTime())) {
+          travelDate = parsed;
+        }
+      }
+    }
+
+    // Build input and compute verdict
+    const verdictInput = buildVerdictInput(
+      {
+        feasibilityReport: workingTrip.feasibilityReport as any,
+        budget: workingTrip.budget,
+        dates: workingTrip.dates,
+      },
+      travelDate
+    );
+
+    return computeVerdict(verdictInput);
+  }, [workingTrip?.id, workingTrip?.feasibilityReport, workingTrip?.budget, workingTrip?.dates]);
 
   // Loading state (skip if we have tripDataOverride)
   if (!tripDataOverride && (isLoading || !workingTrip)) {
@@ -1071,7 +1240,11 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     return (
       <TimeoutState
         destination={workingTrip.destination || 'your destination'}
+        dates={workingTrip.dates}
+        durationDays={tripDurationDays}
+        travelStyle={workingTrip.travelStyle || undefined}
         onRetry={handleRetry}
+        onKeepWaiting={handleKeepWaiting}
         isRetrying={isRetrying}
         elapsedSeconds={elapsedSeconds}
       />
@@ -1123,11 +1296,16 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
         />
       )}
 
-      <CertaintyBar
-        trip={workingTrip}
-        onExplainCertainty={() => setCertaintyDrawerOpen(true)}
-        certaintyHistory={certaintyHistory}
-      />
+      {/* CertaintyBar - show skeleton until feasibility data is available */}
+      {workingTrip.feasibilityReport ? (
+        <CertaintyBar
+          trip={workingTrip}
+          onExplainCertainty={() => setCertaintyDrawerOpen(true)}
+          certaintyHistory={certaintyHistory}
+        />
+      ) : (
+        <CertaintyBarSkeleton />
+      )}
 
       {/* Main content - two column layout */}
       <main className="max-w-7xl mx-auto px-4 md:px-6 py-6">
@@ -1139,7 +1317,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
               {/* Title row with controls */}
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-2xl font-display font-bold text-white tracking-tight">
-                  {itinerary?.days?.length || '—'} Days in {workingTrip.destination}
+                  {itinerary?.days?.length || '...'} Days in {workingTrip.destination}
                 </h2>
 
                 {/* Controls: Expand/Collapse All + Distance Toggle - compact */}
@@ -1177,6 +1355,18 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
               )}
             </div>
 
+            {/* Verdict Card - Trip feasibility summary */}
+            {verdictResult ? (
+              <div className="mb-4">
+                <VerdictCard
+                  verdictResult={verdictResult}
+                  onShowDetails={() => setCertaintyDrawerOpen(true)}
+                />
+              </div>
+            ) : isGenerating ? (
+              <VerdictCardSkeleton />
+            ) : null}
+
             {/* Inline warnings for missing data */}
             {!isGenerating && itinerary?.days?.length > 0 && !costs && (
               <InlineWarning type="missing_costs" />
@@ -1185,35 +1375,17 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
               <InlineWarning type="missing_costs" />
             )}
 
-            {/* Inline progress - non-blocking */}
+            {/* Streaming progress indicator - non-blocking */}
             {isGenerating && (
-              <InlineProgress
-                message={progress?.message}
+              <StreamingProgress
+                step={progress?.message || 'Generating your itinerary...'}
                 details={progress?.details}
               />
             )}
 
             {/* Itinerary content */}
             {isGenerating || !itinerary?.days?.length ? (
-              <div className="space-y-4">
-                {/* Skeleton cards */}
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-6 animate-pulse">
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className="w-10 h-10 bg-white/10 rounded-lg" />
-                      <div className="flex-1">
-                        <div className="h-4 bg-white/10 rounded w-1/3 mb-2" />
-                        <div className="h-3 bg-white/10 rounded w-1/4" />
-                      </div>
-                    </div>
-                    <div className="space-y-3">
-                      {[1, 2, 3].map((j) => (
-                        <div key={j} className="h-16 bg-white/5 rounded-lg" />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <ItinerarySkeleton />
             ) : (
               <div data-section="day-card-list">
                 <DayCardList
@@ -1241,12 +1413,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
               {/* Map - Inline (non-expanded) */}
               <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden aspect-[4/3] mb-4">
                 {isGenerating || !itinerary?.days?.length ? (
-                  <div className="w-full h-full bg-white/5 flex items-center justify-center">
-                    <div className="text-center">
-                      <div className="w-12 h-12 rounded-full bg-white/10 mx-auto mb-3 animate-pulse" />
-                      <p className="text-sm text-white/40">Map loading...</p>
-                    </div>
-                  </div>
+                  <MapSkeleton />
                 ) : (
                   <ItineraryMap
                     trip={workingTrip}
@@ -1259,18 +1426,22 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                 )}
               </div>
 
-              {/* Panels */}
-              <RightRailPanels
-                trip={workingTrip}
-                costs={costs}
-                onTripUpdate={handleTripUpdate}
-                onChatOpen={handleChatOpen}
-                hasLocalChanges={false}
-                hasUndoableChange={false}
-                onUndo={() => {}}
-                isDemo={isDemo}
-                blockerDelta={blockerDeltaUI}
-              />
+              {/* Panels - show skeleton during initial generation */}
+              {isGenerating && !costs ? (
+                <RightRailSkeleton />
+              ) : (
+                <RightRailPanels
+                  trip={workingTrip}
+                  costs={costs}
+                  onTripUpdate={handleTripUpdate}
+                  onChatOpen={handleChatOpen}
+                  hasLocalChanges={false}
+                  hasUndoableChange={false}
+                  onUndo={() => {}}
+                  isDemo={isDemo}
+                  blockerDelta={blockerDeltaUI}
+                />
+              )}
             </div>
           </aside>
         </div>

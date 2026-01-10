@@ -45,6 +45,8 @@ export interface ActivityViewModel {
   timeSlot: 'morning' | 'afternoon' | 'evening';
 }
 
+export type BudgetStatus = 'under' | 'near' | 'over20' | 'over50';
+
 export interface CostViewModel {
   flights: number;
   accommodation: number;
@@ -57,6 +59,11 @@ export interface CostViewModel {
   grandTotal: number;
   perPerson: number;
   currency: string;
+  // Budget delta fields
+  userBudget: number;
+  overByAmount: number;
+  overByPercent: number;
+  budgetStatus: BudgetStatus;
 }
 
 export interface ViewState {
@@ -186,6 +193,24 @@ function transformCosts(itinerary: any, trip: TripResponse): CostViewModel | nul
   const breakdown = itinerary?.costBreakdown;
   if (!breakdown) return null;
 
+  const grandTotal = breakdown.grandTotal || breakdown.total || 0;
+  // Robust budget parsing: handle strings like "2000", "$2,000", "2000.50"
+  const userBudget = typeof trip.budget === 'number'
+    ? trip.budget
+    : Number(String(trip.budget || '').replace(/[^\d.]/g, '')) || 0;
+  const overByAmount = grandTotal - userBudget;
+  const overByPercent = userBudget > 0 ? (overByAmount / userBudget) * 100 : 0;
+
+  // Determine budget status
+  let budgetStatus: BudgetStatus = 'under';
+  if (overByPercent >= 50) {
+    budgetStatus = 'over50';
+  } else if (overByPercent >= 20) {
+    budgetStatus = 'over20';
+  } else if (overByPercent > -10) {
+    budgetStatus = 'near';
+  }
+
   return {
     flights: breakdown.flights || 0,
     accommodation: breakdown.accommodation || 0,
@@ -195,9 +220,14 @@ function transformCosts(itinerary: any, trip: TripResponse): CostViewModel | nul
     visa: breakdown.visa || 0,
     insurance: breakdown.insurance || 0,
     miscellaneous: breakdown.miscellaneous || breakdown.misc || 0,
-    grandTotal: breakdown.grandTotal || breakdown.total || 0,
-    perPerson: breakdown.perPerson || (breakdown.grandTotal / (trip.groupSize || 1)),
+    grandTotal,
+    perPerson: breakdown.perPerson || (grandTotal / (trip.groupSize || 1)),
     currency: trip.currency || 'USD',
+    // Budget delta fields
+    userBudget,
+    overByAmount,
+    overByPercent,
+    budgetStatus,
   };
 }
 
