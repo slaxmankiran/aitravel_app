@@ -12,7 +12,8 @@
  */
 
 import React, { useMemo, useEffect, useCallback, useRef } from "react";
-import { X, ArrowUp, ArrowDown, Minus, CheckCircle2, AlertTriangle, Shield, Sparkles, AlertCircle } from "lucide-react";
+import { useLocation } from "wouter";
+import { X, ArrowUp, ArrowDown, Minus, CheckCircle2, AlertTriangle, Shield, Sparkles, AlertCircle, Download } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import type { TripResponse } from "@shared/schema";
 import { comparePlans, type PlanComparison, type CostDelta } from "@/lib/comparePlans";
@@ -164,9 +165,23 @@ export function ComparePlansModal({
   onKeepUpdated,
   onKeepOriginal,
 }: ComparePlansModalProps) {
+  const [, setLocation] = useLocation();
+
   // Refs for focus trap
   const modalRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Handler for exporting comparison as PDF
+  const handleExportComparison = useCallback(() => {
+    // Store both trips in sessionStorage for the export page
+    sessionStorage.setItem("compareExport_planA", JSON.stringify(originalTrip));
+    sessionStorage.setItem("compareExport_planB", JSON.stringify(updatedTrip));
+
+    // Navigate to compare export page
+    const tripId = updatedTrip.id;
+    setLocation(`/trips/${tripId}/export/compare`);
+    onClose();
+  }, [originalTrip, updatedTrip, setLocation, onClose]);
 
   // Generate comparison (only when open to avoid wasted computation)
   const comparison = useMemo(() => {
@@ -581,6 +596,15 @@ export function ComparePlansModal({
                   )}
                 >
                   Keep Original
+                </button>
+                {/* Export Comparison button */}
+                <button
+                  onClick={handleExportComparison}
+                  className="px-4 py-3 rounded-xl font-semibold text-sm transition-all bg-white/5 text-white/70 hover:bg-white/10 hover:text-white flex items-center justify-center gap-2"
+                  title="Export comparison as PDF"
+                >
+                  <Download className="w-4 h-4" />
+                  <span className="hidden sm:inline">Export</span>
                 </button>
               </div>
               {recommendation.preferred !== "neutral" && (

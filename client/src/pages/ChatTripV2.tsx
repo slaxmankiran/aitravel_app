@@ -366,6 +366,11 @@ export default function ChatTripV2() {
           budget,
           groupSize,
         });
+        // Show "saved for later" toast
+        toast({
+          title: "Trip saved!",
+          description: "Find it anytime in My Trips.",
+        });
         setLocation(`/trips/${response.id}/feasibility`);
       },
       onError: (error: any) => {

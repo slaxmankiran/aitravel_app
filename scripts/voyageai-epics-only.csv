@@ -1,0 +1,19 @@
+Summary,Description,Issue Type
+Trip Planning Core,Core trip planning functionality including trip creation feasibility analysis and itinerary generation.,Epic
+Trip Results UI,Premium trip results page with two-column layout interactive map and expandable day cards.,Epic
+AI Chat Assistant,Conversational AI for itinerary modifications with pending changes confirmation flow.,Epic
+Change Planner Agent,Smart agent that detects user changes recomputes only impacted modules and explains deltas.,Epic
+Version History,Trip version timeline enabling users to see history restore previous versions and export any version.,Epic
+Account-lite MVP,Anonymous identity for trip ownership without requiring full registration.,Epic
+Chat Trip Wizard,Mindtrip-style conversational trip planning interface.,Epic
+Action Items System,Required vs Recommended action items with blocking and non-blocking classification.,Epic
+Analytics and Tracking,Event tracking for trip interactions funnel analysis and debug endpoints.,Epic
+Performance Optimizations,React rendering optimizations and lazy loading for smooth UX.,Epic
+Certainty-First Homepage,Reposition VoyageAI clearly vs competitors with feasibility-first hero section.,Epic
+Streaming Results UX,Reduce perceived latency by showing real-time progress during analysis.,Epic
+Feasibility Verdict Engine UI,Expose Go Possible No verdict clearly with supporting details.,Epic
+True Cost and Budget Guardrails,Surface real costs prominently and guide users when budget is at risk.,Epic
+Visual Itinerary System,Modern visually appealing itinerary display without losing focus.,Epic
+Action Items Checklist,Increase trust and clarity with required and recommended actions.,Epic
+Shareable View-Only Trips,Enable trip collaboration without accounts through shareable links.,Epic
+Preference Capture Lightweight,Improve results without requiring login by capturing preferences locally.,Epic

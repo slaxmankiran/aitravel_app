@@ -127,22 +127,59 @@ export function NotFeasibleState({
 }
 
 // ============================================================================
-// GENERATION TIMEOUT
+// GENERATION TIMEOUT / LONG WAIT STATE
 // ============================================================================
 
 interface TimeoutProps {
   destination: string;
+  dates?: string;
+  durationDays?: number;
+  travelStyle?: string;
   onRetry: () => void;
+  onKeepWaiting?: () => void;
   isRetrying?: boolean;
   elapsedSeconds?: number;
 }
 
+/**
+ * Get expected generation time message based on trip complexity
+ */
+function getExpectedTimeMessage(durationDays?: number, travelStyle?: string): string {
+  if (!durationDays) return "This usually takes 1-2 minutes.";
+
+  if (durationDays >= 14) {
+    return `A ${durationDays}-day trip can take 2-4 minutes to generate.`;
+  } else if (durationDays >= 7) {
+    return `A ${durationDays}-day trip typically takes 1-3 minutes.`;
+  } else {
+    return "This usually takes 1-2 minutes.";
+  }
+}
+
+/**
+ * Format elapsed time in a friendly way
+ */
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+}
+
 export function TimeoutState({
   destination,
+  dates,
+  durationDays,
+  travelStyle,
   onRetry,
+  onKeepWaiting,
   isRetrying = false,
   elapsedSeconds,
 }: TimeoutProps) {
+  // More positive framing - not "timeout", it's "still working"
+  const isLongTrip = durationDays && durationDays >= 10;
+  const expectedTimeMsg = getExpectedTimeMessage(durationDays, travelStyle);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
       <motion.div
@@ -150,60 +187,103 @@ export function TimeoutState({
         animate={{ opacity: 1, y: 0 }}
         className="max-w-lg w-full"
       >
-        <div className="bg-slate-800/50 border border-amber-500/20 rounded-2xl p-8 backdrop-blur-sm">
-          {/* Icon */}
-          <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mx-auto mb-6">
-            <Clock className="w-8 h-8 text-amber-400" />
+        <div className="bg-slate-800/50 border border-emerald-500/20 rounded-2xl p-8 backdrop-blur-sm">
+          {/* Icon - spinning to show activity */}
+          <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-6">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+            >
+              <RefreshCw className="w-8 h-8 text-emerald-400" />
+            </motion.div>
           </div>
 
-          {/* Title */}
+          {/* Title - more positive framing */}
           <h1 className="text-2xl font-display font-bold text-white text-center mb-2">
-            Taking Longer Than Expected
+            {isLongTrip ? "Creating Your Epic Adventure" : "Still Working On It"}
           </h1>
 
-          <p className="text-white/60 text-center mb-6">
-            Your {destination} itinerary is taking a while to generate.
-            {elapsedSeconds && elapsedSeconds > 60 && (
-              <span className="block mt-1 text-amber-400/80 text-sm">
-                ({Math.floor(elapsedSeconds / 60)}m {elapsedSeconds % 60}s elapsed)
-              </span>
+          {/* Trip context - show dates and duration */}
+          <div className="text-center mb-4">
+            <p className="text-white/80">
+              <MapPin className="w-4 h-4 inline mr-1" />
+              {destination}
+              {durationDays && (
+                <span className="text-emerald-400 font-medium ml-2">
+                  {durationDays} days
+                </span>
+              )}
+            </p>
+            {dates && (
+              <p className="text-white/50 text-sm mt-1">{dates}</p>
             )}
-          </p>
+          </div>
 
-          {/* Explanation */}
+          {/* Progress indicator */}
+          {elapsedSeconds && (
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <div className="flex gap-1">
+                {[0, 1, 2].map((i) => (
+                  <motion.div
+                    key={i}
+                    className="w-2 h-2 rounded-full bg-emerald-400"
+                    animate={{ opacity: [0.3, 1, 0.3] }}
+                    transition={{ duration: 1.5, repeat: Infinity, delay: i * 0.2 }}
+                  />
+                ))}
+              </div>
+              <span className="text-emerald-400/80 text-sm">
+                {formatElapsed(elapsedSeconds)} elapsed
+              </span>
+            </div>
+          )}
+
+          {/* Explanation - positive, informative */}
           <div className="bg-slate-700/30 rounded-xl p-4 mb-6">
-            <p className="text-white/70 text-sm">
-              This can happen when our AI is processing complex itineraries or experiencing high demand.
-              Your trip data is safe.
+            <p className="text-white/70 text-sm text-center">
+              {expectedTimeMsg}
+              <br />
+              <span className="text-white/50 mt-1 block">
+                Our AI is crafting a detailed day-by-day plan with local recommendations.
+              </span>
             </p>
           </div>
 
-          {/* Actions */}
+          {/* Actions - Keep Waiting is primary, Retry is secondary */}
           <div className="flex flex-col gap-3">
+            {onKeepWaiting && (
+              <Button
+                onClick={onKeepWaiting}
+                className="w-full bg-emerald-600 text-white hover:bg-emerald-500"
+              >
+                <Clock className="w-4 h-4 mr-2" />
+                Keep Waiting
+              </Button>
+            )}
             <Button
               onClick={onRetry}
               disabled={isRetrying}
-              className="w-full bg-amber-500 text-slate-900 hover:bg-amber-400"
+              variant="outline"
+              className="w-full border-white/20 text-white hover:bg-white/10"
             >
               {isRetrying ? (
                 <>
                   <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Retrying...
+                  Restarting...
                 </>
               ) : (
                 <>
                   <RefreshCw className="w-4 h-4 mr-2" />
-                  Try Again
+                  Start Over
                 </>
               )}
             </Button>
-            <Link href="/">
-              <Button variant="outline" className="w-full border-white/20 text-white hover:bg-white/10">
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Home
-              </Button>
-            </Link>
           </div>
+
+          {/* Reassurance */}
+          <p className="text-white/40 text-xs text-center mt-4">
+            Your trip data is saved. You won't lose anything.
+          </p>
         </div>
       </motion.div>
     </div>

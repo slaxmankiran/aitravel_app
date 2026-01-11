@@ -805,6 +805,96 @@ Smart agent that detects user changes after seeing results, recomputes only impa
 
 ---
 
+## Share View (Phase 3.6) - Beta Complete (2026-01-11)
+
+### Status: Implemented and Tested
+
+Public, read-only trip sharing with OG meta tags for social previews.
+
+**Route:** `/share/:tripId`
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| Public API | `GET /api/share/:id` returns trip without auth |
+| OG Meta Tags | Dynamic title, description for Facebook/Twitter previews |
+| Read-only UI | No edit affordances, clean view-only rendering |
+| Plan Own CTA | Prominent "Plan your own trip" conversion button |
+| Full Itinerary | Day cards, map, cost summary - all visible |
+
+### Files Created/Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/pages/TripShareView.tsx` | New page component |
+| `client/src/App.tsx` | Added `/share/:tripId` route |
+| `server/routes.ts` | Added `GET /api/share/:id` endpoint |
+| `server/vite.ts` | OG meta tag injection (development) |
+| `server/static.ts` | OG meta tag injection (production) |
+
+### API Endpoint
+
+```typescript
+// GET /api/share/:id - Public endpoint, no auth required
+// Returns: Shareable trip data (excludes sensitive fields)
+{
+  id, destination, origin, startDate, endDate,
+  groupSize, travelStyle, budget, currency,
+  feasibilityReport, itinerary, certaintyScore,
+  trueCostBreakdown, visaDetails, actionItems
+  // Excludes: userId, voyageUid, userNotes
+}
+```
+
+### OG Meta Tags
+
+```html
+<title>Paris, France Trip | VoyageAI</title>
+<meta property="og:title" content="Paris, France Trip | VoyageAI" />
+<meta property="og:description" content="AI-powered travel plan for Paris, France. 2 travelers, moderate style." />
+<meta name="twitter:card" content="summary_large_image" />
+```
+
+### Layout Structure
+
+```
+┌──────────────────────────────────────────────────┐
+│ ShareViewHeader (brand left, "Plan own trip" CTA)│
+├──────────────────────────────────────────────────┤
+│ Hero Section (destination, dates, travelers)     │
+├──────────────────────────────────────────────────┤
+│ CertaintyBar (visa status, score)                │
+├──────────────────────────────────────────────────┤
+│ Main Content                                      │
+│ ┌────────────────────┬─────────────────────────┐ │
+│ │ DayCardList        │ ItineraryMap (sticky)   │ │
+│ │ - Day cards        │                         │ │
+│ │ - Activities       │ CostSummaryCard         │ │
+│ └────────────────────┴─────────────────────────┘ │
+├──────────────────────────────────────────────────┤
+│ PlanOwnCTA (sticky bottom bar)                   │
+└──────────────────────────────────────────────────┘
+```
+
+### Key Implementation Details
+
+1. **ResultsBackground as wrapper**: All content rendered as children of `ResultsBackground` for proper layering
+2. **No duplicate destination**: Header shows only brand, destination appears only in hero
+3. **ItineraryMap props**: Uses `trip={tripResponse}` interface, not individual location props
+4. **Social crawler detection**: OG tags injected server-side before Vite transforms
+
+### Test Checklist
+
+- [x] `/share/:tripId` loads in incognito (no auth)
+- [x] OG meta tags appear (curl test)
+- [x] Map displays correctly
+- [x] Day cards render with activities
+- [x] Cost summary visible
+- [x] "Plan your own trip" navigates to `/create`
+
+---
+
 ## Performance Optimizations (2026-01-09)
 
 ### Status: Implemented

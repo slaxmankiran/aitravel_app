@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, buildUrl } from "@shared/routes";
 import { type CreateTripRequest, type TripResponse } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+import { getVoyageHeaders } from "@/lib/voyageUid";
 
 // GET /api/trips/:id
 export function useTrip(id: number) {
@@ -9,7 +10,10 @@ export function useTrip(id: number) {
     queryKey: [api.trips.get.path, id],
     queryFn: async () => {
       const url = buildUrl(api.trips.get.path, { id });
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(url, {
+        credentials: "include",
+        headers: getVoyageHeaders(),
+      });
       
       if (!res.ok) {
         if (res.status === 404) return null;
@@ -59,7 +63,10 @@ export function useCreateTrip() {
       
       const res = await fetch(api.trips.create.path, {
         method: api.trips.create.method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getVoyageHeaders(),
+        },
         body: JSON.stringify(validated),
         credentials: "include",
       });

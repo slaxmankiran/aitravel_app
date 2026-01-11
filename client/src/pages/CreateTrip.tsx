@@ -16,6 +16,7 @@ import { z } from "zod";
 import { format } from "date-fns";
 import { DateRange } from "react-day-picker";
 import { trackTripEvent } from "@/lib/analytics";
+import { useToast } from "@/hooks/use-toast";
 
 // Major world cities for autocomplete
 const MAJOR_CITIES = [
@@ -1345,6 +1346,7 @@ export default function CreateTrip() {
   const flowCompletedRef = useRef(false); // Track if user completed the flow
 
   const createTrip = useCreateTrip();
+  const { toast } = useToast();
 
   // Track create_started event on initial mount (not edit mode)
   useEffect(() => {
@@ -1455,6 +1457,14 @@ export default function CreateTrip() {
 
           console.log("Trip created successfully:", response);
           clearFormStorage(); // Clear saved form data on success
+
+          // Show "saved for later" toast (only for new trips, not edits)
+          if (!returnTo) {
+            toast({
+              title: "Trip saved!",
+              description: "Find it anytime in My Trips.",
+            });
+          }
 
           // If returnTo is specified (edit mode), go back there after re-checking feasibility
           // Otherwise navigate to feasibility page for new trips

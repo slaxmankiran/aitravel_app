@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Sidebar } from "@/components/Sidebar";
-import { UserMenu } from "@/components/UserMenu";
 import {
   Plus,
   MapPin,
@@ -15,40 +14,52 @@ import {
   Grid,
   List,
   DollarSign,
-  Plane,
   Clock,
   Star,
   MoreHorizontal,
   Trash2,
   Copy,
-  Share2
+  Share2,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX
 } from "lucide-react";
 import { useState } from "react";
+import { getVoyageHeaders } from "@/lib/voyageUid";
 
-interface Trip {
+// Trip summary from /api/my-trips
+interface TripSummary {
   id: number;
   destination: string;
-  startDate: string;
-  endDate: string;
+  dates: string;
+  certaintyScore: number | null;
+  certaintyLabel: 'high' | 'medium' | 'low' | null;
+  estimatedCost: number | null;
+  currency: string;
   travelers: number;
-  budget: number;
-  status: string;
-  imageUrl?: string;
+  travelStyle: string | null;
+  status: string | null;
+  feasibilityStatus: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 export default function MyTrips() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const { data: trips = [], isLoading } = useQuery<Trip[]>({
-    queryKey: ['/api/trips'],
+  const { data: tripsResponse, isLoading } = useQuery<{ trips: TripSummary[] }>({
+    queryKey: ['/api/my-trips'],
     queryFn: async () => {
-      const res = await fetch('/api/trips');
-      if (!res.ok) return [];
+      const res = await fetch('/api/my-trips', {
+        headers: getVoyageHeaders(),
+      });
+      if (!res.ok) return { trips: [] };
       return res.json();
     }
   });
 
+  const trips = tripsResponse?.trips || [];
   const filteredTrips = trips.filter(trip =>
     trip.destination.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -125,15 +136,23 @@ export default function MyTrips() {
               <h2 className="text-2xl font-display font-bold text-slate-900 mb-3">
                 No trips yet
               </h2>
-              <p className="text-slate-500 mb-8 max-w-md mx-auto">
+              <p className="text-slate-500 mb-6 max-w-md mx-auto">
                 Start planning your first adventure! Tell us where you want to go and we'll create the perfect itinerary.
               </p>
-              <Link href="/create">
+              <Link href="/chat">
                 <Button className="bg-slate-900 hover:bg-slate-800 text-white rounded-xl px-8">
                   <Plus className="w-4 h-4 mr-2" />
                   Plan Your First Trip
                 </Button>
               </Link>
+
+              {/* Device/storage reset notice */}
+              <div className="mt-12 p-4 bg-slate-100 rounded-xl max-w-lg mx-auto">
+                <p className="text-sm text-slate-600">
+                  <span className="font-medium">On a new device or cleared your browser?</span>
+                  {' '}Your trips are stored locally. If you have a trip link saved, you can still access it directly.
+                </p>
+              </div>
             </motion.div>
           ) : viewMode === 'grid' ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -177,24 +196,51 @@ function getDestinationImage(destination: string): string {
   return DESTINATION_IMAGES['default'];
 }
 
-// Calculate trip duration in days
-function getTripDuration(startDate: string, endDate: string): number {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+// Parse dates string like "May 15, 2026 - May 31, 2026" or "May 15-31, 2026"
+function parseDatesString(dates: string): { startDate: Date | null; endDate: Date | null; duration: number } {
+  if (!dates) return { startDate: null, endDate: null, duration: 0 };
+
+  // Try parsing "May 15, 2026 - May 31, 2026" format
+  const parts = dates.split(/\s*[-–to]\s*/);
+  if (parts.length >= 2) {
+    const start = new Date(parts[0].trim());
+    const end = new Date(parts[parts.length - 1].trim());
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      const duration = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      return { startDate: start, endDate: end, duration };
+    }
+  }
+
+  // Fallback: try parsing the whole string
+  const singleDate = new Date(dates);
+  if (!isNaN(singleDate.getTime())) {
+    return { startDate: singleDate, endDate: singleDate, duration: 1 };
+  }
+
+  return { startDate: null, endDate: null, duration: 0 };
 }
 
-function TripCard({ trip, index }: { trip: Trip; index: number }) {
+// Get certainty badge color and icon
+function getCertaintyBadge(label: string | null, score: number | null) {
+  if (!label) return { color: 'bg-slate-500/20 text-slate-300', icon: null };
+  if (label === 'high') return { color: 'bg-emerald-500/30 text-emerald-300', icon: ShieldCheck };
+  if (label === 'medium') return { color: 'bg-amber-500/30 text-amber-300', icon: ShieldAlert };
+  return { color: 'bg-red-500/30 text-red-300', icon: ShieldX };
+}
+
+function TripCard({ trip, index }: { trip: TripSummary; index: number }) {
   const [showMenu, setShowMenu] = useState(false);
-  const imageUrl = trip.imageUrl || getDestinationImage(trip.destination);
-  const duration = getTripDuration(trip.startDate, trip.endDate);
+  const imageUrl = getDestinationImage(trip.destination);
+  const { startDate, endDate, duration } = parseDatesString(trip.dates);
+  const certainty = getCertaintyBadge(trip.certaintyLabel, trip.certaintyScore);
+  const CertaintyIcon = certainty.icon;
 
   // Format date range nicely
-  const startDate = new Date(trip.startDate);
-  const endDate = new Date(trip.endDate);
-  const dateRange = startDate.getMonth() === endDate.getMonth()
-    ? `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.getDate()}`
-    : `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  const dateRange = startDate && endDate
+    ? (startDate.getMonth() === endDate.getMonth()
+      ? `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.getDate()}`
+      : `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`)
+    : trip.dates;
 
   return (
     <motion.div
@@ -281,10 +327,16 @@ function TripCard({ trip, index }: { trip: Trip; index: number }) {
                 <Users className="w-3.5 h-3.5" />
                 {trip.travelers} traveler{trip.travelers !== 1 ? 's' : ''}
               </span>
-              {trip.budget && (
+              {trip.estimatedCost && (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/20 backdrop-blur-sm rounded-full text-xs font-medium text-white">
                   <DollarSign className="w-3.5 h-3.5" />
-                  ${trip.budget.toLocaleString()}
+                  {trip.currency === 'USD' ? '$' : trip.currency}{trip.estimatedCost.toLocaleString()}
+                </span>
+              )}
+              {CertaintyIcon && trip.certaintyScore !== null && (
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 backdrop-blur-sm rounded-full text-xs font-medium ${certainty.color}`}>
+                  <CertaintyIcon className="w-3.5 h-3.5" />
+                  {trip.certaintyScore}%
                 </span>
               )}
             </div>
@@ -306,9 +358,16 @@ function TripCard({ trip, index }: { trip: Trip; index: number }) {
   );
 }
 
-function TripListItem({ trip, index }: { trip: Trip; index: number }) {
-  const imageUrl = trip.imageUrl || getDestinationImage(trip.destination);
-  const duration = getTripDuration(trip.startDate, trip.endDate);
+function TripListItem({ trip, index }: { trip: TripSummary; index: number }) {
+  const imageUrl = getDestinationImage(trip.destination);
+  const { startDate, endDate, duration } = parseDatesString(trip.dates);
+  const certainty = getCertaintyBadge(trip.certaintyLabel, trip.certaintyScore);
+  const CertaintyIcon = certainty.icon;
+
+  // Format date range nicely
+  const dateRange = startDate && endDate
+    ? `${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+    : trip.dates;
 
   return (
     <motion.div
@@ -335,11 +394,21 @@ function TripListItem({ trip, index }: { trip: Trip; index: number }) {
                   Completed
                 </span>
               )}
+              {CertaintyIcon && trip.certaintyScore !== null && (
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                  trip.certaintyLabel === 'high' ? 'bg-emerald-100 text-emerald-700' :
+                  trip.certaintyLabel === 'medium' ? 'bg-amber-100 text-amber-700' :
+                  'bg-red-100 text-red-700'
+                }`}>
+                  <CertaintyIcon className="w-3 h-3" />
+                  {trip.certaintyScore}%
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-4 text-slate-500 text-sm">
+            <div className="flex items-center gap-4 text-slate-500 text-sm flex-wrap">
               <span className="flex items-center gap-1.5">
                 <Calendar className="w-4 h-4 text-slate-400" />
-                {new Date(trip.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - {new Date(trip.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                {dateRange}
               </span>
               <span className="flex items-center gap-1.5">
                 <Clock className="w-4 h-4 text-slate-400" />
@@ -349,10 +418,10 @@ function TripListItem({ trip, index }: { trip: Trip; index: number }) {
                 <Users className="w-4 h-4 text-slate-400" />
                 {trip.travelers}
               </span>
-              {trip.budget && (
+              {trip.estimatedCost && (
                 <span className="flex items-center gap-1.5">
                   <DollarSign className="w-4 h-4 text-slate-400" />
-                  ${trip.budget.toLocaleString()}
+                  {trip.currency === 'USD' ? '$' : trip.currency}{trip.estimatedCost.toLocaleString()}
                 </span>
               )}
             </div>

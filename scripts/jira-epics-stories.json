@@ -1,0 +1,235 @@
+{
+  "projectKey": "VOY",
+  "epics": [
+    {
+      "key": "EPIC-1",
+      "summary": "Trip Planning Core",
+      "description": "Core trip planning functionality including trip creation, feasibility analysis, and itinerary generation.",
+      "stories": [
+        {
+          "summary": "Smart Trip Creation Form",
+          "description": "As a user, I want to create trips with destination autocomplete, date picker, traveler composition, budget, and travel style so that I can plan my trip efficiently.\n\nAcceptance Criteria:\n- Destination autocomplete with city suggestions\n- Date range picker with flexible date options\n- Traveler composition (adults, children, infants)\n- Budget input with currency selection\n- Travel style selection (budget, comfort, luxury)",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Feasibility Analysis Engine",
+          "description": "As a user, I want the system to analyze my trip feasibility so that I know if my trip is possible before planning.\n\nAcceptance Criteria:\n- Visa requirement detection based on passport\n- Safety assessment for destination\n- Budget validation against typical costs\n- Accessibility check\n- Clear Go/Possible/No verdict",
+          "storyPoints": 13
+        },
+        {
+          "summary": "Certainty Score Calculation",
+          "description": "As a user, I want to see a 0-100 certainty score so that I understand how confident the system is about my trip.\n\nAcceptance Criteria:\n- Visa component (0-30 points)\n- Accessibility component (0-25 points)\n- Safety component (0-25 points)\n- Budget adequacy (0-20 points)\n- Visual score display with breakdown",
+          "storyPoints": 5
+        },
+        {
+          "summary": "AI Itinerary Generation",
+          "description": "As a user, I want AI-generated day-by-day itineraries so that I have a complete trip plan.\n\nAcceptance Criteria:\n- Day-by-day activities with times\n- Cost estimates per activity\n- Transport options between activities\n- Local food recommendations\n- Morning/Afternoon/Evening grouping",
+          "storyPoints": 13
+        }
+      ]
+    },
+    {
+      "key": "EPIC-2",
+      "summary": "Trip Results UI (Mindtrip-style)",
+      "description": "Premium trip results page with two-column layout, interactive map, and expandable day cards.",
+      "stories": [
+        {
+          "summary": "Two-Column Results Layout",
+          "description": "As a user, I want a clean two-column layout for viewing my trip results so that I can see both the itinerary and map simultaneously.\n\nAcceptance Criteria:\n- Left column (7/12): Day cards with activities\n- Right column (5/12): Sticky map and panels\n- Responsive design for mobile\n- Smooth scrolling with sticky headers",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Interactive Day Cards",
+          "description": "As a user, I want expandable day cards grouped by time slots so that I can easily browse my daily activities.\n\nAcceptance Criteria:\n- Morning/Afternoon/Evening activity grouping\n- Expand/collapse individual days\n- Global expand/collapse all toggle\n- Activity costs displayed (Free or $amount)\n- Transport icons between activities",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Interactive Itinerary Map",
+          "description": "As a user, I want an interactive map showing my activities so that I can visualize my trip geographically.\n\nAcceptance Criteria:\n- Map markers for all activities\n- Hover sync between day cards and map\n- Click marker to scroll to activity\n- Cluster markers when zoomed out\n- Walking distance display (<5km only)",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Certainty Bar Component",
+          "description": "As a user, I want a sticky certainty bar showing visa status and score so that I always see my trip feasibility.\n\nAcceptance Criteria:\n- Visa status badge (visa-free, visa-required, etc.)\n- Certainty score with visual indicator\n- Expandable visa details panel\n- Processing time display\n- Documents required list",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Right Rail Panels (Cost/Actions/Chat)",
+          "description": "As a user, I want collapsible panels for costs, action items, and chat so that I can access detailed information on demand.\n\nAcceptance Criteria:\n- True Cost breakdown panel (open by default)\n- Action Items panel with Required/Recommended sections\n- AI Chat panel (lazy loaded, closed by default)\n- Accordion behavior (multiple can be open)\n- Smooth animations",
+          "storyPoints": 8
+        }
+      ]
+    },
+    {
+      "key": "EPIC-3",
+      "summary": "AI Chat Assistant",
+      "description": "Conversational AI for itinerary modifications with pending changes confirmation flow.",
+      "stories": [
+        {
+          "summary": "Chat Interface for Itinerary Modifications",
+          "description": "As a user, I want to chat with AI to modify my itinerary so that I can customize my trip naturally.\n\nAcceptance Criteria:\n- Natural language input (\"Add a cooking class\")\n- AI understands context of current trip\n- Suggestions appear as pending changes\n- Message history preserved",
+          "storyPoints": 13
+        },
+        {
+          "summary": "Pending Changes Confirmation Flow",
+          "description": "As a user, I want to confirm or reject AI suggestions before they're applied so that I have control over changes.\n\nAcceptance Criteria:\n- Changes shown as preview cards\n- Accept/Reject buttons per change\n- Batch accept all option\n- Clear diff view showing what changes\n- Undo after applying",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Quick Action Chips",
+          "description": "As a user, I want one-click quick actions so that I can make common modifications easily.\n\nAcceptance Criteria:\n- \"+1 day\" / \"-1 day\" duration chips\n- \"Cheaper options\" budget chip\n- \"Add free activity\" chip\n- \"Add beach day\" style chip\n- Chips contextual to current trip",
+          "storyPoints": 5
+        }
+      ]
+    },
+    {
+      "key": "EPIC-4",
+      "summary": "Change Planner Agent",
+      "description": "Smart agent that detects user changes, recomputes only impacted modules, and explains deltas.",
+      "stories": [
+        {
+          "summary": "Change Detection System",
+          "description": "As a system, I want to detect what changed when user modifies trip inputs so that I can determine what needs recomputation.\n\nAcceptance Criteria:\n- Detect changes in dates, budget, destination, group size\n- Identify impacted modules (visa, costs, itinerary)\n- Calculate minimal recomputation plan\n- Track change source (inline edit, quick chip, fix blocker)",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Delta Explanation Banner",
+          "description": "As a user, I want to see what changed after modifications so that I understand the impact.\n\nAcceptance Criteria:\n- Certainty delta display (+8% or -5%)\n- Cost delta display (+$150 or -$200)\n- Blocker resolution chips (\"2 resolved\")\n- Auto-dismiss after 5 seconds\n- Undo button",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Compare Plans Modal",
+          "description": "As a user, I want to compare my original plan with the updated plan so that I can decide which to keep.\n\nAcceptance Criteria:\n- Side-by-side comparison view\n- Highlight differences in costs\n- Show certainty score comparison\n- \"Keep Updated\" / \"Revert to Original\" actions\n- Cost breakdown by category",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Auto-suggest Next Fix",
+          "description": "As a user, I want the system to suggest the next improvement action so that I can quickly resolve issues.\n\nAcceptance Criteria:\n- Rule-based suggestion engine\n- Priority: visa risk > cost increase > certainty drop\n- Confidence levels (high/medium/low)\n- \"Apply\" button with impact preview\n- \"Snooze\" option",
+          "storyPoints": 8
+        }
+      ]
+    },
+    {
+      "key": "EPIC-5",
+      "summary": "Version History (Item 18)",
+      "description": "Trip version timeline enabling users to see history, restore previous versions, and export any version.",
+      "stories": [
+        {
+          "summary": "Version Creation on Changes",
+          "description": "As a system, I want to create versions when trips are modified so that users can track history.\n\nAcceptance Criteria:\n- Auto-create version on change plan apply\n- Auto-create version on manual save\n- Upsert by changeId to prevent duplicates\n- Store full snapshot (inputs, costs, certainty, itinerary summary)\n- Max 500KB payload per version",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Version Timeline UI",
+          "description": "As a user, I want to see a timeline of my trip versions so that I can browse history.\n\nAcceptance Criteria:\n- List versions newest first\n- Show source label (change_plan, manual_save, restore)\n- Display summary chips per version\n- Show certainty and cost at each point\n- Pinned versions feature",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Version Restore Functionality",
+          "description": "As a user, I want to restore a previous version so that I can undo unwanted changes.\n\nAcceptance Criteria:\n- Restore button per version\n- Confirmation dialog before restore\n- Creates new \"restore\" version entry\n- Updates trip with restored data\n- Preserves feasibility report",
+          "storyPoints": 5
+        }
+      ]
+    },
+    {
+      "key": "EPIC-6",
+      "summary": "Account-lite MVP (Item 21)",
+      "description": "Anonymous identity for trip ownership without requiring full registration.",
+      "stories": [
+        {
+          "summary": "Anonymous User Identity (voyageUid)",
+          "description": "As a user, I want automatic identity without sign-up so that I can save trips immediately.\n\nAcceptance Criteria:\n- Generate UUID on first visit\n- Store in localStorage as 'voyage_uid'\n- Send as X-Voyage-Uid header on all requests\n- Persists across sessions\n- No email or password required",
+          "storyPoints": 5
+        },
+        {
+          "summary": "My Trips Page",
+          "description": "As a user, I want to see all my trips so that I can manage my travel plans.\n\nAcceptance Criteria:\n- List trips by voyageUid\n- Show destination, dates, certainty score\n- Quick actions (view, edit, delete)\n- Sort by date created\n- Empty state with CTA to create trip",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Trip Ownership Backfill",
+          "description": "As a system, I want to adopt orphan trips when users access them so that shared trips work correctly.\n\nAcceptance Criteria:\n- Adopt trip if voyageUid is null\n- Only adopt if user accesses via share link\n- Preserve original trip data\n- Log adoption events for analytics",
+          "storyPoints": 3
+        }
+      ]
+    },
+    {
+      "key": "EPIC-7",
+      "summary": "Chat Trip Wizard (ChatTripV2)",
+      "description": "Mindtrip-style conversational trip planning interface.",
+      "stories": [
+        {
+          "summary": "Progressive Field Collection",
+          "description": "As a user, I want a conversational flow for entering trip details so that planning feels natural.\n\nAcceptance Criteria:\n- Start with passport selection\n- Progress through destination, dates, budget\n- Skip to summary when ready\n- Animated message appearance\n- Visual progress indicator",
+          "storyPoints": 8
+        },
+        {
+          "summary": "Trip Summary Pills",
+          "description": "As a user, I want to see my trip details as visual pills so that I can review at a glance.\n\nAcceptance Criteria:\n- Pill per field (passport, destination, dates, budget)\n- State hierarchy: urgent (missing required), complete, highlight\n- Click to edit any field\n- Checkmark icon for completed fields",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Quiet Mode After Ready",
+          "description": "As a user, I want narrative messages suppressed once I've entered required fields so that the interface stays clean.\n\nAcceptance Criteria:\n- Quiet mode activates when passport + destination set\n- One-way transition (doesn't deactivate)\n- Only shows user messages and confirmations\n- Can still edit fields via pills",
+          "storyPoints": 3
+        },
+        {
+          "summary": "Flexible Dates Intent Labels",
+          "description": "As a user, I want intent-based date options so that I can indicate my flexibility.\n\nAcceptance Criteria:\n- \"I know my dates\" option\n- \"I'm flexible\" option\n- \"Preferred month\" option\n- Clear labeling of what each means\n- Store flexibility preference",
+          "storyPoints": 3
+        }
+      ]
+    },
+    {
+      "key": "EPIC-8",
+      "summary": "Action Items System",
+      "description": "Required vs Recommended action items with blocking/non-blocking classification.",
+      "stories": [
+        {
+          "summary": "Required vs Recommended Classification",
+          "description": "As a user, I want action items split into Required and Recommended so that I know what's blocking.\n\nAcceptance Criteria:\n- Required: visa, passport validity, mandatory vaccinations\n- Recommended: flights, hotels, insurance, packing\n- Header counts: \"Required (2)\", \"Recommended (6)\"\n- \"No blockers found\" message when none required",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Fix Blockers CTA",
+          "description": "As a user, I want a \"Fix blockers\" button so that I can quickly resolve issues.\n\nAcceptance Criteria:\n- Button appears when blockers exist\n- Triggers change planner with fix intent\n- Shows fixing progress indicator\n- Updates action items after fix applied",
+          "storyPoints": 5
+        }
+      ]
+    },
+    {
+      "key": "EPIC-9",
+      "summary": "Analytics & Tracking",
+      "description": "Event tracking for trip interactions, funnel analysis, and debug endpoints.",
+      "stories": [
+        {
+          "summary": "Trip Event Tracking",
+          "description": "As a product owner, I want to track user interactions so that I can analyze behavior.\n\nAcceptance Criteria:\n- Track: itinerary_generate_started/completed\n- Track: day_clicked, activity_clicked, map_marker_clicked\n- Track: chat_opened, chat_change_applied\n- Include context: passport, destination, certainty\n- Fire-and-forget with sendBeacon",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Analytics Debug Endpoint",
+          "description": "As a developer, I want a debug endpoint to view tracked events so that I can verify tracking.\n\nAcceptance Criteria:\n- GET /api/analytics/trip-events\n- Filter by event, page, tripId, date range\n- Return aggregates by event, page, destination\n- Funnel visualization data\n- Limit parameter (max 200)",
+          "storyPoints": 5
+        }
+      ]
+    },
+    {
+      "key": "EPIC-10",
+      "summary": "Performance Optimizations",
+      "description": "React rendering optimizations and lazy loading for smooth UX.",
+      "stories": [
+        {
+          "summary": "Component Memoization",
+          "description": "As a user, I want fast UI responses so that the app feels snappy.\n\nAcceptance Criteria:\n- React.memo on: DayCard, ActivityRow, HeaderBar, CertaintyBar\n- useMemo for: costs calculation, narrative subtitle\n- Redundant hover prevention with refs\n- Throttled scroll handlers (80ms)",
+          "storyPoints": 5
+        },
+        {
+          "summary": "Lazy Load Chat Panel",
+          "description": "As a user, I want the chat panel to load on demand so that initial page load is fast.\n\nAcceptance Criteria:\n- React.lazy for TripChat component\n- Suspense fallback while loading\n- Chat panel closed by default\n- Loads only when user expands panel",
+          "storyPoints": 3
+        }
+      ]
+    }
+  ]
+}

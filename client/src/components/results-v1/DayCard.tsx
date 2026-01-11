@@ -39,6 +39,8 @@ interface DayCardProps {
   previousDayCity?: string | null; // For detecting city transitions
   forceExpanded?: boolean; // External control for expand/collapse all
   showDistances?: boolean; // Show distances between activities
+  /** Destination for activity images */
+  destination?: string;
   onDayClick: (dayIndex: number) => void;
   onActivityClick: (activityKey: string) => void;
   onActivityHover: (activityKey: string | null) => void;
@@ -60,6 +62,7 @@ function DayCardComponent({
   previousDayCity,
   forceExpanded,
   showDistances = false,
+  destination,
   onDayClick,
   onActivityClick,
   onActivityHover,
@@ -81,8 +84,14 @@ function DayCardComponent({
     setUserOverride(prev => prev !== null ? !prev : !isExpanded);
   };
 
-  // Bucket activities by time slot
+  // Bucket activities by time slot (also de-duplicates)
   const buckets = useMemo(() => bucketActivities(day.activities), [day.activities]);
+
+  // Count de-duped activities
+  const activityCount = useMemo(
+    () => buckets.morning.length + buckets.afternoon.length + buckets.evening.length,
+    [buckets]
+  );
 
   // Phase detection
   const isFirstDay = dayIndex === 0;
@@ -156,6 +165,7 @@ function DayCardComponent({
                 distanceFromPrevious={distanceFromPrevious}
                 prevActivity={prevActivity}
                 showDistance={showDistances}
+                destination={destination}
                 onClick={() => onActivityClick(activityKey)}
                 onMouseEnter={() => onActivityHover(activityKey)}
                 onMouseLeave={() => onActivityHover(null)}
@@ -246,7 +256,7 @@ function DayCardComponent({
               <Calendar className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">{formattedDate}</span>
               <span className="text-white/20">•</span>
-              <span className="truncate">{day.activities.length} activities</span>
+              <span className="truncate">{activityCount} activities</span>
             </div>
           </div>
         </div>

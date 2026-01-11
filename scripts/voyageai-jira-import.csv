@@ -1,0 +1,483 @@
+Summary,Issue Type,Description,Parent Summary
+Trip Planning Core,Epic,"Core trip planning functionality including trip creation, feasibility analysis, and itinerary generation.",
+Smart Trip Creation Form,Task,"As a user, I want to create trips with destination autocomplete, date picker, traveler composition, budget, and travel style so that I can plan my trip efficiently.
+
+Acceptance Criteria:
+- Destination autocomplete with city suggestions
+- Date range picker with flexible date options
+- Traveler composition (adults, children, infants)
+- Budget input with currency selection
+- Travel style selection (budget, comfort, luxury)",Trip Planning Core
+Feasibility Analysis Engine,Task,"As a user, I want the system to analyze my trip feasibility so that I know if my trip is possible before planning.
+
+Acceptance Criteria:
+- Visa requirement detection based on passport
+- Safety assessment for destination
+- Budget validation against typical costs
+- Accessibility check
+- Clear Go/Possible/No verdict",Trip Planning Core
+Certainty Score Calculation,Task,"As a user, I want to see a 0-100 certainty score so that I understand how confident the system is about my trip.
+
+Acceptance Criteria:
+- Visa component (0-30 points)
+- Accessibility component (0-25 points)
+- Safety component (0-25 points)
+- Budget adequacy (0-20 points)
+- Visual score display with breakdown",Trip Planning Core
+AI Itinerary Generation,Task,"As a user, I want AI-generated day-by-day itineraries so that I have a complete trip plan.
+
+Acceptance Criteria:
+- Day-by-day activities with times
+- Cost estimates per activity
+- Transport options between activities
+- Local food recommendations
+- Morning/Afternoon/Evening grouping",Trip Planning Core
+Trip Results UI,Epic,"Premium trip results page with two-column layout, interactive map, and expandable day cards (Mindtrip-style).",
+Two-Column Results Layout,Task,"As a user, I want a clean two-column layout for viewing my trip results so that I can see both the itinerary and map simultaneously.
+
+Acceptance Criteria:
+- Left column (7/12): Day cards with activities
+- Right column (5/12): Sticky map and panels
+- Responsive design for mobile
+- Smooth scrolling with sticky headers",Trip Results UI
+Interactive Day Cards,Task,"As a user, I want expandable day cards grouped by time slots so that I can easily browse my daily activities.
+
+Acceptance Criteria:
+- Morning/Afternoon/Evening activity grouping
+- Expand/collapse individual days
+- Global expand/collapse all toggle
+- Activity costs displayed (Free or $amount)
+- Transport icons between activities",Trip Results UI
+Interactive Itinerary Map,Task,"As a user, I want an interactive map showing my activities so that I can visualize my trip geographically.
+
+Acceptance Criteria:
+- Map markers for all activities
+- Hover sync between day cards and map
+- Click marker to scroll to activity
+- Cluster markers when zoomed out
+- Walking distance display (<5km only)",Trip Results UI
+Certainty Bar Component,Task,"As a user, I want a sticky certainty bar showing visa status and score so that I always see my trip feasibility.
+
+Acceptance Criteria:
+- Visa status badge (visa-free, visa-required, etc.)
+- Certainty score with visual indicator
+- Expandable visa details panel
+- Processing time display
+- Documents required list",Trip Results UI
+Right Rail Panels,Task,"As a user, I want collapsible panels for costs, action items, and chat so that I can access detailed information on demand.
+
+Acceptance Criteria:
+- True Cost breakdown panel (open by default)
+- Action Items panel with Required/Recommended sections
+- AI Chat panel (lazy loaded, closed by default)
+- Accordion behavior (multiple can be open)
+- Smooth animations",Trip Results UI
+AI Chat Assistant,Epic,"Conversational AI for itinerary modifications with pending changes confirmation flow.",
+Chat Interface for Modifications,Task,"As a user, I want to chat with AI to modify my itinerary so that I can customize my trip naturally.
+
+Acceptance Criteria:
+- Natural language input (Add a cooking class)
+- AI understands context of current trip
+- Suggestions appear as pending changes
+- Message history preserved",AI Chat Assistant
+Pending Changes Confirmation,Task,"As a user, I want to confirm or reject AI suggestions before they are applied so that I have control over changes.
+
+Acceptance Criteria:
+- Changes shown as preview cards
+- Accept/Reject buttons per change
+- Batch accept all option
+- Clear diff view showing what changes
+- Undo after applying",AI Chat Assistant
+Quick Action Chips,Task,"As a user, I want one-click quick actions so that I can make common modifications easily.
+
+Acceptance Criteria:
+- +1 day / -1 day duration chips
+- Cheaper options budget chip
+- Add free activity chip
+- Add beach day style chip
+- Chips contextual to current trip",AI Chat Assistant
+Change Planner Agent,Epic,"Smart agent that detects user changes, recomputes only impacted modules, and explains deltas.",
+Change Detection System,Task,"As a system, I want to detect what changed when user modifies trip inputs so that I can determine what needs recomputation.
+
+Acceptance Criteria:
+- Detect changes in dates, budget, destination, group size
+- Identify impacted modules (visa, costs, itinerary)
+- Calculate minimal recomputation plan
+- Track change source (inline edit, quick chip, fix blocker)",Change Planner Agent
+Delta Explanation Banner,Task,"As a user, I want to see what changed after modifications so that I understand the impact.
+
+Acceptance Criteria:
+- Certainty delta display (+8% or -5%)
+- Cost delta display (+$150 or -$200)
+- Blocker resolution chips (2 resolved)
+- Auto-dismiss after 5 seconds
+- Undo button",Change Planner Agent
+Compare Plans Modal,Task,"As a user, I want to compare my original plan with the updated plan so that I can decide which to keep.
+
+Acceptance Criteria:
+- Side-by-side comparison view
+- Highlight differences in costs
+- Show certainty score comparison
+- Keep Updated / Revert to Original actions
+- Cost breakdown by category",Change Planner Agent
+Auto-suggest Next Fix,Task,"As a user, I want the system to suggest the next improvement action so that I can quickly resolve issues.
+
+Acceptance Criteria:
+- Rule-based suggestion engine
+- Priority: visa risk > cost increase > certainty drop
+- Confidence levels (high/medium/low)
+- Apply button with impact preview
+- Snooze option",Change Planner Agent
+Version History,Epic,"Trip version timeline enabling users to see history, restore previous versions, and export any version.",
+Version Creation on Changes,Task,"As a system, I want to create versions when trips are modified so that users can track history.
+
+Acceptance Criteria:
+- Auto-create version on change plan apply
+- Auto-create version on manual save
+- Upsert by changeId to prevent duplicates
+- Store full snapshot (inputs, costs, certainty, itinerary summary)
+- Max 500KB payload per version",Version History
+Version Timeline UI,Task,"As a user, I want to see a timeline of my trip versions so that I can browse history.
+
+Acceptance Criteria:
+- List versions newest first
+- Show source label (change_plan, manual_save, restore)
+- Display summary chips per version
+- Show certainty and cost at each point
+- Pinned versions feature",Version History
+Version Restore Functionality,Task,"As a user, I want to restore a previous version so that I can undo unwanted changes.
+
+Acceptance Criteria:
+- Restore button per version
+- Confirmation dialog before restore
+- Creates new restore version entry
+- Updates trip with restored data
+- Preserves feasibility report",Version History
+Account-lite MVP,Epic,"Anonymous identity for trip ownership without requiring full registration.",
+Anonymous User Identity,Task,"As a user, I want automatic identity without sign-up so that I can save trips immediately.
+
+Acceptance Criteria:
+- Generate UUID on first visit
+- Store in localStorage as voyage_uid
+- Send as X-Voyage-Uid header on all requests
+- Persists across sessions
+- No email or password required",Account-lite MVP
+My Trips Page,Task,"As a user, I want to see all my trips so that I can manage my travel plans.
+
+Acceptance Criteria:
+- List trips by voyageUid
+- Show destination, dates, certainty score
+- Quick actions (view, edit, delete)
+- Sort by date created
+- Empty state with CTA to create trip",Account-lite MVP
+Trip Ownership Backfill,Task,"As a system, I want to adopt orphan trips when users access them so that shared trips work correctly.
+
+Acceptance Criteria:
+- Adopt trip if voyageUid is null
+- Only adopt if user accesses via share link
+- Preserve original trip data
+- Log adoption events for analytics",Account-lite MVP
+Chat Trip Wizard,Epic,"Mindtrip-style conversational trip planning interface (ChatTripV2).",
+Progressive Field Collection,Task,"As a user, I want a conversational flow for entering trip details so that planning feels natural.
+
+Acceptance Criteria:
+- Start with passport selection
+- Progress through destination, dates, budget
+- Skip to summary when ready
+- Animated message appearance
+- Visual progress indicator",Chat Trip Wizard
+Trip Summary Pills,Task,"As a user, I want to see my trip details as visual pills so that I can review at a glance.
+
+Acceptance Criteria:
+- Pill per field (passport, destination, dates, budget)
+- State hierarchy: urgent (missing required), complete, highlight
+- Click to edit any field
+- Checkmark icon for completed fields",Chat Trip Wizard
+Quiet Mode After Ready,Task,"As a user, I want narrative messages suppressed once I have entered required fields so that the interface stays clean.
+
+Acceptance Criteria:
+- Quiet mode activates when passport + destination set
+- One-way transition (does not deactivate)
+- Only shows user messages and confirmations
+- Can still edit fields via pills",Chat Trip Wizard
+Flexible Dates Intent Labels,Task,"As a user, I want intent-based date options so that I can indicate my flexibility.
+
+Acceptance Criteria:
+- I know my dates option
+- I am flexible option
+- Preferred month option
+- Clear labeling of what each means
+- Store flexibility preference",Chat Trip Wizard
+Action Items System,Epic,"Required vs Recommended action items with blocking/non-blocking classification.",
+Required vs Recommended Classification,Task,"As a user, I want action items split into Required and Recommended so that I know what is blocking.
+
+Acceptance Criteria:
+- Required: visa, passport validity, mandatory vaccinations
+- Recommended: flights, hotels, insurance, packing
+- Header counts: Required (2), Recommended (6)
+- No blockers found message when none required",Action Items System
+Fix Blockers CTA,Task,"As a user, I want a Fix blockers button so that I can quickly resolve issues.
+
+Acceptance Criteria:
+- Button appears when blockers exist
+- Triggers change planner with fix intent
+- Shows fixing progress indicator
+- Updates action items after fix applied",Action Items System
+Analytics and Tracking,Epic,"Event tracking for trip interactions, funnel analysis, and debug endpoints.",
+Trip Event Tracking,Task,"As a product owner, I want to track user interactions so that I can analyze behavior.
+
+Acceptance Criteria:
+- Track: itinerary_generate_started/completed
+- Track: day_clicked, activity_clicked, map_marker_clicked
+- Track: chat_opened, chat_change_applied
+- Include context: passport, destination, certainty
+- Fire-and-forget with sendBeacon",Analytics and Tracking
+Analytics Debug Endpoint,Task,"As a developer, I want a debug endpoint to view tracked events so that I can verify tracking.
+
+Acceptance Criteria:
+- GET /api/analytics/trip-events
+- Filter by event, page, tripId, date range
+- Return aggregates by event, page, destination
+- Funnel visualization data
+- Limit parameter (max 200)",Analytics and Tracking
+Performance Optimizations,Epic,"React rendering optimizations and lazy loading for smooth UX.",
+Component Memoization,Task,"As a user, I want fast UI responses so that the app feels snappy.
+
+Acceptance Criteria:
+- React.memo on: DayCard, ActivityRow, HeaderBar, CertaintyBar
+- useMemo for: costs calculation, narrative subtitle
+- Redundant hover prevention with refs
+- Throttled scroll handlers (80ms)",Performance Optimizations
+Lazy Load Chat Panel,Task,"As a user, I want the chat panel to load on demand so that initial page load is fast.
+
+Acceptance Criteria:
+- React.lazy for TripChat component
+- Suspense fallback while loading
+- Chat panel closed by default
+- Loads only when user expands panel",Performance Optimizations
+Certainty-First Homepage,Epic,"Reposition VoyageAI clearly vs competitors. Hero section with feasibility-first CTA and clear value proposition.",
+Design hero section with feasibility CTA,Task,"Design the hero section with a clear feasibility-focused call-to-action.
+
+Acceptance Criteria:
+- Hero headline emphasizing certainty/feasibility
+- Primary CTA: Check if you can go
+- Visual hierarchy directing attention to CTA
+- Mobile-responsive design",Certainty-First Homepage
+Implement passport + destination input form,Task,"Build the main input form for passport and destination selection.
+
+Acceptance Criteria:
+- Passport country selector with flags
+- Destination autocomplete with popular suggestions
+- Inline validation
+- Smooth animations on focus",Certainty-First Homepage
+Wire hero CTA to feasibility flow,Task,"Connect the hero CTA button to the feasibility analysis flow.
+
+Acceptance Criteria:
+- CTA triggers feasibility check
+- Loading state while processing
+- Smooth transition to results
+- Error handling for invalid inputs",Certainty-First Homepage
+Add value proof bullets under CTA,Task,"Add compelling value propositions below the main CTA.
+
+Acceptance Criteria:
+- 3-4 key differentiators displayed
+- Icons for each value point
+- Visa clarity, True costs, AI itinerary messaging
+- Social proof or trust indicators",Certainty-First Homepage
+Streaming Results UX,Epic,"Reduce perceived latency by showing real-time progress during feasibility analysis and itinerary generation.",
+Implement streaming status component,Task,"Build a reusable streaming status component for multi-step processes.
+
+Acceptance Criteria:
+- Shows current step being processed
+- Progress indicator (steps or percentage)
+- Estimated time remaining
+- Cancel option if needed",Streaming Results UX
+Display visa check progress,Task,"Show real-time progress during visa requirement analysis.
+
+Acceptance Criteria:
+- Checking passport validity message
+- Analyzing destination requirements message
+- Processing time indicator
+- Success/warning state on completion",Streaming Results UX
+Display cost estimation progress,Task,"Show progress during cost calculation phase.
+
+Acceptance Criteria:
+- Fetching flight prices message
+- Calculating accommodation costs message
+- Estimating daily expenses message
+- Running total preview if available",Streaming Results UX
+Display itinerary generation progress,Task,"Show progress during AI itinerary generation.
+
+Acceptance Criteria:
+- Planning Day 1, Day 2, etc. messages
+- Activity count as it builds
+- Preview of activities as they stream
+- Completion celebration animation",Streaming Results UX
+Add skeleton loaders for sections,Task,"Implement skeleton loading states for all major sections.
+
+Acceptance Criteria:
+- Skeleton for day cards
+- Skeleton for cost breakdown
+- Skeleton for map area
+- Smooth transition to real content",Streaming Results UX
+Feasibility Verdict Engine UI,Epic,"Expose Go / Possible / No verdict clearly with supporting details and confidence indicators.",
+Build verdict card UI,Task,"Create the main verdict display card component.
+
+Acceptance Criteria:
+- Large verdict badge (GO/POSSIBLE/NO)
+- Color coding (green/amber/red)
+- Supporting explanation text
+- Prominent placement on results page",Feasibility Verdict Engine UI
+Display visa timeline + risk level,Task,"Show visa processing timeline and associated risk.
+
+Acceptance Criteria:
+- Timeline visualization (apply date to travel date)
+- Risk level indicator (low/medium/high)
+- Buffer days recommendation
+- Warning if timeline is tight",Feasibility Verdict Engine UI
+Add confidence score logic,Task,"Implement the confidence score calculation and display.
+
+Acceptance Criteria:
+- 0-100 score display
+- Breakdown by category (visa, safety, budget, access)
+- Visual meter or gauge
+- Tooltip explaining score components",Feasibility Verdict Engine UI
+Connect verdict to backend response,Task,"Wire the verdict UI to the backend feasibility response.
+
+Acceptance Criteria:
+- Parse backend verdict correctly
+- Handle all verdict types
+- Display appropriate messaging
+- Error state handling",Feasibility Verdict Engine UI
+True Cost and Budget Guardrails,Epic,"Surface real costs prominently and guide users when budget is at risk.",
+Build sticky cost sidebar,Task,"Create a sticky sidebar showing running cost total.
+
+Acceptance Criteria:
+- Fixed position on scroll
+- Shows grand total prominently
+- Expandable for breakdown
+- Updates in real-time with changes",True Cost and Budget Guardrails
+Calculate running total cost,Task,"Implement real-time cost calculation as itinerary changes.
+
+Acceptance Criteria:
+- Sum all activity costs
+- Include transport estimates
+- Add accommodation costs
+- Show per-day and total views",True Cost and Budget Guardrails
+Implement budget overrun detection,Task,"Detect and alert when estimated costs exceed budget.
+
+Acceptance Criteria:
+- Compare total to user budget
+- Visual warning when approaching limit
+- Alert when exceeded
+- Show overrun amount clearly",True Cost and Budget Guardrails
+Suggest cost-saving alternatives,Task,"Provide actionable suggestions when budget is exceeded.
+
+Acceptance Criteria:
+- Identify expensive activities
+- Suggest cheaper alternatives
+- Show potential savings
+- One-click swap functionality",True Cost and Budget Guardrails
+Visual Itinerary System,Epic,"Modern, visually appealing itinerary display without losing focus on certainty and costs.",
+Implement day card layout,Task,"Build the day card component for itinerary display.
+
+Acceptance Criteria:
+- Clean card design per day
+- Day number and date header
+- Expandable/collapsible
+- Smooth animations",Visual Itinerary System
+Add morning/afternoon/evening grouping,Task,"Group activities by time of day within each day card.
+
+Acceptance Criteria:
+- Morning section (before 12pm)
+- Afternoon section (12pm-5pm)
+- Evening section (after 5pm)
+- Visual separators between sections",Visual Itinerary System
+Integrate activity images,Task,"Add images to activities using Unsplash or similar API.
+
+Acceptance Criteria:
+- Relevant image per activity
+- Fallback for missing images
+- Lazy loading for performance
+- Image attribution where required",Visual Itinerary System
+Show per-activity cost labels,Task,"Display cost badge on each activity.
+
+Acceptance Criteria:
+- Free badge for no-cost activities
+- Dollar amount for paid activities
+- Consistent badge styling
+- Include in cost calculation",Visual Itinerary System
+Action Items Checklist,Epic,"Increase trust and clarity by showing required and recommended pre-trip actions.",
+Define required vs recommended actions,Task,"Establish logic for categorizing action items.
+
+Acceptance Criteria:
+- Required: visa, passport validity, vaccinations
+- Recommended: flights, hotels, insurance
+- Priority ordering within categories
+- Clear distinction in UI",Action Items Checklist
+Build checklist UI,Task,"Create the action items checklist component.
+
+Acceptance Criteria:
+- Checkbox for each item
+- Required section with count
+- Recommended section with count
+- Progress indicator",Action Items Checklist
+Populate actions from backend logic,Task,"Wire checklist to backend action item generation.
+
+Acceptance Criteria:
+- Parse backend action items
+- Map to correct categories
+- Handle dynamic items based on trip
+- Update when trip changes",Action Items Checklist
+Shareable View-Only Trips,Epic,"Enable trip collaboration without requiring accounts through shareable links.",
+Generate shareable trip link,Task,"Create unique shareable URLs for trips.
+
+Acceptance Criteria:
+- Generate unique trip token
+- Short URL format
+- Copy to clipboard functionality
+- Link expiration options",Shareable View-Only Trips
+Implement view-only access mode,Task,"Build read-only view mode for shared trips.
+
+Acceptance Criteria:
+- Full itinerary visible
+- Cost breakdown visible
+- No edit capabilities
+- Clean viewing experience",Shareable View-Only Trips
+Disable editing in shared view,Task,"Ensure shared view cannot modify trip data.
+
+Acceptance Criteria:
+- Hide edit buttons
+- Disable chat modifications
+- No delete capability
+- Clear view-only indicator",Shareable View-Only Trips
+Add share modal UI,Task,"Build the share trip modal interface.
+
+Acceptance Criteria:
+- Share button triggers modal
+- Display shareable link
+- Copy link button
+- Social share options (optional)",Shareable View-Only Trips
+Preference Capture Lightweight,Epic,"Improve results without requiring login by capturing preferences locally.",
+Create preference micro-quiz,Task,"Build a quick preference quiz for better recommendations.
+
+Acceptance Criteria:
+- 3-5 quick questions max
+- Travel style preferences
+- Budget comfort level
+- Activity preferences
+- Skip option available",Preference Capture Lightweight
+Store preferences locally,Task,"Save user preferences in browser storage.
+
+Acceptance Criteria:
+- LocalStorage implementation
+- Persist across sessions
+- Clear/reset option
+- Privacy-friendly approach",Preference Capture Lightweight
+Inject preferences into prompts,Task,"Use stored preferences to improve AI recommendations.
+
+Acceptance Criteria:
+- Read preferences before API calls
+- Include in feasibility prompts
+- Include in itinerary generation
+- Graceful fallback if no preferences",Preference Capture Lightweight

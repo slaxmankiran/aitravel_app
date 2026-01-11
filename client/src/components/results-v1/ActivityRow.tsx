@@ -30,6 +30,7 @@ import {
   formatDistance,
   getSmartTransportMode,
 } from "./itinerary-adapters";
+import { ActivityImage } from "./ActivityImage";
 
 // ============================================================================
 // TRANSPORT ICON MAPPING
@@ -98,6 +99,8 @@ interface ActivityRowProps {
   distanceFromPrevious?: number | null; // Distance in km from previous activity
   prevActivity?: Activity | null; // Previous activity for context
   showDistance?: boolean;
+  /** Destination for activity image context */
+  destination?: string;
   onClick: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
@@ -113,6 +116,7 @@ function ActivityRowComponent({
   distanceFromPrevious,
   prevActivity,
   showDistance = false,
+  destination,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -123,6 +127,9 @@ function ActivityRowComponent({
   const hasLocation = hasCoordinates(activity);
   const colors = TYPE_COLORS[activity.type] || TYPE_COLORS.activity;
   const TypeIcon = getActivityTypeIcon(activity.type);
+
+  // Show image for main activity types (not transport)
+  const showImage = destination && activity.type !== 'transport';
 
   // Get smart transport mode based on distance and context
   const smartTransport = getSmartTransportMode(
@@ -188,16 +195,26 @@ function ActivityRowComponent({
           </span>
         </div>
 
-        {/* Type icon */}
-        <div
-          className={cn(
-            "w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0",
-            colors.bg,
-            "ring-1 ring-white/10"
-          )}
-        >
-          <TypeIcon className={cn("w-4 h-4", colors.text)} />
-        </div>
+        {/* Activity image or type icon */}
+        {showImage ? (
+          <ActivityImage
+            activityName={name}
+            destination={destination!}
+            activityType={activity.type}
+            size="sm"
+            className="ring-1 ring-white/10"
+          />
+        ) : (
+          <div
+            className={cn(
+              "w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0",
+              colors.bg,
+              "ring-1 ring-white/10"
+            )}
+          >
+            <TypeIcon className={cn("w-4 h-4", colors.text)} />
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-grow min-w-0">
