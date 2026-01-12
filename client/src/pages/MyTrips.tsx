@@ -450,6 +450,15 @@ const TRIP_CARD_IMAGES: Record<string, string> = {
   'phuket': 'https://images.unsplash.com/photo-1589394815804-964ed0be2eb5?w=1200&h=800&fit=crop',
   'singapore': 'https://images.unsplash.com/photo-1525625293386-3f8f99389edd?w=1200&h=800&fit=crop',
   'bali': 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=1200&h=800&fit=crop',
+  // Philippines - Manila skyline and landmarks (daytime images)
+  'manila': 'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?w=1200&h=800&fit=crop',
+  'philippines': 'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?w=1200&h=800&fit=crop',
+  'cebu': 'https://images.unsplash.com/photo-1505881502353-a1986add3762?w=1200&h=800&fit=crop',
+  'boracay': 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200&h=800&fit=crop',
+  'palawan': 'https://images.unsplash.com/photo-1501179691627-eeaa65ea017c?w=1200&h=800&fit=crop',
+  'el nido': 'https://images.unsplash.com/photo-1501179691627-eeaa65ea017c?w=1200&h=800&fit=crop',
+  'kuala lumpur': 'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?w=1200&h=800&fit=crop',
+  'malaysia': 'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?w=1200&h=800&fit=crop',
   // China
   'beijing': 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=1200&h=800&fit=crop',
   'china': 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=1200&h=800&fit=crop',
@@ -463,6 +472,24 @@ const TRIP_CARD_IMAGES: Record<string, string> = {
   'paris': 'https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=1200&h=800&fit=crop',
   'london': 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=1200&h=800&fit=crop',
   'rome': 'https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=1200&h=800&fit=crop',
+  'athens': 'https://images.unsplash.com/photo-1555993539-1732b0258235?w=1200&h=800&fit=crop',
+  'greece': 'https://images.unsplash.com/photo-1555993539-1732b0258235?w=1200&h=800&fit=crop',
+  'santorini': 'https://images.unsplash.com/photo-1570077188670-e3a8d69ac5ff?w=1200&h=800&fit=crop',
+  'barcelona': 'https://images.unsplash.com/photo-1583422409516-2895a77efded?w=1200&h=800&fit=crop',
+  'spain': 'https://images.unsplash.com/photo-1583422409516-2895a77efded?w=1200&h=800&fit=crop',
+  'amsterdam': 'https://images.unsplash.com/photo-1534351590666-13e3e96b5017?w=1200&h=800&fit=crop',
+  'venice': 'https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200&h=800&fit=crop',
+  'italy': 'https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=1200&h=800&fit=crop',
+  'prague': 'https://images.unsplash.com/photo-1541849546-216549ae216d?w=1200&h=800&fit=crop',
+  'vienna': 'https://images.unsplash.com/photo-1516550893923-42d28e5677af?w=1200&h=800&fit=crop',
+  'berlin': 'https://images.unsplash.com/photo-1560969184-10fe8719e047?w=1200&h=800&fit=crop',
+  'switzerland': 'https://images.unsplash.com/photo-1530122037265-a5f1f91d3b99?w=1200&h=800&fit=crop',
+  'zurich': 'https://images.unsplash.com/photo-1515488764276-beab7607c1e6?w=1200&h=800&fit=crop',
+  // Maldives & Indian Ocean
+  'maldives': 'https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=1200&h=800&fit=crop',
+  'male': 'https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=1200&h=800&fit=crop',
+  'mauritius': 'https://images.unsplash.com/photo-1518509562904-e7ef99cdcc86?w=1200&h=800&fit=crop',
+  'seychelles': 'https://images.unsplash.com/photo-1589979481223-deb893043163?w=1200&h=800&fit=crop',
   // Americas
   'new york': 'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=1200&h=800&fit=crop',
   // Middle East
@@ -517,22 +544,63 @@ function getDestinationGradient(destination: string): string {
   return TRIP_CARD_GRADIENTS.default;
 }
 
-// Parse dates string like "May 15, 2026 - May 31, 2026" or "May 15-31, 2026"
+// Parse dates string - handles multiple formats:
+// 1. "May 15, 2026 - May 31, 2026" (form flow)
+// 2. "6/1/2026 - 6/5/2026" (chat specific dates)
+// 3. "June 2026, 5 days" (chat flexible dates)
+// 4. "2026-04-01 to 2026-04-15" (ISO format)
 function parseDatesString(dates: string): { startDate: Date | null; endDate: Date | null; duration: number } {
   if (!dates) return { startDate: null, endDate: null, duration: 0 };
 
-  // Try parsing "May 15, 2026 - May 31, 2026" format
-  const parts = dates.split(/\s*[-–to]\s*/);
-  if (parts.length >= 2) {
-    const start = new Date(parts[0].trim());
-    const end = new Date(parts[parts.length - 1].trim());
-    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-      const duration = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-      return { startDate: start, endDate: end, duration };
+  // Format 3: Flexible dates "June 2026, 5 days" or "July 2026, 7 days"
+  const flexibleMatch = dates.match(/^(\w+)\s+(\d{4}),?\s*(\d+)\s*days?$/i);
+  if (flexibleMatch) {
+    const [, month, year, days] = flexibleMatch;
+    const duration = parseInt(days, 10);
+    // Create approximate start date (1st of month)
+    const startDate = new Date(`${month} 1, ${year}`);
+    if (!isNaN(startDate.getTime())) {
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + duration - 1);
+      return { startDate, endDate, duration };
     }
   }
 
-  // Fallback: try parsing the whole string
+  // Format 1 & 2: Date ranges with separator
+  // Priority: " to " first, then " - " (with spaces to avoid splitting ISO dates)
+  let parts: string[] = [];
+  if (dates.includes(' to ')) {
+    parts = dates.split(/\s+to\s+/i);
+  } else if (dates.includes(' - ')) {
+    parts = dates.split(/\s+-\s+/);
+  } else if (dates.includes(' – ')) {
+    parts = dates.split(/\s+–\s+/);
+  }
+
+  if (parts.length >= 2) {
+    const startStr = parts[0].trim();
+    const endStr = parts[parts.length - 1].trim();
+
+    // Validate both parts look like dates (not just single numbers)
+    const looksLikeDate = (s: string) => {
+      // Contains month name OR has ISO format OR US format
+      return /[a-zA-Z]/.test(s) || /\d{4}-\d{2}-\d{2}/.test(s) || /\d{1,2}\/\d{1,2}\/\d{4}/.test(s);
+    };
+
+    if (looksLikeDate(startStr) && looksLikeDate(endStr)) {
+      const start = new Date(startStr);
+      const end = new Date(endStr);
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        const duration = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        // Only return if duration is positive and reasonable (< 365 days)
+        if (duration > 0 && duration < 365) {
+          return { startDate: start, endDate: end, duration };
+        }
+      }
+    }
+  }
+
+  // Fallback: try parsing the whole string as a single date
   const singleDate = new Date(dates);
   if (!isNaN(singleDate.getTime())) {
     return { startDate: singleDate, endDate: singleDate, duration: 1 };
@@ -788,7 +856,7 @@ function TripCard({ trip, index, onDelete }: { trip: TripSummary; index: number;
           <div className="absolute top-4 left-4">
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/90 backdrop-blur-sm rounded-full text-xs font-medium text-slate-700 shadow-lg">
               <Clock className="w-3.5 h-3.5 text-amber-500" />
-              {duration} days
+              {duration > 0 ? `${duration} days` : 'TBD'}
             </span>
           </div>
 
@@ -1059,7 +1127,7 @@ function TripListItem({ trip, index, onDelete }: { trip: TripSummary; index: num
               </span>
               <span className="flex items-center gap-1.5">
                 <Clock className="w-4 h-4 text-slate-400" />
-                {duration} days
+                {duration > 0 ? `${duration} days` : 'TBD'}
               </span>
               <span className="flex items-center gap-1.5">
                 <Users className="w-4 h-4 text-slate-400" />

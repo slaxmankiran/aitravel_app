@@ -9,14 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Loader2, Plane, Globe, Wallet, Users, ChevronDown, Search, Check, CalendarIcon, ArrowLeft, MapPin, ArrowRight, AlertCircle, Pencil } from "lucide-react";
 import { z } from "zod";
 import { format } from "date-fns";
-import { DateRange } from "react-day-picker";
 import { trackTripEvent } from "@/lib/analytics";
 import { useToast } from "@/hooks/use-toast";
+import { DatePickerModal, type DateSelection } from "@/components/chat/DatePickerModal";
+import { CURRENCIES } from "@/lib/currencies";
 
 // Major world cities for autocomplete
 const MAJOR_CITIES = [
@@ -195,40 +194,6 @@ const MAJOR_CITIES = [
   { city: "Birmingham", country: "UK", code: "GB" },
   { city: "Glasgow", country: "UK", code: "GB" },
 ].sort((a, b) => a.city.localeCompare(b.city));
-
-// Major currencies
-const CURRENCIES = [
-  { code: "USD", name: "US Dollar", symbol: "$", flag: "🇺🇸" },
-  { code: "EUR", name: "Euro", symbol: "€", flag: "🇪🇺" },
-  { code: "GBP", name: "British Pound", symbol: "£", flag: "🇬🇧" },
-  { code: "JPY", name: "Japanese Yen", symbol: "¥", flag: "🇯🇵" },
-  { code: "CNY", name: "Chinese Yuan", symbol: "¥", flag: "🇨🇳" },
-  { code: "INR", name: "Indian Rupee", symbol: "₹", flag: "🇮🇳" },
-  { code: "AUD", name: "Australian Dollar", symbol: "A$", flag: "🇦🇺" },
-  { code: "CAD", name: "Canadian Dollar", symbol: "C$", flag: "🇨🇦" },
-  { code: "CHF", name: "Swiss Franc", symbol: "Fr", flag: "🇨🇭" },
-  { code: "KRW", name: "South Korean Won", symbol: "₩", flag: "🇰🇷" },
-  { code: "SGD", name: "Singapore Dollar", symbol: "S$", flag: "🇸🇬" },
-  { code: "HKD", name: "Hong Kong Dollar", symbol: "HK$", flag: "🇭🇰" },
-  { code: "NZD", name: "New Zealand Dollar", symbol: "NZ$", flag: "🇳🇿" },
-  { code: "SEK", name: "Swedish Krona", symbol: "kr", flag: "🇸🇪" },
-  { code: "NOK", name: "Norwegian Krone", symbol: "kr", flag: "🇳🇴" },
-  { code: "DKK", name: "Danish Krone", symbol: "kr", flag: "🇩🇰" },
-  { code: "MXN", name: "Mexican Peso", symbol: "$", flag: "🇲🇽" },
-  { code: "BRL", name: "Brazilian Real", symbol: "R$", flag: "🇧🇷" },
-  { code: "AED", name: "UAE Dirham", symbol: "د.إ", flag: "🇦🇪" },
-  { code: "SAR", name: "Saudi Riyal", symbol: "﷼", flag: "🇸🇦" },
-  { code: "THB", name: "Thai Baht", symbol: "฿", flag: "🇹🇭" },
-  { code: "MYR", name: "Malaysian Ringgit", symbol: "RM", flag: "🇲🇾" },
-  { code: "IDR", name: "Indonesian Rupiah", symbol: "Rp", flag: "🇮🇩" },
-  { code: "PHP", name: "Philippine Peso", symbol: "₱", flag: "🇵🇭" },
-  { code: "ZAR", name: "South African Rand", symbol: "R", flag: "🇿🇦" },
-  { code: "TRY", name: "Turkish Lira", symbol: "₺", flag: "🇹🇷" },
-  { code: "RUB", name: "Russian Ruble", symbol: "₽", flag: "🇷🇺" },
-  { code: "PLN", name: "Polish Zloty", symbol: "zł", flag: "🇵🇱" },
-  { code: "CZK", name: "Czech Koruna", symbol: "Kč", flag: "🇨🇿" },
-  { code: "HUF", name: "Hungarian Forint", symbol: "Ft", flag: "🇭🇺" },
-];
 
 // Complete list of countries with flag emojis
 const COUNTRIES = [
@@ -1751,16 +1716,30 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
     defaultValues: defaultValues || { origin: "", destination: "", dates: "" }
   });
 
-  // Parse existing dates string to restore DateRange
-  const parseDateRange = (datesStr: string): DateRange | undefined => {
+  // Parse existing dates string to restore DateSelection
+  const parseDateSelection = (datesStr: string): DateSelection | undefined => {
     if (!datesStr) return undefined;
     try {
+      // Check for flexible format: "June 2026, 5 days"
+      const flexMatch = datesStr.match(/^(\w+)\s+(\d{4}),?\s*(\d+)\s*days?$/i);
+      if (flexMatch) {
+        return {
+          type: 'flexible',
+          numDays: parseInt(flexMatch[3], 10),
+          preferredMonth: flexMatch[1],
+        };
+      }
+      // Check for date range format: "May 15, 2026 - May 22, 2026"
       const parts = datesStr.split(" - ");
       if (parts.length >= 1) {
         const from = new Date(parts[0]);
         const to = parts.length > 1 ? new Date(parts[1]) : undefined;
         if (!isNaN(from.getTime())) {
-          return { from, to: to && !isNaN(to.getTime()) ? to : undefined };
+          return {
+            type: 'specific',
+            startDate: from,
+            endDate: to && !isNaN(to.getTime()) ? to : undefined,
+          };
         }
       }
     } catch {
@@ -1769,10 +1748,10 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
     return undefined;
   };
 
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(() =>
-    parseDateRange(defaultValues?.dates || "")
+  const [dateSelection, setDateSelection] = useState<DateSelection | undefined>(() =>
+    parseDateSelection(defaultValues?.dates || "")
   );
-  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [dateModalOpen, setDateModalOpen] = useState(false);
 
   // Update form values when defaultValues change (e.g., from URL params or navigating back)
   useEffect(() => {
@@ -1781,66 +1760,110 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
     }
     if (defaultValues?.dates) {
       form.setValue("dates", defaultValues.dates);
-      // Also restore the dateRange state
-      const parsed = parseDateRange(defaultValues.dates);
+      // Also restore the dateSelection state
+      const parsed = parseDateSelection(defaultValues.dates);
       if (parsed) {
-        setDateRange(parsed);
+        setDateSelection(parsed);
       }
     }
   }, [defaultValues, form]);
 
-  // Update dates field when date range changes
+  // Update dates field when date selection changes
   useEffect(() => {
-    if (dateRange?.from) {
-      const fromStr = format(dateRange.from, "MMM d, yyyy");
-      const toStr = dateRange.to ? format(dateRange.to, "MMM d, yyyy") : "";
+    if (!dateSelection) return;
+
+    if (dateSelection.type === 'specific' && dateSelection.startDate) {
+      const fromStr = format(dateSelection.startDate, "MMM d, yyyy");
+      const toStr = dateSelection.endDate ? format(dateSelection.endDate, "MMM d, yyyy") : "";
       const datesString = toStr ? `${fromStr} - ${toStr}` : fromStr;
       form.setValue("dates", datesString);
+    } else if (dateSelection.type === 'flexible' && dateSelection.numDays) {
+      const now = new Date();
+      const year = dateSelection.preferredMonth
+        ? (now.getMonth() > new Date(`${dateSelection.preferredMonth} 1`).getMonth() ? now.getFullYear() + 1 : now.getFullYear())
+        : now.getFullYear();
+      const month = dateSelection.preferredMonth || now.toLocaleString('en-US', { month: 'long' });
+      const datesString = `${month} ${year}, ${dateSelection.numDays} days`;
+      form.setValue("dates", datesString);
     }
-  }, [dateRange, form]);
+  }, [dateSelection, form]);
 
   const [dateError, setDateError] = useState<string | null>(null);
   const [dateWarning, setDateWarning] = useState<string | null>(null);
 
   // Calculate trip duration for display
-  const tripDuration = dateRange?.from && dateRange?.to
-    ? Math.ceil((dateRange.to.getTime() - dateRange.from.getTime()) / (1000 * 60 * 60 * 24)) + 1
-    : 0;
+  const tripDuration = dateSelection?.type === 'specific' && dateSelection.startDate && dateSelection.endDate
+    ? Math.ceil((dateSelection.endDate.getTime() - dateSelection.startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1
+    : dateSelection?.type === 'flexible' && dateSelection.numDays
+      ? dateSelection.numDays
+      : 0;
 
   // Custom submit handler with date validation
   const handleSubmit = (data: Step2Data) => {
-    // Validate dates are not in the past
-    if (areDatesInPast(data.dates)) {
-      setDateError("Travel dates must be in the future. Please select upcoming dates.");
-      setDateWarning(null);
-      return;
-    }
-    // Validate end date is selected
-    if (!dateRange?.to) {
-      setDateError("Please select both start and end dates for your trip.");
+    // Validate dates are set
+    if (!dateSelection) {
+      setDateError("Please select your travel dates.");
       setDateWarning(null);
       return;
     }
 
-    // Calculate trip duration (dateRange.from is guaranteed to exist if dateRange.to exists)
-    const duration = Math.ceil((dateRange.to.getTime() - dateRange.from!.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    // For specific dates, validate not in past and end date is selected
+    if (dateSelection.type === 'specific') {
+      if (areDatesInPast(data.dates)) {
+        setDateError("Travel dates must be in the future. Please select upcoming dates.");
+        setDateWarning(null);
+        return;
+      }
+      if (!dateSelection.endDate) {
+        setDateError("Please select both start and end dates for your trip.");
+        setDateWarning(null);
+        return;
+      }
+    }
 
     // Block extremely unrealistic trips (60+ days)
-    if (duration > 60) {
-      setDateError(`A ${duration}-day trip is too long for detailed planning. Please select 60 days or less.`);
+    if (tripDuration > 60) {
+      setDateError(`A ${tripDuration}-day trip is too long for detailed planning. Please select 60 days or less.`);
       setDateWarning(null);
       return;
     }
 
     // Warn for very long trips (21-60 days) but allow proceeding
-    if (duration > 21) {
-      setDateWarning(`${duration} days is a long trip! The AI will generate a varied itinerary, but consider breaking it into multiple shorter trips for better planning.`);
+    if (tripDuration > 21) {
+      setDateWarning(`${tripDuration} days is a long trip! The AI will generate a varied itinerary, but consider breaking it into multiple shorter trips for better planning.`);
     } else {
       setDateWarning(null);
     }
 
     setDateError(null);
     onSubmit(data);
+  };
+
+  // Handle date picker confirmation
+  const handleDateConfirm = (selection: DateSelection) => {
+    setDateSelection(selection);
+    setDateError(null);
+  };
+
+  // Format date display for button
+  const getDateDisplayText = () => {
+    if (!dateSelection) return null;
+
+    if (dateSelection.type === 'specific' && dateSelection.startDate) {
+      if (dateSelection.endDate) {
+        return `${format(dateSelection.startDate, "MMM d")} - ${format(dateSelection.endDate, "MMM d, yyyy")}`;
+      }
+      return format(dateSelection.startDate, "MMM d, yyyy");
+    }
+
+    if (dateSelection.type === 'flexible' && dateSelection.numDays) {
+      if (dateSelection.preferredMonth) {
+        return `${dateSelection.numDays} days in ${dateSelection.preferredMonth}`;
+      }
+      return `${dateSelection.numDays} days, flexible`;
+    }
+
+    return null;
   };
 
   return (
@@ -1873,67 +1896,25 @@ function Step2Form({ defaultValues, onBack, onSubmit }: { defaultValues: Step2Da
 
       <div className="space-y-2">
         <Label>Travel Dates</Label>
-        <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full h-12 justify-start text-left font-normal"
-            >
-              <CalendarIcon className="mr-2 h-4 w-4 text-slate-400" />
-              {dateRange?.from ? (
-                dateRange.to ? (
-                  <span>
-                    {format(dateRange.from, "MMM d, yyyy")} - {format(dateRange.to, "MMM d, yyyy")}
-                  </span>
-                ) : (
-                  format(dateRange.from, "MMM d, yyyy")
-                )
-              ) : (
-                <span className="text-slate-400">Select your travel dates</span>
-              )}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            <Calendar
-              mode="range"
-              defaultMonth={dateRange?.from}
-              selected={dateRange}
-              onSelect={(range) => {
-                // If a complete range exists and user clicks a new date,
-                // start fresh selection from that date
-                if (dateRange?.from && dateRange?.to && range?.from && !range?.to) {
-                  setDateRange({ from: range.from, to: undefined });
-                } else {
-                  setDateRange(range);
-                }
-              }}
-              numberOfMonths={2}
-              disabled={(date) => date < new Date()}
-            />
-            <div className="p-3 border-t flex justify-between">
-              {dateRange?.from && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setDateRange(undefined)}
-                  className="text-slate-500 hover:text-slate-700"
-                >
-                  Clear dates
-                </Button>
-              )}
-              <div className="flex-1" />
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => setCalendarOpen(false)}
-              >
-                Done
-              </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setDateModalOpen(true)}
+          className="w-full h-12 justify-start text-left font-normal"
+        >
+          <CalendarIcon className="mr-2 h-4 w-4 text-slate-400" />
+          {getDateDisplayText() ? (
+            <span>{getDateDisplayText()}</span>
+          ) : (
+            <span className="text-slate-400">Select your travel dates</span>
+          )}
+        </Button>
+        <DatePickerModal
+          isOpen={dateModalOpen}
+          onClose={() => setDateModalOpen(false)}
+          onConfirm={handleDateConfirm}
+          initialData={dateSelection}
+        />
         <input type="hidden" {...form.register("dates")} />
         {form.formState.errors.dates && <p className="text-destructive text-sm">{form.formState.errors.dates.message}</p>}
         {/* Trip duration display */}

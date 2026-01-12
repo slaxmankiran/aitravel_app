@@ -5027,13 +5027,17 @@ export async function registerRoutes(
           elapsed: 0,
         });
       } else {
-        // Feasibility done but itinerary in progress
+        // Feasibility done but no itinerary exists
+        // IMPORTANT: This does NOT mean generation is in progress!
+        // It means user hasn't triggered generation yet.
+        // Return step 3.5 to indicate "ready to generate"
         res.json({
-          step: 4,
-          message: "Creating your itinerary",
+          step: 3.5,
+          message: "Ready to generate itinerary",
           totalSteps: 6,
-          percentComplete: 67,
+          percentComplete: 50,
           elapsed: 0,
+          needsGeneration: true, // Signal to client that generation should be triggered
         });
       }
     }

@@ -25,6 +25,7 @@ import {
   type DateSelection,
   type TravelersData,
   type TravelStyle,
+  type StyleData,
   type DestinationData,
 } from "@/components/chat";
 import {
@@ -60,6 +61,8 @@ interface TripState {
   preferredMonth?: string;
   travelers: TravelersData;
   travelStyle: TravelStyle;
+  currency: string;
+  customBudget?: number;
   passport: string;
   keyDetails: string;
 }
@@ -118,6 +121,7 @@ export default function ChatTripV2() {
       numDays: 5,
       travelers: { adults: 1, children: 0, infants: 0 },
       travelStyle: 'comfort',
+      currency: 'USD',
       passport: '', // Empty by default - user must select for visa intelligence
       keyDetails: '',
     };
@@ -283,14 +287,19 @@ export default function ChatTripV2() {
     addNarrativeMessage(`**${desc}** — I'll tailor recommendations accordingly.`, 'travelers');
   };
 
-  const handleStyleConfirm = (style: TravelStyle) => {
+  const handleStyleConfirm = (data: StyleData) => {
     setTripState(prev => ({
       ...prev,
-      travelStyle: style,
+      travelStyle: data.style,
+      currency: data.currency,
+      customBudget: data.customBudget,
     }));
 
-    const labels = { budget: 'Budget', comfort: 'Comfort', luxury: 'Luxury' };
-    addNarrativeMessage(`**${labels[style]}** style selected — costs and recommendations adjusted.`, 'style');
+    const labels: Record<TravelStyle, string> = { budget: 'Budget', comfort: 'Comfort', luxury: 'Luxury', custom: 'Custom' };
+    const styleLabel = labels[data.style];
+    const currencyNote = data.currency !== 'USD' ? ` (${data.currency})` : '';
+    const budgetNote = data.style === 'custom' && data.customBudget ? ` — ${data.currency} ${data.customBudget.toLocaleString()} budget` : '';
+    addNarrativeMessage(`**${styleLabel}** style selected${budgetNote}${currencyNote} — costs adjusted.`, 'style');
   };
 
   const handlePassportConfirm = (code: string) => {
@@ -347,9 +356,14 @@ export default function ChatTripV2() {
       datesString = `${fallbackMonth} ${now.getFullYear()}, 7 days`;
     }
 
-    // Calculate budget based on style
-    const budgetBase = { budget: 1500, comfort: 3000, luxury: 5000 };
-    const budget = budgetBase[tripState.travelStyle] * groupSize;
+    // Calculate budget based on style (or use custom budget)
+    let budget: number;
+    if (tripState.travelStyle === 'custom' && tripState.customBudget) {
+      budget = tripState.customBudget;
+    } else {
+      const budgetBase: Record<string, number> = { budget: 1500, comfort: 3000, luxury: 5000, custom: 3000 };
+      budget = (budgetBase[tripState.travelStyle] || 3000) * groupSize;
+    }
 
     const tripRequest: CreateTripRequest = {
       passport: tripState.passport,
@@ -361,8 +375,8 @@ export default function ChatTripV2() {
       infants: tripState.travelers.infants,
       groupSize,
       budget,
-      currency: 'USD',
-      travelStyle: tripState.travelStyle === 'comfort' ? 'standard' : tripState.travelStyle,
+      currency: tripState.currency,
+      travelStyle: tripState.travelStyle === 'comfort' ? 'standard' : (tripState.travelStyle === 'custom' ? 'custom' : tripState.travelStyle),
       // interests is an array field; convert keyDetails string to array or omit
       interests: tripState.keyDetails ? [tripState.keyDetails] : undefined,
       // Track that this trip was created from the chat flow
@@ -477,6 +491,7 @@ export default function ChatTripV2() {
         travelers={tripState.travelers}
         travelStyle={tripState.travelStyle}
         passport={tripState.passport}
+        currency={tripState.currency}
         onDestinationClick={() => setDestinationModalOpen(true)}
         onDateClick={() => setDateModalOpen(true)}
         onTravelersClick={() => setTravelersModalOpen(true)}
@@ -609,6 +624,8 @@ export default function ChatTripV2() {
         onClose={() => setStyleModalOpen(false)}
         onConfirm={handleStyleConfirm}
         initialStyle={tripState.travelStyle}
+        initialCurrency={tripState.currency}
+        initialCustomBudget={tripState.customBudget}
       />
 
       {/* Passport Modal with search */}

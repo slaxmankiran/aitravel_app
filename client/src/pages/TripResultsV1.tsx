@@ -250,8 +250,74 @@ function DemoBanner() {
 }
 
 // ============================================================================
-// HELPER: Convert country name to nationality adjective
+// HELPER: Convert country name/code to nationality adjective
 // ============================================================================
+
+// ISO 2-letter country codes to nationality adjective
+const CODE_TO_NATIONALITY: Record<string, string> = {
+  'IN': 'Indian',
+  'US': 'American',
+  'GB': 'British',
+  'UK': 'British',
+  'CA': 'Canadian',
+  'AU': 'Australian',
+  'DE': 'German',
+  'FR': 'French',
+  'IT': 'Italian',
+  'ES': 'Spanish',
+  'JP': 'Japanese',
+  'CN': 'Chinese',
+  'BR': 'Brazilian',
+  'MX': 'Mexican',
+  'SG': 'Singaporean',
+  'MY': 'Malaysian',
+  'TH': 'Thai',
+  'ID': 'Indonesian',
+  'PH': 'Filipino',
+  'VN': 'Vietnamese',
+  'KR': 'South Korean',
+  'NL': 'Dutch',
+  'CH': 'Swiss',
+  'SE': 'Swedish',
+  'NO': 'Norwegian',
+  'DK': 'Danish',
+  'FI': 'Finnish',
+  'PL': 'Polish',
+  'RU': 'Russian',
+  'ZA': 'South African',
+  'NZ': 'New Zealand',
+  'IE': 'Irish',
+  'PT': 'Portuguese',
+  'GR': 'Greek',
+  'TR': 'Turkish',
+  'EG': 'Egyptian',
+  'AE': 'Emirati',
+  'SA': 'Saudi',
+  'IL': 'Israeli',
+  'AR': 'Argentine',
+  'CL': 'Chilean',
+  'CO': 'Colombian',
+  'PE': 'Peruvian',
+  'PK': 'Pakistani',
+  'BD': 'Bangladeshi',
+  'LK': 'Sri Lankan',
+  'NP': 'Nepali',
+  'BB': 'Barbadian',
+  'AT': 'Austrian',
+  'BE': 'Belgian',
+  'HK': 'Hong Kong',
+  'TW': 'Taiwanese',
+  'NG': 'Nigerian',
+  'KE': 'Kenyan',
+  'GH': 'Ghanaian',
+  'MA': 'Moroccan',
+  'CZ': 'Czech',
+  'HU': 'Hungarian',
+  'RO': 'Romanian',
+  'UA': 'Ukrainian',
+};
+
+// Full country names to nationality adjective
 const NATIONALITY_MAP: Record<string, string> = {
   'India': 'Indian',
   'United States': 'American',
@@ -302,10 +368,28 @@ const NATIONALITY_MAP: Record<string, string> = {
   'Bangladesh': 'Bangladeshi',
   'Sri Lanka': 'Sri Lankan',
   'Nepal': 'Nepali',
+  'Barbados': 'Barbadian',
+  'Austria': 'Austrian',
+  'Belgium': 'Belgian',
+  'Hong Kong': 'Hong Kong',
+  'Taiwan': 'Taiwanese',
+  'Nigeria': 'Nigerian',
+  'Kenya': 'Kenyan',
+  'Ghana': 'Ghanaian',
+  'Morocco': 'Moroccan',
+  'Czech Republic': 'Czech',
+  'Hungary': 'Hungarian',
+  'Romania': 'Romanian',
+  'Ukraine': 'Ukrainian',
 };
 
 function getNationalityAdjective(country: string): string {
-  // Check exact match first
+  // Check if it's a 2-letter country code (uppercase)
+  const upperCode = country.toUpperCase();
+  if (upperCode.length === 2 && CODE_TO_NATIONALITY[upperCode]) {
+    return CODE_TO_NATIONALITY[upperCode];
+  }
+  // Check exact match in country names
   if (NATIONALITY_MAP[country]) {
     return NATIONALITY_MAP[country];
   }
@@ -712,6 +796,43 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
 
   // Fetch progress while generating
   const { data: progress } = useTripProgress(tripId, isGenerating);
+
+  // Track whether we've already triggered generation to avoid duplicates
+  const generationTriggeredRef = useRef(false);
+
+  // Auto-trigger itinerary generation if trip is waiting for it
+  // This handles the case where user navigates directly to results without going through feasibility page
+  useEffect(() => {
+    // Only trigger once per mount
+    if (generationTriggeredRef.current) return;
+    // Need progress data with needsGeneration flag
+    if (!progress?.needsGeneration) return;
+    // Need a valid trip ID
+    if (!tripId) return;
+
+    console.log(`[TripResultsV1] Auto-triggering itinerary generation for trip ${tripId}`);
+    generationTriggeredRef.current = true;
+
+    // Fire and forget - trigger the generation
+    fetch(`/api/trips/${tripId}/generate-itinerary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then(res => {
+      if (!res.ok) {
+        console.error('[TripResultsV1] Failed to trigger itinerary generation:', res.status);
+        // Reset flag so we can retry on next poll
+        generationTriggeredRef.current = false;
+      } else {
+        console.log('[TripResultsV1] Itinerary generation triggered successfully');
+        // Invalidate progress query to get fresh status
+        queryClient.invalidateQueries({ queryKey: ['trip-progress', tripId] });
+      }
+    }).catch(err => {
+      console.error('[TripResultsV1] Error triggering itinerary generation:', err);
+      generationTriggeredRef.current = false;
+    });
+  }, [progress?.needsGeneration, tripId, queryClient]);
 
   // Timeout detection - show timeout UI if generation takes too long
   useEffect(() => {

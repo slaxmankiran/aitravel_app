@@ -54,6 +54,13 @@ const STATIC_DESTINATION_IMAGES: Record<string, string> = {
   'queenstown': 'https://images.unsplash.com/photo-1589871973318-9ca1258faa5d?w=1600&h=900&fit=crop',
   'wellington': 'https://images.unsplash.com/photo-1589483232748-515c025575bc?w=1600&h=900&fit=crop',
   'fiji': 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=1600&h=900&fit=crop',
+  // Indian Ocean Islands
+  'maldives': 'https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=1600&h=900&fit=crop',
+  'male': 'https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=1600&h=900&fit=crop',
+  'mauritius': 'https://images.unsplash.com/photo-1589979481223-deb893043163?w=1600&h=900&fit=crop',
+  'seychelles': 'https://images.unsplash.com/photo-1589979481223-deb893043163?w=1600&h=900&fit=crop',
+  'sri lanka': 'https://images.unsplash.com/photo-1586185187731-37f7b8c79b0b?w=1600&h=900&fit=crop',
+  'colombo': 'https://images.unsplash.com/photo-1586185187731-37f7b8c79b0b?w=1600&h=900&fit=crop',
   // Asia - Japan
   'tokyo': 'https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=1600&h=900&fit=crop',
   'kyoto': 'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?w=1600&h=900&fit=crop',
@@ -73,8 +80,13 @@ const STATIC_DESTINATION_IMAGES: Record<string, string> = {
   'indonesia': 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=1600&h=900&fit=crop',
   'kuala lumpur': 'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?w=1600&h=900&fit=crop',
   'malaysia': 'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?w=1600&h=900&fit=crop',
-  'philippines': 'https://images.unsplash.com/photo-1518509562904-e7ef99cdcc86?w=1600&h=900&fit=crop',
-  'manila': 'https://images.unsplash.com/photo-1573455494060-c5595004fb6c?w=1600&h=900&fit=crop',
+  // Philippines - Manila skyline and landmarks (daytime images)
+  'manila': 'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?w=1600&h=900&fit=crop',
+  'philippines': 'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?w=1600&h=900&fit=crop',
+  'cebu': 'https://images.unsplash.com/photo-1505881502353-a1986add3762?w=1600&h=900&fit=crop',
+  'boracay': 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1600&h=900&fit=crop',
+  'palawan': 'https://images.unsplash.com/photo-1501179691627-eeaa65ea017c?w=1600&h=900&fit=crop',
+  'el nido': 'https://images.unsplash.com/photo-1501179691627-eeaa65ea017c?w=1600&h=900&fit=crop',
   'cambodia': 'https://images.unsplash.com/photo-1539367628448-4bc5c9d171c8?w=1600&h=900&fit=crop',
   // Asia - China
   'hong kong': 'https://images.unsplash.com/photo-1536599018102-9f803c140fc1?w=1600&h=900&fit=crop',

@@ -156,8 +156,8 @@ function DestinationHeroComponent({
         )}
       </div>
 
-      {/* Gradient overlay for text readability */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-black/20" />
+      {/* Gradient overlay for text readability - lighter to show more of the destination */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
 
       {/* Content */}
       <div className="relative z-10 h-full flex flex-col justify-end p-4 md:p-6">
