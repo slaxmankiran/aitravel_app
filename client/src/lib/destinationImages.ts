@@ -100,11 +100,19 @@ const STATIC_DESTINATION_IMAGES: Record<string, string> = {
   'seoul': 'https://images.unsplash.com/photo-1538485399081-7191377e8241?w=1600&h=900&fit=crop',
   'korea': 'https://images.unsplash.com/photo-1538485399081-7191377e8241?w=1600&h=900&fit=crop',
   // Asia - India
+  'bengaluru': 'https://images.unsplash.com/photo-1596176530529-78163a4f7af2?w=1600&h=900&fit=crop', // Bangalore Palace
+  'bangalore': 'https://images.unsplash.com/photo-1596176530529-78163a4f7af2?w=1600&h=900&fit=crop',
   'mumbai': 'https://images.unsplash.com/photo-1529253355930-ddbe423a2ac7?w=1600&h=900&fit=crop',
   'delhi': 'https://images.unsplash.com/photo-1587474260584-136574528ed5?w=1600&h=900&fit=crop',
   'jaipur': 'https://images.unsplash.com/photo-1477587458883-47145ed94245?w=1600&h=900&fit=crop',
-  'india': 'https://images.unsplash.com/photo-1524492412937-b28074a5d7da?w=1600&h=900&fit=crop',
+  'india': 'https://images.unsplash.com/photo-1524492412937-b28074a5d7da?w=1600&h=900&fit=crop', // Taj Mahal for generic India
   'goa': 'https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?w=1600&h=900&fit=crop',
+  // Africa & Middle East
+  'casablanca': 'https://images.unsplash.com/photo-1569383746724-6f1b882b8f46?w=1600&h=900&fit=crop', // Hassan II Mosque
+  'morocco': 'https://images.unsplash.com/photo-1489749798305-4fea3ae63d43?w=1600&h=900&fit=crop', // Marrakech
+  'marrakech': 'https://images.unsplash.com/photo-1489749798305-4fea3ae63d43?w=1600&h=900&fit=crop',
+  'cairo': 'https://images.unsplash.com/photo-1572252009286-268acec5ca0a?w=1600&h=900&fit=crop',
+  'egypt': 'https://images.unsplash.com/photo-1572252009286-268acec5ca0a?w=1600&h=900&fit=crop',
   // Europe
   'paris': 'https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=1600&h=900&fit=crop',
   'london': 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=1600&h=900&fit=crop',

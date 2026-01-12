@@ -7,13 +7,13 @@ const sqlitePath = process.env.SQLITE_DB_PATH || "./dev.db";
 const cfg = process.env.DATABASE_URL
   ? {
       out: "./migrations",
-      schema: "./shared/schema.ts",
+      schema: ["./shared/schema.ts", "./shared/knowledgeSchema.ts"],
       dialect: "postgresql",
       dbCredentials: { url: process.env.DATABASE_URL },
     }
   : {
       out: "./migrations",
-      schema: "./shared/schema.ts",
+      schema: "./shared/schema.ts", // SQLite doesn't support pgvector
       dialect: "sqlite",
       dbCredentials: { url: `file:${sqlitePath}` },
     };

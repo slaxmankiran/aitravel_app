@@ -34,6 +34,47 @@ import changePlanRouter from "./routes/changePlan";
 import fixOptionsRouter from "./routes/fixOptions";
 import appliedPlansRouter from "./routes/appliedPlans";
 import versionsRouter from "./routes/versions";
+import { knowledgeRouter } from "./routes/knowledge";
+import { VisaFacts, computeVisaConfidence } from "@shared/knowledgeSchema";
+import { db } from "./db";
+import { knowledgeDocuments } from "@shared/knowledgeSchema";
+import { generateEmbedding } from "./services/embeddings";
+import { sql, desc, and, or, eq } from "drizzle-orm";
+import { cosineDistance } from "drizzle-orm";
+import { buildVisaEvidenceBundle, buildEstimatedEvidenceBundle, formatEvidenceBundleForPrompt } from "./services/evidenceBundle";
+import {
+  streamItineraryGeneration,
+  resumeItineraryStream,
+  setupSSEHeaders,
+  sendSSE,
+  createStreamAbortController,
+  shouldUseStreaming,
+  createSSEContext,
+  cleanupSSEContext,
+  parseLastEventId,
+  createStreamMetrics,
+  logStreamSummary,
+  type StreamingItineraryInput,
+  type ItineraryDay,
+  type SSEContext,
+  type StreamMetrics
+} from "./services/streamingItinerary";
+import {
+  acquireItineraryLock,
+  releaseItineraryLock,
+  createLockContext,
+  cleanupLockContext,
+  getItineraryLockStatus,
+  type LockContext
+} from "./services/itineraryLock";
+import {
+  sseProtection,
+  aiRateLimiter,
+  tripCreationRateLimiter,
+  generalRateLimiter,
+  getRateLimitMetrics,
+  requireAdminToken,
+} from "./middleware/rateLimiter";
 
 // ============ FEASIBILITY ANALYTICS ============
 // Decision-quality metrics for validation
@@ -277,6 +318,348 @@ function getAnalyticsSummary() {
         total: stats.total,
         blockedRate: `${((stats.blocked / stats.total) * 100).toFixed(0)}%`
       })),
+  };
+}
+
+// ============ VISA LOOKUP CACHE ============
+// In-memory LRU cache with 24-hour TTL
+// Key: `visaFacts:${passport}:${destination}`, Value: { data: VisaFacts | null, timestamp: number }
+const VISA_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const VISA_CACHE_MAX_SIZE = 500; // Max entries
+
+interface VisaCacheEntry {
+  data: VisaFacts | null;
+  timestamp: number;
+}
+
+const visaFactsCache = new Map<string, VisaCacheEntry>();
+
+function getVisaCacheKey(passport: string, destination: string): string {
+  return `visaFacts:${passport.toUpperCase()}:${destination.toUpperCase()}`;
+}
+
+function getCachedVisaFacts(passport: string, destination: string): VisaFacts | null | undefined {
+  const key = getVisaCacheKey(passport, destination);
+  const entry = visaFactsCache.get(key);
+
+  if (!entry) return undefined; // Not in cache
+
+  // Check TTL
+  if (Date.now() - entry.timestamp > VISA_CACHE_TTL_MS) {
+    visaFactsCache.delete(key);
+    return undefined; // Expired
+  }
+
+  console.log(`[Cache] HIT for ${passport} → ${destination}`);
+  return entry.data;
+}
+
+function setCachedVisaFacts(passport: string, destination: string, data: VisaFacts | null): void {
+  const key = getVisaCacheKey(passport, destination);
+
+  // LRU eviction: if at max size, delete oldest entry
+  if (visaFactsCache.size >= VISA_CACHE_MAX_SIZE) {
+    const oldestKey = visaFactsCache.keys().next().value;
+    if (oldestKey) visaFactsCache.delete(oldestKey);
+  }
+
+  visaFactsCache.set(key, { data, timestamp: Date.now() });
+  console.log(`[Cache] SET for ${passport} → ${destination} (size: ${visaFactsCache.size})`);
+}
+
+// ============ RAG-BASED VISA LOOKUP ============
+// Fetches cited visa information from the knowledge base (with caching)
+async function getVisaFactsFromKnowledge(passport: string, destination: string): Promise<VisaFacts | null> {
+  // Check cache first
+  const cached = getCachedVisaFacts(passport, destination);
+  if (cached !== undefined) {
+    return cached; // Return cached result (including null for "no data found")
+  }
+
+  try {
+    // Generate embedding for the visa query
+    const question = `visa requirements for ${passport} passport holders traveling to ${destination}`;
+    const embeddingResult = await generateEmbedding(question);
+    const queryEmbedding = embeddingResult.embedding;
+
+    // Build optimized visa query
+    const similarity = sql<number>`1 - (${cosineDistance(knowledgeDocuments.embedding, queryEmbedding)})`;
+
+    const results = await db
+      .select({
+        id: knowledgeDocuments.id,
+        sourceId: knowledgeDocuments.sourceId,
+        sourceType: knowledgeDocuments.sourceType,
+        title: knowledgeDocuments.title,
+        content: knowledgeDocuments.content,
+        sourceUrl: knowledgeDocuments.sourceUrl,
+        sourceName: knowledgeDocuments.sourceName,
+        lastVerified: knowledgeDocuments.lastVerified,
+        similarity,
+      })
+      .from(knowledgeDocuments)
+      .where(
+        and(
+          or(
+            eq(knowledgeDocuments.sourceType, "visa"),
+            eq(knowledgeDocuments.sourceType, "entry_requirements")
+          ),
+          or(
+            // Exact match on country pair
+            and(
+              eq(knowledgeDocuments.fromCountry, passport.toUpperCase()),
+              eq(knowledgeDocuments.toCountry, destination.toUpperCase())
+            ),
+            // General destination info
+            and(
+              sql`${knowledgeDocuments.fromCountry} IS NULL`,
+              eq(knowledgeDocuments.toCountry, destination.toUpperCase())
+            )
+          )
+        )
+      )
+      .orderBy(desc(similarity))
+      .limit(5);
+
+    // Filter by minimum similarity
+    const relevantResults = results.filter((r: typeof results[number]) => r.similarity >= 0.5);
+
+    if (relevantResults.length === 0) {
+      console.log(`[RAG] No visa data found for ${passport} → ${destination}`);
+      setCachedVisaFacts(passport, destination, null); // Cache "not found" to avoid repeated lookups
+      return null;
+    }
+
+    // Build citations
+    const citations = relevantResults.map((r: typeof results[number]) => ({
+      title: r.title,
+      url: r.sourceUrl,
+      sourceName: r.sourceName || "Travel Database",
+      trustLevel: determineTrustLevel(r.sourceName) as "high" | "medium" | "low",
+      updatedAt: r.lastVerified?.toISOString().slice(0, 10),
+    }));
+
+    // Combine content for parsing
+    const combinedContent = relevantResults.map((r: typeof results[number]) => r.content).join("\n\n");
+
+    // Parse visa status and details
+    const visaStatus = parseVisaStatusFromContent(combinedContent);
+    const feesText = extractFeesFromContent(combinedContent);
+    const requiredDocs = extractRequiredDocsFromContent(combinedContent);
+    const maxStayDays = extractMaxStayDays(combinedContent);
+    const processingDays = extractProcessingDays(combinedContent);
+
+    // Build summary
+    let summary = "";
+    if (visaStatus === "visa_free") {
+      summary = `${passport} passport holders can visit ${destination} visa-free`;
+      if (maxStayDays) summary += ` for up to ${maxStayDays} days`;
+      summary += ".";
+    } else if (visaStatus === "visa_on_arrival") {
+      summary = `${passport} passport holders can obtain a Visa on Arrival for ${destination}`;
+      if (maxStayDays) summary += ` for stays up to ${maxStayDays} days`;
+      if (feesText) summary += `. Fee: ${feesText}`;
+      summary += ".";
+    } else if (visaStatus === "evisa") {
+      summary = `${passport} passport holders can apply for an e-Visa to visit ${destination}`;
+      if (processingDays.max) summary += `. Processing: ${processingDays.min || 1}-${processingDays.max} days`;
+      summary += ".";
+    } else if (visaStatus === "embassy_visa") {
+      summary = `${passport} passport holders require a visa to visit ${destination}`;
+      if (processingDays.max) summary += `. Processing time: ${processingDays.min || 5}-${processingDays.max} days`;
+      summary += ".";
+    } else {
+      summary = `Visa requirements for ${passport} passport holders visiting ${destination}. Please check official sources.`;
+    }
+
+    const confidence = computeVisaConfidence(citations);
+
+    // ============ SAFETY CHECKS ============
+    // Count high-trust sources (official embassy/immigration)
+    const highTrustCount = citations.filter((c: { trustLevel: string }) => c.trustLevel === 'high').length;
+
+    // Log warnings for low confidence
+    if (confidence === 'low') {
+      console.warn(`[RAG-SAFETY] ⚠️ LOW CONFIDENCE visa lookup: ${passport} → ${destination}`);
+      console.warn(`[RAG-SAFETY]   - Citations: ${citations.length} (${highTrustCount} high-trust)`);
+      console.warn(`[RAG-SAFETY]   - Status: ${visaStatus}`);
+      console.warn(`[RAG-SAFETY]   - Action: User should verify with official sources`);
+    }
+
+    // Log when no high-trust sources found
+    if (highTrustCount === 0 && citations.length > 0) {
+      console.warn(`[RAG-SAFETY] ⚠️ No official sources for ${passport} → ${destination}`);
+    }
+
+    // Generate warning message for low confidence
+    let warningMessage: string | undefined;
+    if (confidence === 'low') {
+      warningMessage = 'Limited verified data available. Please confirm with official embassy sources before making travel plans.';
+    } else if (highTrustCount === 0) {
+      warningMessage = 'No official embassy sources found. Consider verifying requirements.';
+    }
+
+    console.log(`[RAG] Visa lookup: ${passport} → ${destination}: ${visaStatus} (${confidence} confidence, ${citations.length} citations, ${highTrustCount} official)`);
+
+    const result: VisaFacts = {
+      summary,
+      visaStatus,
+      maxStayDays,
+      processingDaysMin: processingDays.min,
+      processingDaysMax: processingDays.max,
+      feesText,
+      requiredDocs: requiredDocs.length > 0 ? requiredDocs : undefined,
+      citations,
+      confidence,
+      passport,
+      destination,
+      hasCitations: true,
+      warning: warningMessage,
+    };
+
+    // Cache successful result
+    setCachedVisaFacts(passport, destination, result);
+
+    return result;
+  } catch (error) {
+    console.error(`[RAG] Error fetching visa data:`, error);
+    // Don't cache errors - allow retry
+    return null;
+  }
+}
+
+// Helper: Determine trust level from source name
+function determineTrustLevel(sourceName: string | null): string {
+  if (!sourceName) return "low";
+  const lower = sourceName.toLowerCase();
+  if (lower.includes("embassy") || lower.includes("consulate") || lower.includes("immigration") || lower.includes("gov")) {
+    return "high";
+  }
+  if (lower.includes("travel database") || lower.includes("visa guide") || lower.includes("lonely planet")) {
+    return "medium";
+  }
+  return "low";
+}
+
+// Helper: Parse visa status from content
+function parseVisaStatusFromContent(content: string): VisaFacts["visaStatus"] {
+  const lower = content.toLowerCase();
+
+  if ((lower.includes("visa-free") || lower.includes("visa free")) && !lower.includes("not visa-free")) {
+    return "visa_free";
+  }
+  if (lower.includes("no visa required") || lower.includes("visa not required")) {
+    return "visa_free";
+  }
+
+  const explicitNoVoa = lower.includes("no visa on arrival") || lower.includes("no voa available");
+  const explicitNoEvisa = lower.includes("no e-visa") || lower.includes("or e-visa available");
+
+  if (explicitNoVoa && explicitNoEvisa) {
+    return "embassy_visa";
+  }
+
+  const hasVoaInfo = lower.includes("visa on arrival") || lower.includes("voa");
+  const voaPositive = lower.includes("can obtain a visa on arrival") || lower.includes("voa available") ||
+    (hasVoaInfo && !explicitNoVoa && (lower.includes("voa allows") || lower.includes("voa costs")));
+
+  if (voaPositive && !explicitNoVoa) {
+    return "visa_on_arrival";
+  }
+
+  const evisaPositive = lower.includes("e-visa available") || lower.includes("apply for an e-visa") || lower.includes("e-visa:");
+
+  if (evisaPositive && !explicitNoEvisa) {
+    return "evisa";
+  }
+
+  if (lower.includes("require a visa") || lower.includes("visa required") || lower.includes("tourist visa") || lower.includes("embassy")) {
+    return "embassy_visa";
+  }
+
+  return "unknown";
+}
+
+// Helper: Extract fees from content
+function extractFeesFromContent(content: string): string | undefined {
+  const patterns = [/fee[s]?\s*(?:is|are|of)?\s*(?:approximately\s*)?(\$\d+[\d,]*(?:\s*USD)?)/i, /(\$\d+[\d,]*(?:\s*USD)?)\s*(?:fee|cost)/i];
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) return match[1];
+  }
+  if (content.toLowerCase().includes("free of charge") || content.toLowerCase().includes("no fee")) return "Free";
+  return undefined;
+}
+
+// Helper: Extract required documents
+function extractRequiredDocsFromContent(content: string): string[] {
+  const docs: string[] = [];
+  const lower = content.toLowerCase();
+  if (lower.includes("passport") && lower.includes("valid")) docs.push("Valid passport (6+ months validity)");
+  if (lower.includes("proof of onward") || lower.includes("return ticket")) docs.push("Proof of onward/return travel");
+  if (lower.includes("proof of accommodation") || lower.includes("hotel booking")) docs.push("Proof of accommodation");
+  if (lower.includes("passport photo")) docs.push("Passport-size photos");
+  if (lower.includes("bank statement") || lower.includes("proof of funds")) docs.push("Proof of sufficient funds");
+  return docs;
+}
+
+// Helper: Extract max stay days
+function extractMaxStayDays(content: string): number | undefined {
+  const patterns = [/stay[s]?\s*(?:up\s*to\s*)?(\d+)\s*days/i, /(\d+)\s*days?\s*(?:maximum\s*)?stay/i, /valid\s*(?:for\s*)?(\d+)\s*days/i];
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) return parseInt(match[1], 10);
+  }
+  return undefined;
+}
+
+// Helper: Extract processing days
+function extractProcessingDays(content: string): { min?: number; max?: number } {
+  const maxMatch = content.match(/processing[^.]*?\d+\s*to\s*(\d+)\s*days/i) || content.match(/(\d+)\s*days?\s*maximum/i);
+  const minMatch = content.match(/processing[^.]*?(\d+)\s*to\s*\d+\s*days/i) || content.match(/(\d+)\s*days?\s*minimum/i);
+  return {
+    min: minMatch ? parseInt(minMatch[1], 10) : undefined,
+    max: maxMatch ? parseInt(maxMatch[1], 10) : undefined,
+  };
+}
+
+// Convert VisaFacts to VisaDetails for storing in FeasibilityReport
+function convertVisaFactsToVisaDetails(visaFacts: VisaFacts): VisaDetails {
+  // Map visa status
+  const typeMap: Record<VisaFacts["visaStatus"], VisaDetails["type"]> = {
+    visa_free: "visa_free",
+    visa_on_arrival: "visa_on_arrival",
+    evisa: "e_visa",
+    embassy_visa: "embassy_visa",
+    unknown: "embassy_visa", // Conservative fallback
+  };
+
+  // Parse fee amount from feesText
+  let govFee = 0;
+  if (visaFacts.feesText) {
+    const feeMatch = visaFacts.feesText.match(/\$(\d+)/);
+    if (feeMatch) govFee = parseInt(feeMatch[1], 10);
+  }
+
+  return {
+    required: visaFacts.visaStatus !== "visa_free",
+    type: typeMap[visaFacts.visaStatus],
+    processingDays: {
+      minimum: visaFacts.processingDaysMin || (visaFacts.visaStatus === "visa_on_arrival" ? 0 : 3),
+      maximum: visaFacts.processingDaysMax || (visaFacts.visaStatus === "visa_on_arrival" ? 0 : 7),
+    },
+    cost: {
+      government: govFee,
+      totalPerPerson: govFee,
+      currency: "USD",
+      accuracy: "curated",
+    },
+    documentsRequired: visaFacts.requiredDocs || [],
+    applicationMethod: visaFacts.visaStatus === "visa_on_arrival" ? "on_arrival" :
+                       visaFacts.visaStatus === "evisa" ? "online" : "embassy",
+    sources: visaFacts.citations.map((c) => ({ title: c.title, url: c.url || "" })),
+    confidenceLevel: visaFacts.confidence,
+    lastVerified: visaFacts.citations[0]?.updatedAt,
   };
 }
 
@@ -607,12 +990,18 @@ function calculateVisaTiming(
 /**
  * Calculate weighted certainty score based on all factors
  * Weights: Accessibility (25), Visa (30), Safety (25), Budget (20) = 100 total
+ *
+ * Confidence-based scoring rules:
+ * - high: normal visa points
+ * - medium: reduce visa points by 25%
+ * - low: reduce visa points by 60%, force verdict at most POSSIBLE
  */
 function calculateCertaintyScore(
   accessibility: { status: string; reason: string },
   visa: { status: string; reason: string; type?: string; timingOk?: boolean },
   safety: { status: string; reason: string },
-  budget: { status: string; reason: string }
+  budget: { status: string; reason: string },
+  visaConfidence: 'high' | 'medium' | 'low' = 'high'
 ): CertaintyScore {
   const blockers: string[] = [];
   const warnings: string[] = [];
@@ -667,6 +1056,22 @@ function calculateCertaintyScore(
     blockers.push('Not enough time for visa processing');
   }
 
+  // Apply confidence-based scoring cap
+  // - high: normal visa points (no change)
+  // - medium: reduce by 25%
+  // - low: reduce by 60%, cap at 10/30 max
+  if (visaConfidence === 'medium') {
+    visaScore = Math.round(visaScore * 0.75);
+    if (visaStatus === 'ok') {
+      visaStatus = 'warning';
+      warnings.push('Visa information from limited sources - verify with official embassy');
+    }
+  } else if (visaConfidence === 'low') {
+    visaScore = Math.min(Math.round(visaScore * 0.4), 10); // Cap at 10/30 max
+    visaStatus = 'warning';
+    warnings.push('Visa information requires verification - check official sources before booking');
+  }
+
   // Safety: 0-25 points
   let safetyScore: number;
   let safetyStatus: 'ok' | 'warning' | 'blocker';
@@ -719,6 +1124,13 @@ function calculateCertaintyScore(
   } else {
     verdict = 'NO';
     summary = 'This trip is not recommended. See alternatives.';
+  }
+
+  // Cap verdict at POSSIBLE for low confidence corridors
+  // We can't confidently say GO when visa data isn't verified
+  if (visaConfidence === 'low' && verdict === 'GO') {
+    verdict = 'POSSIBLE';
+    summary = 'Trip looks feasible, but verify visa requirements with official sources before booking.';
   }
 
   return {
@@ -2791,6 +3203,26 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2, delay = 1000): Pr
   throw lastError;
 }
 
+// ============================================================================
+// DESTINATION IMAGE FETCHING - Stores AI-fetched image URL for My Trips cards
+// ============================================================================
+async function fetchAndStoreDestinationImage(tripId: number, destination: string): Promise<void> {
+  try {
+    console.log(`[DestImage] Fetching image for trip ${tripId}: ${destination}`);
+    const result = await aiGetDestinationImage(destination);
+
+    if (result.imageUrl) {
+      // Store the image URL directly in the trip record
+      await storage.updateTrip(tripId, { destinationImageUrl: result.imageUrl } as any);
+      console.log(`[DestImage] Stored image for trip ${tripId}: ${result.landmark} → ${result.imageUrl.slice(0, 60)}...`);
+    } else {
+      console.log(`[DestImage] No image found for trip ${tripId}: ${destination}`);
+    }
+  } catch (error) {
+    console.error(`[DestImage] Error fetching image for trip ${tripId}:`, error);
+  }
+}
+
 // Background processor for trip analysis
 // ============================================================================
 // TWO-STAGE PROCESSING: Stage 1 - Feasibility Only (Fast, 5-8 seconds)
@@ -2851,15 +3283,64 @@ async function processFeasibilityOnly(tripId: number, input: any) {
       ? `"budget":{"status":"ok|tight|impossible","estimatedCost":number,"reason":"brief in ${currency}"}`
       : `"budget":{"status":"ok","estimatedCost":0,"reason":"${travelStyleLabel} travel - costs calculated by AI"}`;
 
+    // ============ RAG VISA LOOKUP (Stage 1) ============
+    let ragVisaFacts: VisaFacts | null = null;
+    let ragVisaDetails: VisaDetails | null = null;
+
+    // Extract country code from passport/destination
+    const passportCodeMap: Record<string, string> = {
+      india: "IN", indian: "IN", us: "US", usa: "US", "united states": "US",
+      uk: "GB", "united kingdom": "GB", australia: "AU", canada: "CA",
+      germany: "DE", france: "FR", japan: "JP", china: "CN", singapore: "SG",
+    };
+    const destCodeMap: Record<string, string> = {
+      thailand: "TH", japan: "JP", singapore: "SG", uae: "AE", dubai: "AE",
+      indonesia: "ID", bali: "ID", maldives: "MV", "sri lanka": "LK",
+      vietnam: "VN", malaysia: "MY", india: "IN", usa: "US", uk: "GB",
+      france: "FR", germany: "DE", italy: "IT", spain: "ES", australia: "AU",
+    };
+
+    const passportCode = passportCodeMap[input.passport.toLowerCase()] || input.passport.toUpperCase().slice(0, 2);
+    const destCode = destCodeMap[input.destination.toLowerCase().split(",")[0].trim()] ||
+                     input.destination.toUpperCase().slice(0, 2);
+
+    try {
+      ragVisaFacts = await getVisaFactsFromKnowledge(passportCode, destCode);
+      if (ragVisaFacts) {
+        ragVisaDetails = convertVisaFactsToVisaDetails(ragVisaFacts);
+        console.log(`[Stage1-RAG] Using cited visa data for ${passportCode} → ${destCode}: ${ragVisaFacts.visaStatus}`);
+      }
+    } catch (ragError) {
+      console.warn(`[Stage1-RAG] Visa lookup failed, falling back to AI:`, ragError);
+    }
+
+    // Build evidence bundle for AI prompt (token-efficient, prevents hallucination)
+    const visaEvidenceBundle = ragVisaFacts
+      ? buildVisaEvidenceBundle({ visaFacts: ragVisaFacts })
+      : null;
+
+    const evidenceBundleText = visaEvidenceBundle
+      ? `\n=== VISA EVIDENCE (use these facts, do not invent) ===\n${formatEvidenceBundleForPrompt(visaEvidenceBundle)}\n===`
+      : '';
+
+    const visaInstructionForAI = ragVisaFacts
+      ? `"visa": {"status": "${ragVisaFacts.visaStatus === 'visa_free' ? 'ok' : 'issue'}", "reason": "Use summary from evidence bundle"}`
+      : `"visa": {"status": "ok|issue", "reason": "Use 'ok' ONLY if NO visa required. Use 'issue' if ANY visa needed."}`;
+
+    const confidenceWarning = visaEvidenceBundle?.confidence === 'low'
+      ? '\nIMPORTANT: Visa confidence is LOW. You MUST mention "verify with official sources" in summary.'
+      : '';
+
     const feasibilityPrompt = `CRITICAL: Determine if this trip is POSSIBLE. JSON only, no markdown.
 
 Trip Request: ${originCity} → ${input.destination}
 Passport: ${input.passport}. Residence: ${residenceCountry}${hasResidency ? " (PR)" : ""}.
 Travel dates: ${input.dates}, ${input.groupSize} travelers, ${budgetInfo}.
+${evidenceBundleText}${confidenceWarning}
 
 CHECK IN ORDER:
 1. ACCESSIBILITY: Is ${input.destination} accessible to regular tourists? (Not war zones, closed countries, restricted areas)
-2. VISA: What visa requirements for ${input.passport} passport holders?
+${ragVisaFacts ? '2. VISA: Use the VISA EVIDENCE provided above. Do not guess or invent facts.' : '2. VISA: What visa requirements for ' + input.passport + ' passport holders?'}
 3. SAFETY: Current safety conditions?
 ${isCustomBudget ? '4. BUDGET: Is the budget realistic?' : ''}
 
@@ -2869,7 +3350,7 @@ Return JSON:
   "score": 0-100,
   "breakdown": {
     "accessibility": {"status": "accessible|restricted|impossible", "reason": "brief"},
-    "visa": {"status": "ok|issue", "reason": "Use 'ok' ONLY if NO visa required. Use 'issue' if ANY visa needed."},
+    ${visaInstructionForAI},
     ${budgetInstruction},
     "safety": {"status": "safe|caution|danger", "reason": "brief"}
   },
@@ -2902,6 +3383,7 @@ Return JSON:
     }) as FeasibilityReport;
 
     // ============ GENERATE VISA DETAILS (SERVER = SINGLE SOURCE OF TRUTH) ============
+    // Priority: 1) RAG (cited) → 2) Corridor (curated) → 3) AI (estimated)
     // Calculate days until trip
     let daysUntilTrip = 30; // Default fallback
     if (dates) {
@@ -2916,38 +3398,45 @@ Return JSON:
       ? destinationParts[destinationParts.length - 1].trim()
       : input.destination;
 
-    // Try corridor lookup first (curated data)
-    const corridorData = getCorridorData(input.passport, destinationCountry);
     let visaDetails: VisaDetails | null = null;
 
-    if (corridorData) {
-      console.log(`[Stage1] Using curated corridor data for ${input.passport} → ${destinationCountry}`);
-      visaDetails = corridorToVisaDetails(corridorData, daysUntilTrip);
+    // PRIORITY 1: Use RAG visa details if available (cited from knowledge base)
+    if (ragVisaDetails) {
+      visaDetails = ragVisaDetails;
+      console.log(`[Stage1] Using RAG cited visa data for ${passportCode} → ${destCode} (confidence: ${visaDetails.confidenceLevel}, ${visaDetails.sources?.length || 0} citations)`);
     } else {
-      // Generate estimated visa details from AI response
-      const visaInfo = report.breakdown?.visa;
-      const visaRequired = visaInfo?.status === 'issue';
-      const visaReason = visaInfo?.reason || '';
+      // PRIORITY 2: Try corridor lookup (curated data)
+      const corridorData = getCorridorData(input.passport, destinationCountry);
 
-      // Determine visa type from AI response
-      let visaType: VisaDetails['type'] = 'embassy_visa';
-      const reasonLower = visaReason.toLowerCase();
-      if (reasonLower.includes('e-visa') || reasonLower.includes('evisa')) {
-        visaType = 'e_visa';
-      } else if (reasonLower.includes('on arrival') || reasonLower.includes('on-arrival')) {
-        visaType = 'visa_on_arrival';
-      } else if (reasonLower.includes('visa-free') || reasonLower.includes('no visa') || !visaRequired) {
-        visaType = 'visa_free';
+      if (corridorData) {
+        console.log(`[Stage1] Using curated corridor data for ${input.passport} → ${destinationCountry}`);
+        visaDetails = corridorToVisaDetails(corridorData, daysUntilTrip);
+      } else {
+        // PRIORITY 3: Generate estimated visa details from AI response
+        const visaInfo = report.breakdown?.visa;
+        const visaRequired = visaInfo?.status === 'issue';
+        const visaReason = visaInfo?.reason || '';
+
+        // Determine visa type from AI response
+        let visaType: VisaDetails['type'] = 'embassy_visa';
+        const reasonLower = visaReason.toLowerCase();
+        if (reasonLower.includes('e-visa') || reasonLower.includes('evisa')) {
+          visaType = 'e_visa';
+        } else if (reasonLower.includes('on arrival') || reasonLower.includes('on-arrival')) {
+          visaType = 'visa_on_arrival';
+        } else if (reasonLower.includes('visa-free') || reasonLower.includes('no visa') || !visaRequired) {
+          visaType = 'visa_free';
+        }
+
+        visaDetails = generateEstimatedVisaDetails(
+          visaRequired,
+          visaType,
+          visaReason,
+          daysUntilTrip,
+          destinationCountry
+        );
+        console.log(`[Stage1] Using estimated visa data for ${input.passport} → ${destinationCountry} (confidence: ${visaDetails.confidenceLevel})`);
       }
-
-      visaDetails = generateEstimatedVisaDetails(
-        visaRequired,
-        visaType,
-        visaReason,
-        daysUntilTrip,
-        destinationCountry
-      );
-      console.log(`[Stage1] Using estimated visa data for ${input.passport} → ${destinationCountry} (confidence: ${visaDetails.confidenceLevel})`);
     }
 
     // Attach visa details and metadata to report
@@ -2957,11 +3446,49 @@ Return JSON:
     report.generatedAt = now.toISOString();
     report.expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(); // +7 days
 
+    // ============ CONFIDENCE-BASED SCORE ADJUSTMENT ============
+    // Cap the score and verdict based on visa confidence level
+    // - high: normal score (no change)
+    // - medium: reduce score by 10%, add warning
+    // - low: reduce by 25%, cap overall at "yes" (POSSIBLE), add verification warning
+    const confidence = visaDetails?.confidenceLevel || 'low';
+    const originalScore = report.score;
+
+    if (confidence === 'medium') {
+      report.score = Math.round(report.score * 0.9);
+      if (report.breakdown?.visa) {
+        report.breakdown.visa.reason = `${report.breakdown.visa.reason} (limited sources - verify before booking)`;
+      }
+    } else if (confidence === 'low') {
+      report.score = Math.min(Math.round(report.score * 0.75), 70); // Cap at 70 max
+      if (report.overall === 'yes' && report.score < 70) {
+        report.overall = 'warning';
+      }
+      report.summary = `${report.summary} Verify visa requirements with official sources.`;
+      if (report.breakdown?.visa) {
+        report.breakdown.visa.status = 'issue';
+        report.breakdown.visa.reason = `${report.breakdown.visa.reason} (UNVERIFIED - requires confirmation)`;
+      }
+      // Mark visa type as requires_verification for low confidence with no sources
+      if (visaDetails && (!visaDetails.sources || visaDetails.sources.length === 0)) {
+        visaDetails.type = 'requires_verification';
+      }
+    }
+
+    if (originalScore !== report.score) {
+      console.log(`[Stage1] Score adjusted: ${originalScore} → ${report.score} (confidence: ${confidence})`);
+    }
+
     await storage.updateTripFeasibility(tripId, report.overall, report);
     console.log(`[Stage1] Feasibility: ${report.overall} (score: ${report.score}) in ${Date.now() - startTime}ms`);
 
     // Track analytics
     trackFeasibilityVerdict(report.overall, report.score, input.passport, input.destination);
+
+    // Fetch and cache destination image (non-blocking)
+    fetchAndStoreDestinationImage(tripId, input.destination).catch(err => {
+      console.error(`[Stage1] Failed to fetch destination image:`, err);
+    });
 
     // Stage 1 complete - feasibility is ready
     updateProgress(tripId, { step: 2, message: "Feasibility check complete" }, "Ready for your decision");
@@ -3107,12 +3634,62 @@ async function processTripInBackground(tripId: number, input: any, skipFeasibili
       ? `"budget":{"status":"ok|tight|impossible","estimatedCost":number,"reason":"brief in ${currency}"}`
       : `"budget":{"status":"ok","estimatedCost":0,"reason":"${travelStyleLabel} travel - costs calculated by AI"}`;
 
+    // ============ RAG VISA LOOKUP ============
+    // Fetch cited visa data from knowledge base BEFORE AI check
+    let ragVisaFacts: VisaFacts | null = null;
+    let ragVisaDetails: VisaDetails | null = null;
+
+    // Extract country code from passport (e.g., "India" -> "IN")
+    const passportCodeMap: Record<string, string> = {
+      india: "IN", indian: "IN", us: "US", usa: "US", "united states": "US",
+      uk: "GB", "united kingdom": "GB", australia: "AU", canada: "CA",
+      germany: "DE", france: "FR", japan: "JP", china: "CN", singapore: "SG",
+    };
+    const destCodeMap: Record<string, string> = {
+      thailand: "TH", japan: "JP", singapore: "SG", uae: "AE", dubai: "AE",
+      indonesia: "ID", bali: "ID", maldives: "MV", "sri lanka": "LK",
+      vietnam: "VN", malaysia: "MY", india: "IN", usa: "US", uk: "GB",
+      france: "FR", germany: "DE", italy: "IT", spain: "ES", australia: "AU",
+    };
+
+    const passportCode = passportCodeMap[input.passport.toLowerCase()] || input.passport.toUpperCase().slice(0, 2);
+    const destCode = destCodeMap[input.destination.toLowerCase().split(",")[0].trim()] ||
+                     input.destination.toUpperCase().slice(0, 2);
+
+    try {
+      ragVisaFacts = await getVisaFactsFromKnowledge(passportCode, destCode);
+      if (ragVisaFacts) {
+        ragVisaDetails = convertVisaFactsToVisaDetails(ragVisaFacts);
+        console.log(`[RAG] Using cited visa data for ${passportCode} → ${destCode}: ${ragVisaFacts.visaStatus}`);
+      }
+    } catch (ragError) {
+      console.warn(`[RAG] Visa lookup failed, falling back to AI:`, ragError);
+    }
+
+    // Build evidence bundle for AI prompt (token-efficient, prevents hallucination)
+    const visaEvidenceBundle = ragVisaFacts
+      ? buildVisaEvidenceBundle({ visaFacts: ragVisaFacts })
+      : null;
+
+    const evidenceBundleText = visaEvidenceBundle
+      ? `\n=== VISA EVIDENCE (use these facts, do not invent) ===\n${formatEvidenceBundleForPrompt(visaEvidenceBundle)}\n===`
+      : '';
+
+    const visaInstructionForAI = ragVisaFacts
+      ? `"visa": {"status": "${ragVisaFacts.visaStatus === 'visa_free' ? 'ok' : 'issue'}", "reason": "Use summary from evidence bundle"}`
+      : `"visa": {"status": "ok|issue", "reason": "brief visa info. CRITICAL: Use 'ok' ONLY if NO visa required. Use 'issue' if ANY visa/permit is needed"}`;
+
+    const confidenceWarning = visaEvidenceBundle?.confidence === 'low'
+      ? '\nIMPORTANT: Visa confidence is LOW. You MUST mention "verify with official sources" in summary.'
+      : '';
+
     // Enhanced feasibility prompt that checks accessibility FIRST
     const feasibilityPrompt = `CRITICAL: First determine if this trip is even POSSIBLE. JSON only, no markdown.
 
 Trip Request: ${originCity} → ${input.destination}
 Passport: ${input.passport}. Residence: ${residenceCountry}${hasResidency ? " (PR)" : ""}.
 Travel dates: ${input.dates}, ${input.groupSize} travelers, ${budgetInfo}.
+${evidenceBundleText}${confidenceWarning}
 
 STEP 1 - ACCESSIBILITY CHECK (most important):
 - Is ${input.destination} a real, accessible tourist destination?
@@ -3121,7 +3698,7 @@ STEP 1 - ACCESSIBILITY CHECK (most important):
 - Examples of INACCESSIBLE destinations: Antarctica (requires expedition), North Korea (closed), war zones, uninhabited islands
 
 STEP 2 - If accessible, check:
-- Visa requirements for ${input.passport} passport holders visiting ${input.destination}
+${ragVisaFacts ? '- Use VISA EVIDENCE above. Do not guess or invent visa facts.' : `- Visa requirements for ${input.passport} passport holders visiting ${input.destination}`}
 - Safety conditions for tourists
 ${isCustomBudget ? '- Budget feasibility' : '- Skip budget analysis (travel style selected)'}
 
@@ -3130,6 +3707,7 @@ CRITICAL RULES:
 - If destination requires special permits/expeditions (like Antarctica) → overall: "no"
 - If destination is a conflict zone → overall: "no"
 - Only return "yes" or "warning" if regular commercial travel is possible
+${visaEvidenceBundle?.confidence === 'low' ? '- If visa confidence is low, include "verify visa requirements" in summary' : ''}
 
 Return JSON:
 {
@@ -3140,7 +3718,7 @@ Return JSON:
       "status": "accessible|restricted|impossible",
       "reason": "Can tourists visit? Are there commercial transport options?"
     },
-    "visa": {"status": "ok|issue", "reason": "brief visa info. CRITICAL: Use 'ok' ONLY if NO visa required. Use 'issue' if ANY visa/permit is needed (tourist visa, Schengen, e-visa, etc.)"},
+    ${visaInstructionForAI},
     ${budgetInstruction},
     "safety": {"status": "safe|caution|danger", "reason": "brief safety info"}
   },
@@ -3236,8 +3814,43 @@ Return JSON:
       report.generatedAt = now.toISOString();
       report.expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
+      // Attach RAG visa details with citations if available
+      if (ragVisaDetails) {
+        report.visaDetails = ragVisaDetails;
+        console.log(`[RAG] Attached visa details to report: ${ragVisaDetails.type} (${ragVisaDetails.confidenceLevel} confidence, ${ragVisaDetails.sources?.length || 0} citations)`);
+      }
+
+      // ============ CONFIDENCE-BASED SCORE ADJUSTMENT ============
+      // Same rules as Stage 1 flow
+      const confidence = report.visaDetails?.confidenceLevel || 'low';
+      const originalScore = report.score;
+
+      if (confidence === 'medium') {
+        report.score = Math.round(report.score * 0.9);
+        if (report.breakdown?.visa) {
+          report.breakdown.visa.reason = `${report.breakdown.visa.reason} (limited sources - verify before booking)`;
+        }
+      } else if (confidence === 'low') {
+        report.score = Math.min(Math.round(report.score * 0.75), 70);
+        if (report.overall === 'yes' && report.score < 70) {
+          report.overall = 'warning';
+        }
+        report.summary = `${report.summary} Verify visa requirements with official sources.`;
+        if (report.breakdown?.visa) {
+          report.breakdown.visa.status = 'issue';
+          report.breakdown.visa.reason = `${report.breakdown.visa.reason} (UNVERIFIED - requires confirmation)`;
+        }
+        if (report.visaDetails && (!report.visaDetails.sources || report.visaDetails.sources.length === 0)) {
+          report.visaDetails.type = 'requires_verification';
+        }
+      }
+
+      if (originalScore !== report.score) {
+        console.log(`[Background] Score adjusted: ${originalScore} → ${report.score} (confidence: ${confidence})`);
+      }
+
       await storage.updateTripFeasibility(tripId, report.overall, report);
-      console.log(`[Background] Feasibility: ${report.overall} (score: ${report.score}) in ${Date.now() - startTime}ms`);
+      console.log(`[Background] Feasibility: ${report.overall} (score: ${report.score})${ragVisaDetails ? ' [RAG visa]' : ''} in ${Date.now() - startTime}ms`);
     } else {
       // Stage 2: Just wait for transport recommendation
       transportRec = await transportRecPromise;
@@ -4629,8 +5242,10 @@ export async function registerRoutes(
   app.use("/api", fixOptionsRouter);
   app.use("/api", appliedPlansRouter);
   app.use("/api", versionsRouter);
+  app.use("/api/knowledge", knowledgeRouter);
 
-  app.post(api.trips.create.path, async (req, res) => {
+  // Trip creation - rate limited to 5/min per IP (expensive operation)
+  app.post(api.trips.create.path, tripCreationRateLimiter, async (req, res) => {
     try {
       const input = api.trips.create.input.parse(req.body);
 
@@ -4799,6 +5414,7 @@ export async function registerRoutes(
           travelStyle: trip.travelStyle,
           status: trip.status,
           feasibilityStatus: trip.feasibilityStatus,
+          destinationImageUrl: (trip as any).destinationImageUrl ?? null, // AI-fetched image URL
           createdAt: trip.createdAt,
           updatedAt: trip.updatedAt,
         };
@@ -5199,6 +5815,298 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================================
+  // STREAMING ITINERARY GENERATION (SSE)
+  // ============================================================================
+  // New endpoint that streams day-by-day generation for faster UX
+  // Days appear within 5-10 seconds instead of waiting 60+ seconds
+  // Rate limited: 10/min per IP, max 3 concurrent streams per IP
+
+  app.get('/api/trips/:id/itinerary/stream', ...sseProtection, async (req, res) => {
+    const tripId = parseInt(req.params.id);
+
+    if (isNaN(tripId)) {
+      return res.status(400).json({ error: 'Invalid trip ID' });
+    }
+
+    // Rollout flag check - allows gradual rollout via ?stream=1 or env var
+    if (!shouldUseStreaming(req)) {
+      return res.status(400).json({
+        error: 'Streaming not enabled',
+        hint: 'Add ?stream=1 to enable streaming or set STREAMING_ITINERARY_ENABLED=true'
+      });
+    }
+
+    // Create abort controller to handle client disconnect
+    const abortController = createStreamAbortController(req);
+
+    try {
+      const trip = await storage.getTrip(tripId);
+
+      if (!trip) {
+        return res.status(404).json({ error: 'Trip not found' });
+      }
+
+      // Check if trip has feasibility report (required before itinerary)
+      if (!trip.feasibilityReport) {
+        return res.status(400).json({
+          error: 'Feasibility check required before generating itinerary',
+          status: 'not_feasible'
+        });
+      }
+
+      // Parse dates to calculate number of days
+      const dates = trip.dates || '';
+      const dateMatch = dates.match(/(\d{4}-\d{2}-\d{2})\s*(?:to|→|-)\s*(\d{4}-\d{2}-\d{2})/);
+      let startDate = new Date().toISOString().split('T')[0];
+      let numDays = 7;
+
+      if (dateMatch) {
+        startDate = dateMatch[1];
+        const endDate = new Date(dateMatch[2]);
+        const start = new Date(dateMatch[1]);
+        numDays = Math.max(1, Math.ceil((endDate.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+      }
+
+      // Parse Last-Event-ID for resume support (browser auto-sends this on reconnect)
+      const lastEventDayIndex = parseLastEventId(req);
+      if (lastEventDayIndex >= 0) {
+        console.log(`[StreamAPI] Client reconnecting, last received day-${lastEventDayIndex}`);
+      }
+
+      // Check for existing partial itinerary (for resume)
+      const existingDays: ItineraryDay[] = [];
+      if (trip.itinerary && typeof trip.itinerary === 'object') {
+        const itineraryObj = trip.itinerary as any;
+        if (Array.isArray(itineraryObj.days) && itineraryObj.days.length > 0 && itineraryObj.days.length < numDays) {
+          // Partial itinerary exists - can resume
+          existingDays.push(...itineraryObj.days);
+          console.log(`[StreamAPI] Found ${existingDays.length}/${numDays} existing days for trip ${tripId}`);
+        } else if (Array.isArray(itineraryObj.days) && itineraryObj.days.length >= numDays) {
+          // Full itinerary exists - just stream it back quickly
+          console.log(`[StreamAPI] Full itinerary exists for trip ${tripId}, streaming cached version`);
+
+          setupSSEHeaders(res);
+          const sseCtx = createSSEContext(res);
+
+          try {
+            sendSSE(res, {
+              event: "meta",
+              data: {
+                tripId,
+                destination: trip.destination,
+                totalDays: itineraryObj.days.length,
+                startDate,
+                cached: true
+              }
+            }, "meta-0");
+
+            // Skip days that client already received (Last-Event-ID support)
+            const startFromDay = lastEventDayIndex >= 0 ? lastEventDayIndex + 1 : 0;
+            for (let i = startFromDay; i < itineraryObj.days.length; i++) {
+              sendSSE(res, {
+                event: "day",
+                data: { dayIndex: i, day: itineraryObj.days[i], cached: true }
+              }, `day-${i}`);
+            }
+
+            sendSSE(res, {
+              event: "done",
+              data: {
+                tripId,
+                totalDays: itineraryObj.days.length,
+                totalActivities: itineraryObj.days.reduce((sum: number, d: any) => sum + (d.activities?.length || 0), 0),
+                itinerary: itineraryObj,
+                cached: true
+              }
+            }, "done-0");
+          } finally {
+            cleanupSSEContext(sseCtx);
+          }
+
+          return res.end();
+        }
+      }
+
+      // ============ CONCURRENCY LOCK ============
+      // Prevents duplicate generation when multiple tabs open the same trip
+      const lockResult = await acquireItineraryLock(tripId);
+
+      if (!lockResult.acquired) {
+        // Another process is generating - stream cached days and notify client to wait
+        console.log(`[StreamAPI] Lock denied for trip ${tripId}: ${lockResult.message}`);
+
+        setupSSEHeaders(res);
+        const sseCtx = createSSEContext(res);
+
+        try {
+          sendSSE(res, {
+            event: "meta",
+            data: {
+              tripId,
+              destination: trip.destination,
+              totalDays: numDays,
+              startDate,
+              locked: true,
+              lockedBy: lockResult.existingOwner?.slice(0, 8),
+              message: "Another tab is generating this itinerary. Streaming cached days..."
+            }
+          }, "meta-0");
+
+          // Stream any existing days
+          if (existingDays.length > 0) {
+            const startFromDay = lastEventDayIndex >= 0 ? lastEventDayIndex + 1 : 0;
+            for (let i = startFromDay; i < existingDays.length; i++) {
+              sendSSE(res, {
+                event: "day",
+                data: { dayIndex: i, day: existingDays[i], cached: true }
+              }, `day-${i}`);
+            }
+          }
+
+          // Send a "waiting" event - client should poll or reconnect later
+          sendSSE(res, {
+            event: "progress",
+            data: {
+              currentDay: existingDays.length,
+              totalDays: numDays,
+              percent: Math.round((existingDays.length / numDays) * 100),
+              message: "Waiting for generation to complete in another tab...",
+              waiting: true
+            }
+          }, `progress-wait`);
+
+        } finally {
+          cleanupSSEContext(sseCtx);
+        }
+
+        return res.end();
+      }
+
+      // Lock acquired - we own generation
+      const lockOwner = lockResult.lockOwner!;
+      let lockCtx: LockContext | null = null;
+      let sseCtx: SSEContext | null = null;
+
+      // Create metrics for observability
+      const metrics: StreamMetrics = createStreamMetrics(tripId, trip.destination, lockOwner);
+      metrics.ip = req.ip || req.socket?.remoteAddress || 'unknown';
+      metrics.userAgent = req.headers['user-agent']?.slice(0, 100);
+      // Note: lockWaitMs would be set if we tracked time before lock acquisition
+      // For simplicity, we start metrics after lock, so lockWaitMs stays 0
+
+      try {
+        lockCtx = createLockContext(tripId, lockOwner);
+
+        // Build streaming input
+        const streamInput: StreamingItineraryInput = {
+          tripId,
+          destination: trip.destination,
+          startDate,
+          numDays,
+          travelStyle: trip.travelStyle || 'standard',
+          budget: trip.budget,
+          currency: trip.currency || 'USD',
+          groupSize: trip.groupSize || 2,
+          passport: trip.passport,
+          origin: trip.origin
+        };
+
+        console.log(`[StreamAPI] Starting streaming generation for trip ${tripId}: ${numDays} days in ${trip.destination} (lock: ${lockOwner.slice(0, 8)})`);
+
+        // Setup SSE stream with heartbeat support
+        setupSSEHeaders(res);
+        sseCtx = createSSEContext(res);
+
+        // Cleanup heartbeat and lock on abort
+        abortController.abort = (() => {
+          const originalAbort = abortController.abort;
+          return () => {
+            if (sseCtx) cleanupSSEContext(sseCtx);
+            if (lockCtx) cleanupLockContext(lockCtx);
+            // Release lock as 'idle' since generation was interrupted
+            releaseItineraryLock(tripId, lockOwner, "idle").catch(e =>
+              console.error(`[StreamAPI] Failed to release lock on abort:`, e)
+            );
+            originalAbort();
+          };
+        })();
+
+        // Callback to persist each day to DB
+        const onDayComplete = async (day: ItineraryDay, allDays: ItineraryDay[]) => {
+          try {
+            // Update trip with partial itinerary
+            await storage.updateTrip(tripId, {
+              itinerary: { days: allDays } as any,
+              status: allDays.length >= numDays ? 'complete' : 'generating'
+            });
+          } catch (e) {
+            console.error(`[StreamAPI] Failed to persist day ${day.day}:`, e);
+          }
+        };
+
+        // Start streaming (resume if partial exists) with abort controller and metrics
+        if (existingDays.length > 0) {
+          await resumeItineraryStream(res, openai!, aiModel, streamInput, existingDays, abortController, onDayComplete, metrics);
+        } else {
+          await streamItineraryGeneration(res, openai!, aiModel, streamInput, abortController, onDayComplete, metrics);
+        }
+
+        // Check if aborted before marking complete
+        if (abortController.aborted) {
+          console.log(`[StreamAPI] Generation aborted for trip ${tripId}, skipping completion update`);
+          return;
+        }
+
+        // Mark trip as complete and release lock
+        await storage.updateTrip(tripId, { status: 'complete' });
+        await releaseItineraryLock(tripId, lockOwner, "complete");
+
+        res.end();
+
+      } catch (error) {
+        console.error('[StreamAPI] Generation error:', error);
+
+        // Update metrics for error case
+        metrics.status = "error";
+
+        // Release lock as error
+        await releaseItineraryLock(tripId, lockOwner, "error").catch(e =>
+          console.error(`[StreamAPI] Failed to release lock on error:`, e)
+        );
+
+        // If headers not sent yet, send JSON error
+        if (!res.headersSent) {
+          return res.status(500).json({ error: 'Streaming generation failed' });
+        }
+
+        // If already streaming, send error event
+        sendSSE(res, {
+          event: "error",
+          data: { message: 'Generation failed', recoverable: false }
+        }, "error-0");
+        res.end();
+
+      } finally {
+        // Log stream summary for observability (one structured log per stream)
+        logStreamSummary(metrics);
+
+        // Cleanup SSE and lock contexts
+        if (sseCtx) cleanupSSEContext(sseCtx);
+        if (lockCtx) cleanupLockContext(lockCtx);
+      }
+
+    } catch (error) {
+      // This catches errors before lock was acquired (trip fetch, etc.)
+      console.error('[StreamAPI] Error:', error);
+
+      if (!res.headersSent) {
+        return res.status(500).json({ error: 'Streaming generation failed' });
+      }
+      res.end();
+    }
+  });
+
   // ============ DYNAMIC DESTINATION IMAGE API ============
   // AI-powered: Returns image URL with AI-suggested search terms for the destination
   app.get('/api/destination-image', async (req, res) => {
@@ -5244,6 +6152,21 @@ export async function registerRoutes(
     } catch (error) {
       console.error('[API] Analytics error:', error);
       res.status(500).json({ error: 'Failed to get analytics' });
+    }
+  });
+
+  // ============ RATE LIMIT METRICS ENDPOINT ============
+  // View current rate limiting status (admin-only in production)
+  app.get('/api/analytics/rate-limits', requireAdminToken, async (_req, res) => {
+    try {
+      const metrics = getRateLimitMetrics();
+      res.json({
+        timestamp: new Date().toISOString(),
+        ...metrics,
+      });
+    } catch (error) {
+      console.error('[API] Rate limit metrics error:', error);
+      res.status(500).json({ error: 'Failed to get rate limit metrics' });
     }
   });
 
