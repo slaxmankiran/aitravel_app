@@ -34,6 +34,7 @@ import changePlanRouter from "./routes/changePlan";
 import fixOptionsRouter from "./routes/fixOptions";
 import appliedPlansRouter from "./routes/appliedPlans";
 import versionsRouter from "./routes/versions";
+import { knowledgeRouter } from "./routes/knowledge";
 
 // ============ FEASIBILITY ANALYTICS ============
 // Decision-quality metrics for validation
@@ -4629,6 +4630,7 @@ export async function registerRoutes(
   app.use("/api", fixOptionsRouter);
   app.use("/api", appliedPlansRouter);
   app.use("/api", versionsRouter);
+  app.use("/api/knowledge", knowledgeRouter);
 
   app.post(api.trips.create.path, async (req, res) => {
     try {
