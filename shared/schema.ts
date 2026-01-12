@@ -101,6 +101,14 @@ export const trips = pgTable("trips", {
   feasibilityLastRunAt: timestamp("feasibility_last_run_at"), // When the last feasibility check started
   itinerary: jsonb("itinerary"),
 
+  // Itinerary Generation Lock (prevents duplicate generation from multiple tabs)
+  itineraryStatus: text("itinerary_status").default("idle"), // 'idle' | 'generating' | 'complete' | 'error'
+  itineraryLockedAt: timestamp("itinerary_locked_at"), // When generation lock was acquired
+  itineraryLockOwner: text("itinerary_lock_owner"), // UUID of the process that owns the lock
+
+  // Destination Image (fetched via AI during trip creation)
+  destinationImageUrl: text("destination_image_url"), // Cached image URL for My Trips cards
+
   // Template/Sharing
   isPublic: boolean("is_public").default(false),
   isTemplate: boolean("is_template").default(false),
@@ -599,7 +607,7 @@ export interface Alternative {
   city: string;
   flag: string;
   visaType: 'visa_free' | 'voa' | 'e_visa' | 'embassy';  // Internal enum for logic/analytics
-  visaStatus: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa';  // User-facing display
+  visaStatus: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa' | 'requires_verification';  // User-facing display
   visaLabel: string;
   processingDays: number;
   confidence: 'high' | 'medium' | 'low';
@@ -631,7 +639,7 @@ export interface VisaTiming {
 
 export interface VisaDetails {
   required: boolean;
-  type: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa' | 'not_allowed';
+  type: 'visa_free' | 'visa_on_arrival' | 'e_visa' | 'embassy_visa' | 'not_allowed' | 'requires_verification';
   name?: string;
   processingDays: {
     minimum: number;

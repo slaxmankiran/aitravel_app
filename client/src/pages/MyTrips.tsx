@@ -41,6 +41,7 @@ interface TripSummary {
   travelStyle: string | null;
   status: string | null;
   feasibilityStatus: string | null;
+  destinationImageUrl: string | null; // AI-fetched image URL (stored in DB)
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -495,9 +496,15 @@ const TRIP_CARD_IMAGES: Record<string, string> = {
   // Middle East
   'dubai': 'https://images.unsplash.com/photo-1512453979798-5ea266f8880c?w=1200&h=800&fit=crop',
   // India
-  'india': 'https://images.unsplash.com/photo-1524492412937-b28074a5d7da?w=1200&h=800&fit=crop',
+  'bengaluru': 'https://images.unsplash.com/photo-1596176530529-78163a4f7af2?w=1200&h=800&fit=crop', // Bangalore Palace
+  'bangalore': 'https://images.unsplash.com/photo-1596176530529-78163a4f7af2?w=1200&h=800&fit=crop',
   'mumbai': 'https://images.unsplash.com/photo-1529253355930-ddbe423a2ac7?w=1200&h=800&fit=crop',
   'delhi': 'https://images.unsplash.com/photo-1587474260584-136574528ed5?w=1200&h=800&fit=crop',
+  'india': 'https://images.unsplash.com/photo-1524492412937-b28074a5d7da?w=1200&h=800&fit=crop', // Taj Mahal for generic India
+  // Africa
+  'casablanca': 'https://images.unsplash.com/photo-1569383746724-6f1b882b8f46?w=1200&h=800&fit=crop', // Hassan II Mosque
+  'morocco': 'https://images.unsplash.com/photo-1489749798305-4fea3ae63d43?w=1200&h=800&fit=crop', // Marrakech
+  'marrakech': 'https://images.unsplash.com/photo-1489749798305-4fea3ae63d43?w=1200&h=800&fit=crop',
   // Korea
   'seoul': 'https://images.unsplash.com/photo-1538485399081-7191377e8241?w=1200&h=800&fit=crop',
 };
@@ -510,11 +517,15 @@ const TRIP_CARD_GRADIENTS: Record<string, string> = {
   default: 'linear-gradient(135deg, #1e293b 0%, #0f172a 50%, #020617 100%)',
 };
 
-// Get destination image URL - simple direct matching
-function getDestinationImage(destination: string): string {
-  const lower = destination.toLowerCase();
+// Get destination image URL - prioritizes stored image, then static dictionary
+function getDestinationImage(destination: string, storedImageUrl?: string | null): string {
+  // Priority 1: Use stored image from database (AI-fetched during trip creation)
+  if (storedImageUrl) {
+    return storedImageUrl;
+  }
 
-  // Try to match any key in the destination string
+  // Priority 2: Try to match static dictionary
+  const lower = destination.toLowerCase();
   for (const [key, url] of Object.entries(TRIP_CARD_IMAGES)) {
     if (lower.includes(key)) {
       return url;
@@ -658,7 +669,8 @@ function TripCard({ trip, index, onDelete }: { trip: TripSummary; index: number;
   const [, navigate] = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const imageUrl = getDestinationImage(trip.destination);
+  // Priority: stored AI image → static dictionary → gradient fallback
+  const imageUrl = getDestinationImage(trip.destination, trip.destinationImageUrl);
   const gradientFallback = getDestinationGradient(trip.destination);
   const { startDate, endDate, duration } = parseDatesString(trip.dates);
   const certainty = getCertaintyBadge(trip.certaintyLabel, trip.certaintyScore);
@@ -922,7 +934,8 @@ function TripListItem({ trip, index, onDelete }: { trip: TripSummary; index: num
   const [, navigate] = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const imageUrl = getDestinationImage(trip.destination);
+  // Priority: stored AI image → static dictionary → gradient fallback
+  const imageUrl = getDestinationImage(trip.destination, trip.destinationImageUrl);
   const gradientFallback = getDestinationGradient(trip.destination);
   const { startDate, endDate, duration } = parseDatesString(trip.dates);
   const certainty = getCertaintyBadge(trip.certaintyLabel, trip.certaintyScore);

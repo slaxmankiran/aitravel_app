@@ -25,7 +25,10 @@ import {
   ChevronDown,
   ChevronUp,
   FileCheck,
-  Plane
+  Plane,
+  ExternalLink,
+  BadgeCheck,
+  Info
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TripResponse, VisaDetails } from "@shared/schema";
@@ -50,6 +53,8 @@ function getVisaBadgeStyle(visaType?: VisaDetails['type']) {
       return { bg: 'bg-blue-500/20', text: 'text-blue-300', border: 'border-blue-500/30' };
     case 'e_visa':
       return { bg: 'bg-amber-500/20', text: 'text-amber-300', border: 'border-amber-500/30' };
+    case 'requires_verification':
+      return { bg: 'bg-orange-500/20', text: 'text-orange-300', border: 'border-orange-500/30' };
     case 'embassy_visa':
     case 'not_allowed':
     default:
@@ -65,6 +70,7 @@ function getVisaLabel(visaType?: VisaDetails['type'], name?: string): string {
     case 'visa_on_arrival': return 'Visa on Arrival';
     case 'e_visa': return 'e-Visa';
     case 'embassy_visa': return 'Embassy Visa';
+    case 'requires_verification': return 'Requires Verification';
     case 'not_allowed': return 'Not Allowed';
     default: return 'Unknown';
   }
@@ -88,6 +94,31 @@ function getCertaintyColor(score: number) {
   if (score >= 70) return { bg: 'bg-emerald-500/20', text: 'text-emerald-400', ring: 'ring-emerald-500/30' };
   if (score >= 40) return { bg: 'bg-amber-500/20', text: 'text-amber-400', ring: 'ring-amber-500/30' };
   return { bg: 'bg-red-500/20', text: 'text-red-400', ring: 'ring-red-500/30' };
+}
+
+// Get trust level styling for citations
+function getTrustLevelStyle(level?: 'high' | 'medium' | 'low') {
+  switch (level) {
+    case 'high':
+      return { bg: 'bg-emerald-500/10', text: 'text-emerald-400', label: 'Official' };
+    case 'medium':
+      return { bg: 'bg-blue-500/10', text: 'text-blue-400', label: 'Verified' };
+    case 'low':
+    default:
+      return { bg: 'bg-white/5', text: 'text-white/50', label: 'Guide' };
+  }
+}
+
+// Infer trust level from source name if not provided
+function inferTrustLevel(sourceName: string): 'high' | 'medium' | 'low' {
+  const lower = sourceName.toLowerCase();
+  if (lower.includes('embassy') || lower.includes('immigration') || lower.includes('gov') || lower.includes('consulate')) {
+    return 'high';
+  }
+  if (lower.includes('travel') || lower.includes('tourism') || lower.includes('organization')) {
+    return 'medium';
+  }
+  return 'low';
 }
 
 /**
@@ -116,8 +147,41 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
     return null;
   }
 
+  // Check if we need to show verification banner
+  const needsVerification = visaDetails.type === 'requires_verification' ||
+    visaDetails.confidenceLevel === 'low' ||
+    (!visaDetails.sources || visaDetails.sources.length === 0);
+
   return (
     <div className={`sticky top-[56px] z-40 ${className}`}>
+      {/* Verification Banner - shown for unverified corridors */}
+      {needsVerification && (
+        <div className="max-w-7xl mx-auto px-4 md:px-6 pt-2">
+          <div className="bg-orange-500/10 border border-orange-500/20 rounded-lg px-4 py-2.5 mb-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-orange-400 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-orange-200 font-medium">
+                  Visa information requires verification
+                </p>
+                <p className="text-xs text-orange-200/70 mt-0.5">
+                  This corridor is not in our verified database. Please confirm visa requirements with the{' '}
+                  <a
+                    href={`https://www.google.com/search?q=${encodeURIComponent(trip.destination || '')}+embassy+visa+requirements`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-orange-100"
+                  >
+                    official embassy
+                  </a>{' '}
+                  before booking.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Container matches content grid width */}
       <div className="max-w-7xl mx-auto px-4 md:px-6 py-2">
         {/* Thin facts strip - lighter than content cards, same width as grid */}
@@ -133,7 +197,16 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
                   <span>{processingTime}</span>
                 </>
               )}
-              {isVerified && (
+              {visaDetails.sources && visaDetails.sources.length > 0 && (
+                <>
+                  <span className="text-white/30 mx-1">·</span>
+                  <span className="text-emerald-400/80 flex items-center gap-1">
+                    <BadgeCheck className="w-3 h-3" />
+                    {visaDetails.sources.length} sources
+                  </span>
+                </>
+              )}
+              {isVerified && !visaDetails.sources?.length && (
                 <>
                   <span className="text-white/30 mx-1">·</span>
                   <span className="text-emerald-400/80">Verified</span>
@@ -276,6 +349,86 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
                   </div>
                 </div>
               </div>
+
+              {/* Sources - RAG Citations (top 3 by trust, hide Guide when Official exists) */}
+              {visaDetails.sources && visaDetails.sources.length > 0 && (() => {
+                // Sort sources by trust level (high > medium > low)
+                const sourcesWithTrust = visaDetails.sources.map(source => ({
+                  ...source,
+                  trustLevel: inferTrustLevel(source.title)
+                }));
+
+                const trustOrder = { high: 0, medium: 1, low: 2 };
+                sourcesWithTrust.sort((a, b) => trustOrder[a.trustLevel] - trustOrder[b.trustLevel]);
+
+                // Check if we have official (high) sources
+                const hasOfficialSources = sourcesWithTrust.some(s => s.trustLevel === 'high');
+
+                // Filter: hide Guide (low) sources when Official (high) exists
+                const filteredSources = hasOfficialSources
+                  ? sourcesWithTrust.filter(s => s.trustLevel !== 'low')
+                  : sourcesWithTrust;
+
+                // Take top 3
+                const displaySources = filteredSources.slice(0, 3);
+
+                return (
+                  <div className="mt-4 bg-white/5 rounded-lg p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <BadgeCheck className="w-4 h-4 text-primary" />
+                      <h4 className="text-sm font-medium text-white">Verified Sources</h4>
+                      <span className="text-xs text-white/40 ml-auto">
+                        {visaDetails.confidenceLevel === 'high' ? 'High confidence' :
+                         visaDetails.confidenceLevel === 'medium' ? 'Medium confidence' : 'Check official sources'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {displaySources.map((source, i) => {
+                        const trustStyle = getTrustLevelStyle(source.trustLevel);
+                        return (
+                          <a
+                            key={i}
+                            href={source.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`flex items-start gap-2 p-2 rounded-md ${trustStyle.bg} hover:bg-white/10 transition-colors group`}
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`text-[10px] font-medium uppercase tracking-wider ${trustStyle.text}`}>
+                                  {trustStyle.label}
+                                </span>
+                              </div>
+                              <div className="text-sm text-white/80 truncate group-hover:text-white">
+                                {source.title}
+                              </div>
+                            </div>
+                            <ExternalLink className="w-3.5 h-3.5 text-white/30 group-hover:text-white/60 shrink-0 mt-1" />
+                          </a>
+                        );
+                      })}
+                    </div>
+                    {visaDetails.lastVerified && (
+                      <div className="mt-3 flex items-center gap-1.5 text-xs text-white/40">
+                        <Info className="w-3 h-3" />
+                        <span>Last verified: {visaDetails.lastVerified}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Confidence warning for low confidence lookups */}
+              {visaDetails.confidenceLevel === 'low' && (
+                <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                    <div className="text-sm text-amber-200">
+                      <strong>Limited data available.</strong> Please verify visa requirements with the official embassy before making travel plans.
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Timing warning */}
               {visaDetails.timing && visaDetails.timing.urgency !== 'ok' && (

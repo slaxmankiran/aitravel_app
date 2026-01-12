@@ -3,6 +3,11 @@
  *
  * Endpoints for searching the knowledge base using vector similarity
  * to provide cited visa/travel information.
+ *
+ * Rate limits:
+ * - Search: 60/min per IP
+ * - Visa lookup: 30/min per IP
+ * - Ingest: Admin-only in production
  */
 
 import { Router } from "express";
@@ -14,14 +19,22 @@ import {
   knowledgeSources,
   EMBEDDING_DIM,
   validateEmbeddingDimension,
+  computeVisaConfidence,
   type KnowledgeSearchResult,
   type KnowledgeCitation,
   type KnowledgeQueryParams,
   type KnowledgeQueryResponse,
   type NewKnowledgeDocument,
   type NewKnowledgeSource,
+  type VisaFacts,
+  type VisaCitation,
 } from "../../shared/knowledgeSchema";
 import { generateEmbedding, getEmbeddingServiceStatus } from "../services/embeddings";
+import {
+  knowledgeSearchRateLimiter,
+  visaLookupRateLimiter,
+  productionAdminOnly,
+} from "../middleware/rateLimiter";
 
 export const knowledgeRouter = Router();
 
@@ -34,8 +47,9 @@ export const knowledgeRouter = Router();
  *
  * Semantic search over the knowledge base.
  * Returns relevant documents with similarity scores and citations.
+ * Rate limited: 60/min per IP
  */
-knowledgeRouter.post("/search", async (req, res) => {
+knowledgeRouter.post("/search", knowledgeSearchRateLimiter, async (req, res) => {
   try {
     const {
       query,
@@ -146,8 +160,9 @@ knowledgeRouter.post("/search", async (req, res) => {
  * POST /api/knowledge/ingest
  *
  * Add a document to the knowledge base with auto-generated embedding.
+ * PROTECTED: Requires X-Admin-Token header in production.
  */
-knowledgeRouter.post("/ingest", async (req, res) => {
+knowledgeRouter.post("/ingest", productionAdminOnly, async (req, res) => {
   try {
     const {
       sourceId,
@@ -209,8 +224,9 @@ knowledgeRouter.post("/ingest", async (req, res) => {
  * POST /api/knowledge/ingest/batch
  *
  * Add multiple documents to the knowledge base.
+ * PROTECTED: Requires X-Admin-Token header in production.
  */
-knowledgeRouter.post("/ingest/batch", async (req, res) => {
+knowledgeRouter.post("/ingest/batch", productionAdminOnly, async (req, res) => {
   try {
     const { documents } = req.body as {
       documents: Array<{
@@ -336,8 +352,9 @@ knowledgeRouter.get("/status", async (req, res) => {
  * DELETE /api/knowledge/documents/:sourceId
  *
  * Delete all documents for a given source.
+ * PROTECTED: Requires X-Admin-Token header in production.
  */
-knowledgeRouter.delete("/documents/:sourceId", async (req, res) => {
+knowledgeRouter.delete("/documents/:sourceId", productionAdminOnly, async (req, res) => {
   try {
     const { sourceId } = req.params;
 
@@ -432,26 +449,215 @@ knowledgeRouter.get("/documents", async (req, res) => {
 // ============================================================================
 
 /**
+ * Parse visa status from content text.
+ * Handles negations like "No visa on arrival" correctly.
+ * Priority: visa_free > embassy_visa > evisa > visa_on_arrival
+ */
+function parseVisaStatus(content: string): VisaFacts["visaStatus"] {
+  const lower = content.toLowerCase();
+
+  // Check for visa-free first - clear indicator
+  if (
+    (lower.includes("visa-free") || lower.includes("visa free")) &&
+    !lower.includes("not visa-free") &&
+    !lower.includes("not visa free")
+  ) {
+    return "visa_free";
+  }
+
+  // Check for "no visa required" (different from visa_free but means the same)
+  if (lower.includes("no visa required") || lower.includes("visa not required")) {
+    return "visa_free";
+  }
+
+  // Check for negations first - if VOA/e-visa explicitly not available, it's embassy visa
+  const explicitNoVoa =
+    lower.includes("no visa on arrival") ||
+    lower.includes("no voa available");
+
+  const explicitNoEvisa =
+    lower.includes("no e-visa") ||
+    lower.includes("no evisa available") ||
+    lower.includes("or e-visa available"); // "No visa on arrival or e-visa available"
+
+  // If both VOA and e-visa are explicitly unavailable, it's embassy visa
+  if (explicitNoVoa && explicitNoEvisa) {
+    return "embassy_visa";
+  }
+
+  // Check for VOA availability - look for positive indicators
+  // Pattern: "can obtain a visa on arrival", "VOA", "visa on arrival" with details
+  const hasVoaInfo =
+    lower.includes("visa on arrival") ||
+    lower.includes("voa") ||
+    lower.includes("on arrival");
+
+  const voaPositive =
+    lower.includes("can obtain a visa on arrival") ||
+    lower.includes("can get a visa on arrival") ||
+    lower.includes("visa on arrival available") ||
+    lower.includes("voa available") ||
+    (hasVoaInfo && !explicitNoVoa && (
+      lower.includes("voa allows") ||
+      lower.includes("voa costs") ||
+      lower.includes("voa fee") ||
+      lower.match(/voa[:\s]+(?:up to|allows|valid|fee|\$|usd)/i) ||
+      lower.match(/visa on arrival[:\s]+(?:up to|allows|valid|fee|\$|usd|available)/i)
+    ));
+
+  if (voaPositive && !explicitNoVoa) {
+    return "visa_on_arrival";
+  }
+
+  // Check for e-visa availability
+  const evisaPositive =
+    lower.includes("e-visa available") ||
+    lower.includes("evisa available") ||
+    lower.includes("apply for an e-visa") ||
+    lower.includes("apply for e-visa") ||
+    lower.includes("electronic visa available") ||
+    lower.includes("e-visa:") ||
+    lower.match(/e-?visa[:\s]+(?:single|valid|fee|\$|usd|processing)/i);
+
+  if (evisaPositive && !explicitNoEvisa) {
+    return "evisa";
+  }
+
+  // Fall back: if visa is required but no easy option found
+  if (
+    lower.includes("require a visa") ||
+    lower.includes("requires a visa") ||
+    lower.includes("visa required") ||
+    lower.includes("must obtain a visa") ||
+    lower.includes("need a visa") ||
+    lower.includes("tourist visa") ||
+    lower.includes("apply at") ||
+    lower.includes("embassy")
+  ) {
+    return "embassy_visa";
+  }
+
+  return "unknown";
+}
+
+/**
+ * Extract numeric values from content (processing days, max stay, etc.)
+ */
+function extractNumbers(content: string, patterns: RegExp[]): number | undefined {
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      return parseInt(match[1], 10);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract fees from content.
+ */
+function extractFees(content: string): string | undefined {
+  const patterns = [
+    /costs?\s*(?:approximately\s*)?(\$\d+[\d,]*(?:\s*USD)?)/i,
+    /fee[s]?\s*(?:is|are|of)?\s*(?:approximately\s*)?(\$\d+[\d,]*(?:\s*USD)?)/i,
+    /(\$\d+[\d,]*(?:\s*USD)?)\s*(?:fee|cost)/i,
+    /free\s*(?:of\s*charge)?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = content.match(pattern);
+    if (match) {
+      if (match[0].toLowerCase().includes("free")) return "Free";
+      if (match[1]) return match[1];
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract required documents from content.
+ */
+function extractRequiredDocs(content: string): string[] {
+  const docs: string[] = [];
+  const lower = content.toLowerCase();
+
+  if (lower.includes("passport") && lower.includes("valid")) {
+    docs.push("Valid passport (6+ months validity)");
+  }
+  if (lower.includes("proof of onward") || lower.includes("return ticket")) {
+    docs.push("Proof of onward/return travel");
+  }
+  if (lower.includes("proof of accommodation") || lower.includes("hotel booking")) {
+    docs.push("Proof of accommodation");
+  }
+  if (lower.includes("passport photo") || lower.includes("photo")) {
+    docs.push("Passport-size photos");
+  }
+  if (lower.includes("bank statement") || lower.includes("proof of funds")) {
+    docs.push("Proof of sufficient funds");
+  }
+  if (lower.includes("travel insurance")) {
+    docs.push("Travel insurance");
+  }
+
+  return docs;
+}
+
+/**
+ * Determine trust level from source name.
+ */
+function determineTrustLevel(sourceName: string | null): "high" | "medium" | "low" {
+  if (!sourceName) return "low";
+  const lower = sourceName.toLowerCase();
+
+  // High trust: Official government sources
+  if (
+    lower.includes("embassy") ||
+    lower.includes("consulate") ||
+    lower.includes("immigration") ||
+    lower.includes("state department") ||
+    lower.includes("foreign affairs") ||
+    lower.includes("timatic") ||
+    lower.includes("gov")
+  ) {
+    return "high";
+  }
+
+  // Medium trust: Known travel databases
+  if (
+    lower.includes("travel database") ||
+    lower.includes("visa guide") ||
+    lower.includes("lonely planet") ||
+    lower.includes("tripadvisor")
+  ) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+/**
  * POST /api/knowledge/visa-lookup
  *
- * Specialized endpoint for visa information lookup.
+ * Returns VisaFacts - the single source of truth for visa information.
  * Combines vector search with country-based filtering.
+ * Rate limited: 30/min per IP
  */
-knowledgeRouter.post("/visa-lookup", async (req, res) => {
+knowledgeRouter.post("/visa-lookup", visaLookupRateLimiter, async (req, res) => {
   try {
-    const { question, passport, destination } = req.body as {
-      question: string;
+    const { passport, destination } = req.body as {
       passport: string;
       destination: string;
     };
 
-    if (!question || !passport || !destination) {
+    if (!passport || !destination) {
       return res.status(400).json({
-        error: "Missing required fields: question, passport, destination",
+        error: "Missing required fields: passport, destination",
       });
     }
 
-    // Generate embedding for the question
+    // Generate embedding for a generic visa query
+    const question = `visa requirements for ${passport} passport holders traveling to ${destination}`;
     const embeddingResult = await generateEmbedding(question);
     const queryEmbedding = embeddingResult.embedding;
 
@@ -468,6 +674,7 @@ knowledgeRouter.post("/visa-lookup", async (req, res) => {
         sourceUrl: knowledgeDocuments.sourceUrl,
         sourceName: knowledgeDocuments.sourceName,
         lastVerified: knowledgeDocuments.lastVerified,
+        metadata: knowledgeDocuments.metadata,
         similarity,
       })
       .from(knowledgeDocuments)
@@ -499,33 +706,116 @@ knowledgeRouter.post("/visa-lookup", async (req, res) => {
       .orderBy(desc(similarity))
       .limit(5);
 
-    // Format response
-    const citations: KnowledgeCitation[] = results
-      .filter((r: typeof results[number]) => r.similarity >= 0.6)
-      .map((r: typeof results[number]) => ({
-        sourceId: r.sourceId,
-        sourceName: r.sourceName || "Travel Database",
-        sourceUrl: r.sourceUrl,
-        title: r.title,
-        snippet: r.content.slice(0, 300) + (r.content.length > 300 ? "..." : ""),
-        lastVerified: r.lastVerified,
-      }));
+    // Filter by minimum similarity
+    const relevantResults = results.filter((r: typeof results[number]) => r.similarity >= 0.5);
 
-    // Combine content for context
-    const context = results
-      .filter((r: typeof results[number]) => r.similarity >= 0.6)
-      .map((r: typeof results[number]) => `[${r.title}]\n${r.content}`)
-      .join("\n\n---\n\n");
+    // Build VisaCitations
+    const citations: VisaCitation[] = relevantResults.map((r: typeof results[number]) => ({
+      title: r.title,
+      url: r.sourceUrl,
+      sourceName: r.sourceName || "Travel Database",
+      trustLevel: determineTrustLevel(r.sourceName),
+      updatedAt: r.lastVerified?.toISOString().slice(0, 10),
+    }));
 
-    res.json({
-      question,
+    // Combine all content for parsing
+    const combinedContent = relevantResults
+      .map((r: typeof results[number]) => r.content)
+      .join("\n\n");
+
+    // No citations found
+    if (citations.length === 0) {
+      console.warn(`[Knowledge] Low confidence visa lookup: ${passport} -> ${destination}, no citations found`);
+
+      const emptyFacts: VisaFacts = {
+        summary: `No verified visa information found for ${passport} passport holders traveling to ${destination}. Please check official embassy sources.`,
+        visaStatus: "unknown",
+        citations: [],
+        confidence: "low",
+        passport,
+        destination,
+        hasCitations: false,
+        warning: "No information found in knowledge base. Please verify with official sources.",
+      };
+
+      return res.json(emptyFacts);
+    }
+
+    // Extract structured data from content
+    const visaStatus = parseVisaStatus(combinedContent);
+    const feesText = extractFees(combinedContent);
+    const requiredDocs = extractRequiredDocs(combinedContent);
+
+    // Extract processing days
+    const processingPatterns = [
+      /processing[^.]*?(\d+)\s*(?:to\s*\d+\s*)?days/i,
+      /(\d+)\s*(?:to\s*\d+\s*)?(?:business\s*)?days?\s*(?:to\s*)?process/i,
+    ];
+    const processingDaysMax = extractNumbers(combinedContent, [
+      /processing[^.]*?\d+\s*to\s*(\d+)\s*days/i,
+      /(\d+)\s*days?\s*maximum/i,
+    ]) || extractNumbers(combinedContent, processingPatterns);
+
+    const processingDaysMin = extractNumbers(combinedContent, [
+      /processing[^.]*?(\d+)\s*to\s*\d+\s*days/i,
+      /(\d+)\s*days?\s*minimum/i,
+    ]);
+
+    // Extract max stay
+    const maxStayDays = extractNumbers(combinedContent, [
+      /stay[s]?\s*(?:up\s*to\s*)?(\d+)\s*days/i,
+      /(\d+)\s*days?\s*(?:maximum\s*)?stay/i,
+      /valid\s*(?:for\s*)?(\d+)\s*days/i,
+    ]);
+
+    // Build summary
+    let summary = "";
+    if (visaStatus === "visa_free") {
+      summary = `${passport} passport holders can visit ${destination} visa-free`;
+      if (maxStayDays) summary += ` for up to ${maxStayDays} days`;
+      summary += ".";
+    } else if (visaStatus === "visa_on_arrival") {
+      summary = `${passport} passport holders can obtain a Visa on Arrival for ${destination}`;
+      if (maxStayDays) summary += ` for stays up to ${maxStayDays} days`;
+      if (feesText) summary += `. Fee: ${feesText}`;
+      summary += ".";
+    } else if (visaStatus === "evisa") {
+      summary = `${passport} passport holders can apply for an e-Visa to visit ${destination}`;
+      if (processingDaysMax) summary += `. Processing: ${processingDaysMin || 1}-${processingDaysMax} days`;
+      summary += ".";
+    } else if (visaStatus === "embassy_visa") {
+      summary = `${passport} passport holders require a visa to visit ${destination}`;
+      if (processingDaysMax) summary += `. Processing time: ${processingDaysMin || 5}-${processingDaysMax} days`;
+      summary += ".";
+    } else {
+      summary = `Visa requirements for ${passport} passport holders visiting ${destination}. Please check official sources.`;
+    }
+
+    // Compute confidence
+    const confidence = computeVisaConfidence(citations);
+
+    // Log low confidence lookups
+    if (confidence === "low") {
+      console.warn(`[Knowledge] Low confidence visa lookup: ${passport} -> ${destination}, citations: ${citations.length}`);
+    }
+
+    const visaFacts: VisaFacts = {
+      summary,
+      visaStatus,
+      maxStayDays,
+      processingDaysMin,
+      processingDaysMax,
+      feesText,
+      requiredDocs: requiredDocs.length > 0 ? requiredDocs : undefined,
+      citations,
+      confidence,
       passport,
       destination,
-      context,
-      citations,
-      resultCount: citations.length,
-      embeddingSource: embeddingResult.source,
-    });
+      hasCitations: true,
+      warning: confidence === "low" ? "Limited data available. Please verify with official sources." : undefined,
+    };
+
+    res.json(visaFacts);
   } catch (error) {
     console.error("[Knowledge] Visa lookup error:", error);
     res.status(500).json({
