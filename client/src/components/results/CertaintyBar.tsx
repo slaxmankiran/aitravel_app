@@ -90,128 +90,78 @@ function getCertaintyColor(score: number) {
   return { bg: 'bg-red-500/20', text: 'text-red-400', ring: 'ring-red-500/30' };
 }
 
+/**
+ * CertaintyBar - Thin facts strip showing visa info only.
+ * NO numeric score, NO badges - just plain text facts.
+ * Score is shown ONLY in DecisionStack.
+ */
 function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certaintyHistory = [] }: CertaintyBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const feasibility = trip.feasibilityReport as any;
-  const score = Number(feasibility?.score) || 0;
   const visaDetails = feasibility?.visaDetails as VisaDetails | undefined;
   const overall = feasibility?.overall;
 
-  const certaintyColor = getCertaintyColor(score);
-  const visaStyle = getVisaBadgeStyle(visaDetails?.type);
   const visaLabel = getVisaLabel(visaDetails?.type, visaDetails?.name);
   const processingTime = getProcessingTime(visaDetails?.processingDays);
 
-  // Determine status chip
+  // Status text (not badge)
   const isVerified = overall === 'yes';
-  const hasWarnings = overall === 'warning';
 
   // Build certainty breakdown (memoized for performance)
   const breakdown = useMemo(() => buildCertaintyBreakdown(trip), [trip]);
 
+  // If no visa details, don't show the bar
+  if (!visaDetails) {
+    return null;
+  }
+
   return (
     <div className={`sticky top-[56px] z-40 ${className}`}>
-      {/* Main bar */}
-      <div className="bg-slate-800/95 backdrop-blur-sm border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-2.5">
+      {/* Container matches content grid width */}
+      <div className="max-w-7xl mx-auto px-4 md:px-6 py-2">
+        {/* Thin facts strip - lighter than content cards, same width as grid */}
+        <div className="bg-slate-950/25 backdrop-blur-md border border-white/[0.04] rounded-lg px-4 py-2">
           <div className="flex items-center justify-between gap-4">
-            {/* Left: Certainty + Visa info */}
-            <div className="flex items-center gap-4 md:gap-6 overflow-x-auto scrollbar-hide">
-              {/* Certainty Score */}
-              <button
-                onClick={onExplainCertainty}
-                disabled={!onExplainCertainty}
-                className={`flex items-center gap-2.5 shrink-0 group ${onExplainCertainty ? "cursor-pointer" : "cursor-default opacity-80"}`}
-                aria-label="Why this score?"
-              >
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ring-2 transition-all ${onExplainCertainty ? "group-hover:ring-white/30" : ""} ${certaintyColor.bg} ${certaintyColor.text} ${certaintyColor.ring}`}>
-                  {score}
-                </div>
-                <div className="hidden sm:block text-left">
-                  <p className="text-[10px] text-white/40 uppercase tracking-wider">Certainty</p>
-                  <div className="flex items-center gap-1.5">
-                    <p className={`text-sm font-medium ${certaintyColor.text}`}>
-                      {score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low'}
-                    </p>
-                    {onExplainCertainty && (
-                      <span className="text-[10px] text-white/40 group-hover:text-white/60 transition-colors">
-                        Why?
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </button>
-
-              {/* Divider */}
-              <div className="w-px h-8 bg-white/10 hidden sm:block" />
-
-              {/* Visa Badge */}
-              {visaDetails && (
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2.5 py-1 rounded-md text-xs font-medium border ${visaStyle.bg} ${visaStyle.text} ${visaStyle.border}`}>
-                    {visaLabel}
-                  </span>
-                </div>
-              )}
-
-              {/* Processing Time */}
+            {/* Left: Facts as inline text with separators */}
+            <div className="flex items-center gap-1 text-xs text-white/50 overflow-x-auto scrollbar-hide">
+              <span className="text-white/70 font-medium">Visa:</span>
+              <span>{visaLabel}</span>
               {processingTime && (
-                <div className="flex items-center gap-1.5 text-white/60 shrink-0">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span className="text-xs">{processingTime}</span>
-                </div>
+                <>
+                  <span className="text-white/30 mx-1">·</span>
+                  <span>{processingTime}</span>
+                </>
               )}
-
-              {/* Timing Urgency */}
-              {visaDetails?.timing?.urgency && visaDetails.timing.urgency !== 'ok' && (
-                <div className="flex items-center gap-1.5 text-white/60 shrink-0 hidden md:flex">
-                  <Calendar className="w-3.5 h-3.5" />
-                  <span className="text-xs">{visaDetails.timing.recommendation}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Right: Status + Expand */}
-            <div className="flex items-center gap-3 shrink-0">
-              {/* Status chip */}
               {isVerified && (
-                <span className="flex items-center gap-1.5 text-emerald-400 text-xs font-medium bg-emerald-500/10 px-2.5 py-1 rounded-full">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Verified</span>
-                </span>
-              )}
-              {hasWarnings && (
-                <span className="flex items-center gap-1.5 text-amber-400 text-xs font-medium bg-amber-500/10 px-2.5 py-1 rounded-full">
-                  <ShieldAlert className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Risks noted</span>
-                </span>
-              )}
-
-              {/* Expand button */}
-              {visaDetails && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setIsExpanded(!isExpanded)}
-                  className="text-white/60 hover:text-white hover:bg-white/10 h-8 px-2"
-                  aria-expanded={isExpanded}
-                  aria-controls="certaintybar-expanded"
-                >
-                  <span className="text-xs mr-1 hidden sm:inline">Details</span>
-                  {isExpanded ? (
-                    <ChevronUp className="w-4 h-4" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4" />
-                  )}
-                </Button>
+                <>
+                  <span className="text-white/30 mx-1">·</span>
+                  <span className="text-emerald-400/80">Verified</span>
+                </>
               )}
             </div>
+
+            {/* Right: Details button only */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="text-white/50 hover:text-white/70 hover:bg-white/5 h-7 px-2 text-xs"
+              aria-expanded={isExpanded}
+              aria-controls="certaintybar-expanded"
+            >
+              Details
+              {isExpanded ? (
+                <ChevronUp className="w-3.5 h-3.5 ml-1" />
+              ) : (
+                <ChevronDown className="w-3.5 h-3.5 ml-1" />
+              )}
+            </Button>
           </div>
         </div>
       </div>
 
-      {/* Expanded visa details - solid bg to properly overlay content when sticky */}
+      {/* Expanded visa details - matches facts strip styling */}
       <AnimatePresence>
         {isExpanded && visaDetails && (
           <motion.div
@@ -220,9 +170,12 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="overflow-hidden bg-slate-900 border-b border-white/10 shadow-xl"
+            className="overflow-hidden"
           >
-            <div className="max-w-7xl mx-auto px-4 md:px-6 py-4">
+            {/* Same container as facts strip */}
+            <div className="max-w-7xl mx-auto px-4 md:px-6 pb-2">
+              {/* Same glass styling as facts strip, continuous feel */}
+              <div className="bg-slate-950/25 backdrop-blur-md border border-white/[0.04] border-t-0 rounded-b-lg px-4 py-4 -mt-1">
               {/* Certainty Timeline - shows evolution across changes */}
               {certaintyHistory.length > 1 && (
                 <div className="mb-4 p-3 bg-white/5 rounded-lg">
@@ -335,6 +288,7 @@ function CertaintyBarComponent({ trip, className = '', onExplainCertainty, certa
                   </div>
                 </div>
               )}
+              </div>
             </div>
           </motion.div>
         )}

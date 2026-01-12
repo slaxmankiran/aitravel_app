@@ -26,6 +26,8 @@ interface DayCardListProps {
   activeActivityKey: string | null;
   allExpanded?: boolean;
   showDistances?: boolean;
+  /** Destination for activity images */
+  destination?: string;
   onDayClick: (dayIndex: number) => void;
   onActivityClick: (activityKey: string) => void;
   onActivityHover: (activityKey: string | null) => void;
@@ -45,6 +47,7 @@ function DayCardListComponent({
   activeActivityKey,
   allExpanded = true,
   showDistances = false,
+  destination,
   onDayClick,
   onActivityClick,
   onActivityHover,
@@ -116,13 +119,14 @@ function DayCardListComponent({
 
   // Track activity click
   const handleActivityClick = useCallback((activityKey: string) => {
-    // Parse dayIndex from key (format: "dayNum-activityIdx")
-    const [dayStr] = activityKey.split('-');
-    const dayIndex = parseInt(dayStr, 10) - 1;
+    // Parse from key format: "dayNum-activityNum" (both 1-based)
+    // getSimpleActivityKey creates: `${dayNum}-${activityIndex + 1}`
+    const [dayStr, activityStr] = activityKey.split('-');
+    const dayIndex = parseInt(dayStr, 10) - 1; // Convert 1-based day to 0-based index
+    const activityIdx = parseInt(activityStr, 10) - 1; // Convert 1-based to 0-based
 
-    // Get time slot from the activity
+    // Get activity details for analytics
     const day = itinerary.days[dayIndex];
-    const activityIdx = parseInt(activityKey.split('-')[1], 10) - 1;
     const activity = day?.activities[activityIdx];
 
     trackTripEvent(
@@ -199,6 +203,7 @@ function DayCardListComponent({
             previousDayCity={previousDayCity}
             forceExpanded={allExpanded}
             showDistances={showDistances}
+            destination={destination}
             onDayClick={handleDayClick}
             onActivityClick={handleActivityClick}
             onActivityHover={handleActivityHover}

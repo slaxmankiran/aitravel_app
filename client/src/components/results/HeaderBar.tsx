@@ -9,38 +9,18 @@
 
 import React from "react";
 import { Link } from "wouter";
-import { ArrowLeft, Share2, Download, Pencil, Users, Wallet, Calendar } from "lucide-react";
+import { ArrowLeft, Share2, Download, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TripResponse } from "@shared/schema";
-
-// Currency symbol mapping
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥', INR: '₹', AUD: 'A$', CAD: 'C$',
-  CHF: 'CHF', KRW: '₩', SGD: 'S$', HKD: 'HK$', NZD: 'NZ$', SEK: 'kr', NOK: 'kr', DKK: 'kr',
-  MXN: '$', BRL: 'R$', AED: 'د.إ', SAR: '﷼', THB: '฿', MYR: 'RM', IDR: 'Rp', PHP: '₱',
-  ZAR: 'R', TRY: '₺', RUB: '₽', PLN: 'zł', CZK: 'Kč', HUF: 'Ft'
-};
-
-function getCurrencySymbol(currency?: string): string {
-  return CURRENCY_SYMBOLS[currency || 'USD'] || currency || '$';
-}
 
 interface HeaderBarProps {
   trip: TripResponse;
   onShare?: () => void;
   onExport?: () => void;
+  isDemo?: boolean;
 }
 
-function HeaderBarComponent({ trip, onShare, onExport }: HeaderBarProps) {
-  const currencySymbol = getCurrencySymbol(trip.currency ?? undefined);
-
-  // Build travel style label
-  const travelStyleLabel = trip.travelStyle === 'budget' ? 'Budget' :
-                           trip.travelStyle === 'standard' ? 'Comfort' :
-                           trip.travelStyle === 'luxury' ? 'Luxury' :
-                           trip.travelStyle === 'custom' ? `${currencySymbol}${trip.budget?.toLocaleString()}` :
-                           'Standard';
-
+function HeaderBarComponent({ trip, onShare, onExport, isDemo = false }: HeaderBarProps) {
   // Build edit trip URL - use editTripId for proper edit mode, include returnTo for flow continuity
   const returnTo = encodeURIComponent(`/trips/${trip.id}/results-v1`);
   const editUrl = `/create?editTripId=${trip.id}&returnTo=${returnTo}`;
@@ -95,45 +75,34 @@ function HeaderBarComponent({ trip, onShare, onExport }: HeaderBarProps) {
             </Link>
           </div>
 
-          {/* Center: Destination + Meta */}
-          <div className="flex-1 text-center px-4 min-w-0">
-            <h1 className="text-lg md:text-xl font-semibold text-white truncate">
-              {trip.destination}
-            </h1>
-            {/* Meta pills - hidden on small screens */}
-            <div className="hidden sm:flex items-center justify-center gap-2 mt-1 text-xs text-white/60">
-              <span className="flex items-center gap-1 px-2 py-0.5 bg-white/10 rounded-full">
-                <Calendar className="w-3 h-3" />
-                {trip.dates}
-              </span>
-              <span className="flex items-center gap-1 px-2 py-0.5 bg-white/10 rounded-full">
-                <Users className="w-3 h-3" />
-                {trip.groupSize} {trip.groupSize === 1 ? 'traveler' : 'travelers'}
-              </span>
-              <span className="flex items-center gap-1 px-2 py-0.5 bg-white/10 rounded-full">
-                <Wallet className="w-3 h-3" />
-                {travelStyleLabel}
-              </span>
-            </div>
+          {/* Center: Simple breadcrumb - destination meta is in hero below */}
+          <div className="flex-1 flex justify-center px-4 min-w-0">
+            <nav className="flex items-center text-sm text-white/40 max-w-[280px] whitespace-nowrap">
+              <Link href="/trips" className="shrink-0 hover:text-white/70 transition-colors">Trips</Link>
+              <span className="mx-2 text-white/20 shrink-0">/</span>
+              <span className="text-white/70 truncate">{trip.destination?.split(',')[0]}</span>
+            </nav>
           </div>
 
-          {/* Right: Actions - Edit is prominent, others are subdued */}
+          {/* Right: Actions - Edit is prominent (hidden for demo), others are subdued */}
           <div className="flex items-center gap-1">
-            {/* Edit Trip - Important escape hatch, kept prominent */}
-            <Link href={editUrl}>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-white/70 hover:text-white hover:bg-white/10"
-                title="Opens the form for accurate edits"
-              >
-                <Pencil className="w-4 h-4" />
-                <span className="hidden sm:inline ml-1">Edit trip details</span>
-              </Button>
-            </Link>
+            {/* Edit Trip - Important escape hatch, kept prominent (hidden for demo) */}
+            {!isDemo && (
+              <Link href={editUrl}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-white/70 hover:text-white hover:bg-white/10"
+                  title="Opens the form for accurate edits"
+                >
+                  <Pencil className="w-4 h-4" />
+                  <span className="hidden sm:inline ml-1">Edit trip details</span>
+                </Button>
+              </Link>
+            )}
 
-            {/* Divider */}
-            <div className="hidden sm:block w-px h-4 bg-white/10 mx-1" />
+            {/* Divider - only show if edit button is visible */}
+            {!isDemo && <div className="hidden sm:block w-px h-4 bg-white/10 mx-1" />}
 
             {/* Secondary actions - more subdued */}
             <Button

@@ -35,9 +35,13 @@ export interface ApplyFixContext {
     setWorkingTrip: (fn: (prev: TripResponse | null) => TripResponse | null) => void;
     setBannerPlan?: (plan: any, source?: string) => void;
     source?: string;
+    onVersionCreate?: (args: any) => Promise<void>;
   }) => void;
   setWorkingTrip: (fn: (prev: TripResponse | null) => TripResponse | null) => void;
   setBannerPlan: (plan: any, source?: string) => void;
+
+  // Version creation callback (passed through to applyChanges)
+  onVersionCreate?: (args: any) => Promise<void>;
 
   // Undo integration
   handleUndo?: () => Promise<void>;
@@ -236,7 +240,7 @@ async function handleApplyPatch(
   suggestion: NextFixSuggestion,
   context: ApplyFixContext
 ): Promise<ApplyFixResult> {
-  const { tripId, trip, planChanges, applyChanges, setWorkingTrip, setBannerPlan } = context;
+  const { tripId, trip, planChanges, applyChanges, setWorkingTrip, setBannerPlan, onVersionCreate } = context;
 
   switch (suggestion.id) {
     case "ADD_BUFFER_DAYS": {
@@ -259,13 +263,14 @@ async function handleApplyPatch(
         source: "fix_blocker",
       });
 
-      // Apply the plan
+      // Apply the plan (with version creation)
       applyChanges({
         tripId,
         plan,
         setWorkingTrip,
         setBannerPlan,
         source: "fix_blocker",
+        onVersionCreate,
       });
 
       // Extract new certainty from planner result for immediate history update

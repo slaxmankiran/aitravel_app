@@ -1,10 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { UserMenu } from "@/components/UserMenu";
 import { NewsletterCapture } from "@/components/NewsletterCapture";
-import { SearchAutocomplete } from "@/components/SearchAutocomplete";
 import { trackTripEvent } from "@/lib/analytics";
 import { usePlanningMode, getPlanningRoute } from "@/hooks/usePlanningMode";
 import {
@@ -22,26 +21,51 @@ import {
   ClipboardList
 } from "lucide-react";
 
-// Landmark images for artistic collage
-const LANDMARKS = [
-  { id: 'eiffel', name: 'Paris', image: 'https://images.pexels.com/photos/338515/pexels-photo-338515.jpeg?auto=compress&cs=tinysrgb&w=600', position: 'top-[15%] left-[5%]', size: 'w-32 h-44', rotation: '-rotate-6' },
-  { id: 'colosseum', name: 'Rome', image: 'https://images.pexels.com/photos/532263/pexels-photo-532263.jpeg?auto=compress&cs=tinysrgb&w=600', position: 'top-[8%] right-[8%]', size: 'w-36 h-48', rotation: 'rotate-3' },
-  { id: 'santorini', name: 'Santorini', image: 'https://images.pexels.com/photos/1010657/pexels-photo-1010657.jpeg?auto=compress&cs=tinysrgb&w=600', position: 'bottom-[20%] left-[3%]', size: 'w-40 h-52', rotation: 'rotate-6' },
-  { id: 'dubai', name: 'Dubai', image: 'https://images.pexels.com/photos/1707310/pexels-photo-1707310.jpeg?auto=compress&cs=tinysrgb&w=600', position: 'bottom-[15%] right-[5%]', size: 'w-36 h-48', rotation: '-rotate-3' },
-  { id: 'tokyo', name: 'Tokyo', image: 'https://images.pexels.com/photos/2506923/pexels-photo-2506923.jpeg?auto=compress&cs=tinysrgb&w=600', position: 'top-[40%] left-[8%]', size: 'w-28 h-36', rotation: '-rotate-12' },
-  { id: 'bali', name: 'Bali', image: 'https://images.pexels.com/photos/2166559/pexels-photo-2166559.jpeg?auto=compress&cs=tinysrgb&w=600', position: 'top-[35%] right-[3%]', size: 'w-32 h-40', rotation: 'rotate-12' },
+// Background images for animated carousel
+const BACKGROUND_IMAGES = [
+  { url: 'https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=1920&h=1080&fit=crop', name: 'Paris' },
+  { url: 'https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=1920&h=1080&fit=crop', name: 'Tokyo' },
+  { url: 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=1920&h=1080&fit=crop', name: 'Bali' },
+  { url: 'https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=1920&h=1080&fit=crop', name: 'Rome' },
+  { url: 'https://images.unsplash.com/photo-1512453979798-5ea266f8880c?w=1920&h=1080&fit=crop', name: 'Dubai' },
+  { url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1920&h=1080&fit=crop', name: 'Maldives' },
 ];
 
-// Cloud SVG component
-function Cloud({ className }: { className?: string }) {
+// Animated background carousel
+function BackgroundCarousel() {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentIndex((prev) => (prev + 1) % BACKGROUND_IMAGES.length);
+    }, 5000); // Change every 5 seconds
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
-    <svg className={className} viewBox="0 0 200 100" fill="currentColor">
-      <ellipse cx="60" cy="60" rx="50" ry="35" />
-      <ellipse cx="100" cy="50" rx="45" ry="30" />
-      <ellipse cx="140" cy="55" rx="40" ry="28" />
-      <ellipse cx="80" cy="45" rx="35" ry="25" />
-      <ellipse cx="120" cy="60" rx="30" ry="22" />
-    </svg>
+    <div className="absolute inset-0 overflow-hidden">
+      <AnimatePresence mode="sync">
+        <motion.div
+          key={currentIndex}
+          initial={{ opacity: 0, scale: 1.1 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 1.5, ease: "easeInOut" }}
+          className="absolute inset-0"
+        >
+          <img
+            src={BACKGROUND_IMAGES[currentIndex].url}
+            alt={BACKGROUND_IMAGES[currentIndex].name}
+            className="w-full h-full object-cover"
+          />
+        </motion.div>
+      </AnimatePresence>
+      {/* Dark overlay for readability */}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/30 to-black/60" />
+      {/* Warm tint overlay */}
+      <div className="absolute inset-0 bg-gradient-to-br from-amber-900/20 via-transparent to-orange-900/20" />
+    </div>
   );
 }
 
@@ -170,20 +194,20 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50">
-      {/* Navigation */}
-      <nav className="fixed top-0 w-full z-50 bg-white/80 backdrop-blur-md border-b border-amber-100/50">
+      {/* Navigation - Glass style */}
+      <nav className="fixed top-0 w-full z-50 bg-black/20 backdrop-blur-md">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white text-lg font-bold font-display shadow-lg shadow-amber-500/30">
               V
             </div>
-            <span className="font-display font-bold text-2xl tracking-tight text-slate-800">VoyageAI</span>
+            <span className="font-display font-bold text-2xl tracking-tight text-white">VoyageAI</span>
           </div>
           <div className="flex items-center gap-6">
-            <Link href="/trips" className="text-slate-600 hover:text-slate-900 font-medium hidden md:block">
+            <Link href="/trips" className="text-white/80 hover:text-white font-medium hidden md:block transition-colors">
               My Trips
             </Link>
-            <Link href="/explore" className="text-slate-600 hover:text-slate-900 font-medium hidden md:block">
+            <Link href="/explore" className="text-white/80 hover:text-white font-medium hidden md:block transition-colors">
               Explore
             </Link>
             <UserMenu />
@@ -191,39 +215,10 @@ export default function Home() {
         </div>
       </nav>
 
-      {/* Hero Section - MindTrip-inspired bold design */}
+      {/* Hero Section - Cinematic with animated background */}
       <section className="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
-        {/* Warm gradient background */}
-        <div className="absolute inset-0 bg-gradient-to-br from-amber-100 via-orange-100 to-yellow-100" />
-
-        {/* Floating clouds */}
-        <Cloud className="absolute top-20 left-10 w-48 h-24 text-white/60 animate-pulse" />
-        <Cloud className="absolute top-32 right-20 w-64 h-32 text-white/50" />
-        <Cloud className="absolute bottom-40 left-20 w-56 h-28 text-white/40" />
-        <Cloud className="absolute bottom-20 right-10 w-40 h-20 text-white/30" />
-
-        {/* Artistic landmark collage - hidden on mobile */}
-        <div className="absolute inset-0 hidden lg:block">
-          {LANDMARKS.map((landmark, index) => (
-            <motion.div
-              key={landmark.id}
-              initial={{ opacity: 0, y: 20, scale: 0.9 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={{ delay: 0.3 + index * 0.1, duration: 0.6 }}
-              className={`absolute ${landmark.position} ${landmark.size} ${landmark.rotation} rounded-2xl overflow-hidden shadow-2xl shadow-black/20 hover:scale-105 transition-transform cursor-pointer border-4 border-white`}
-              onClick={() => handleDestinationClick(landmark.name)}
-            >
-              <img
-                src={landmark.image}
-                alt={landmark.name}
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 hover:opacity-100 transition-opacity flex items-end p-3">
-                <span className="text-white text-sm font-semibold">{landmark.name}</span>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+        {/* Animated background carousel */}
+        <BackgroundCarousel />
 
         {/* Hero Content */}
         <div className="relative z-10 container mx-auto px-4 text-center">
@@ -238,7 +233,7 @@ export default function Home() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.2 }}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/80 backdrop-blur-sm border border-emerald-200 text-emerald-700 text-sm font-medium mb-8 shadow-lg"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/20 backdrop-blur-md border border-white/30 text-white text-sm font-medium mb-8 shadow-lg"
             >
               <ShieldCheck className="w-4 h-4" />
               <span>Certainty Engine Powered</span>
@@ -249,13 +244,13 @@ export default function Home() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              className="text-4xl md:text-6xl lg:text-7xl font-display font-black text-slate-900 leading-[1] mb-6 tracking-tight"
+              className="text-4xl md:text-6xl lg:text-7xl font-display font-black text-white leading-[1] mb-6 tracking-tight drop-shadow-lg"
             >
               Know if you can go.
               <br />
               Know what it costs.
               <br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500">
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-orange-400 to-yellow-400">
                 Then plan.
               </span>
             </motion.h1>
@@ -265,36 +260,10 @@ export default function Home() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.5 }}
-              className="text-lg md:text-xl text-slate-600 mb-8 max-w-xl mx-auto leading-relaxed"
+              className="text-lg md:text-xl text-white/90 mb-10 max-w-xl mx-auto leading-relaxed drop-shadow"
             >
               Visa requirements, real costs, and timing risks — checked before your itinerary is built.
             </motion.p>
-
-            {/* Search Bar */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.55 }}
-              className="max-w-xl mx-auto mb-8"
-            >
-              <SearchAutocomplete
-                placeholder="Where do you want to go?"
-                size="lg"
-                showTrending={true}
-              />
-            </motion.div>
-
-            {/* Or Divider */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.6 }}
-              className="flex items-center gap-4 mb-6 max-w-md mx-auto"
-            >
-              <div className="flex-1 h-px bg-slate-300" />
-              <span className="text-slate-400 text-sm font-medium">or</span>
-              <div className="flex-1 h-px bg-slate-300" />
-            </motion.div>
 
             {/* Split CTA Buttons - Planning Mode Choice */}
             <motion.div
@@ -327,7 +296,7 @@ export default function Home() {
               </div>
 
               {/* Microcopy explaining the choice */}
-              <p className="text-slate-500 text-sm text-center max-w-md">
+              <p className="text-white/70 text-sm text-center max-w-md">
                 Chat guides you step by step. Form is faster if you know your details.
               </p>
 
@@ -336,7 +305,7 @@ export default function Home() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-slate-500 hover:text-slate-700"
+                  className="text-white/70 hover:text-white hover:bg-white/10"
                 >
                   See Example Trip
                   <ArrowRight className="ml-1 w-4 h-4" />
@@ -344,54 +313,6 @@ export default function Home() {
               </Link>
             </motion.div>
 
-            {/* Concrete Example - makes promise visceral */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.75 }}
-              className="mt-6 text-slate-500 text-sm"
-            >
-              <span className="inline-flex items-center gap-2 px-4 py-2 bg-slate-100/80 rounded-lg border border-slate-200">
-                <span className="font-medium text-slate-600">Example:</span>
-                <span>Indian passport → Japan → Feb 2026</span>
-                <span className="text-slate-400">•</span>
-                <span className="text-amber-600 font-medium">Visa required. Apply by Jan 30.</span>
-                <span className="text-slate-400">•</span>
-                <span>Est. ₹1.55–1.75L</span>
-              </span>
-            </motion.div>
-
-            {/* Product proof badges (intelligence-based, not vanity metrics) */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.75 }}
-              className="flex flex-wrap items-center justify-center gap-4 mt-8 text-slate-600 text-xs"
-            >
-              <span className="flex items-center gap-2 bg-white/70 px-3 py-1.5 rounded-full border border-slate-200">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                Visa requirements checked first
-              </span>
-              <span className="flex items-center gap-2 bg-white/70 px-3 py-1.5 rounded-full border border-slate-200">
-                <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                Costs from real market data
-              </span>
-              <span className="flex items-center gap-2 bg-white/70 px-3 py-1.5 rounded-full border border-slate-200">
-                <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                Timing risks shown upfront
-              </span>
-            </motion.div>
-          </motion.div>
-
-          {/* Output Preview - THE PROOF */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.9 }}
-            className="mt-12"
-          >
-            <p className="text-slate-500 text-sm mb-4 text-center">What you'll get:</p>
-            <OutputPreview />
           </motion.div>
         </div>
 
@@ -405,11 +326,83 @@ export default function Home() {
           <motion.div
             animate={{ y: [0, 8, 0] }}
             transition={{ repeat: Infinity, duration: 2 }}
-            className="w-6 h-10 rounded-full border-2 border-slate-300 flex items-start justify-center p-2"
+            className="w-6 h-10 rounded-full border-2 border-white/40 flex items-start justify-center p-2"
           >
-            <div className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+            <div className="w-1.5 h-1.5 rounded-full bg-white/60" />
           </motion.div>
         </motion.div>
+      </section>
+
+      {/* Below-the-fold preview section - scrolls into view */}
+      <section className="relative py-24 bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 overflow-hidden">
+        {/* Decorative background */}
+        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSA2MCAwIEwgMCAwIDAgNjAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMzNCIgc3Ryb2tlLXdpZHRoPSIxIi8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+')] opacity-20" />
+
+        <div className="relative z-10 container mx-auto px-4">
+          {/* Section header */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="text-center mb-12"
+          >
+            <h2 className="text-2xl md:text-3xl font-display font-bold text-white mb-4">
+              What you'll actually get
+            </h2>
+            <p className="text-slate-400 max-w-xl mx-auto">
+              A complete travel report with visa requirements, real costs, and a day-by-day itinerary.
+            </p>
+          </motion.div>
+
+          {/* Concrete Example */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="text-white/80 text-sm text-center mb-10"
+          >
+            <span className="inline-flex flex-wrap items-center justify-center gap-2 px-4 py-2 bg-white/10 backdrop-blur-sm rounded-lg border border-white/20">
+              <span className="font-medium text-white">Example:</span>
+              <span>Indian passport → Japan → Feb 2026</span>
+              <span className="text-white/50">•</span>
+              <span className="text-amber-400 font-medium">Visa required. Apply by Jan 30.</span>
+              <span className="text-white/50">•</span>
+              <span>Est. ₹1.55–1.75L</span>
+            </span>
+          </motion.div>
+
+          {/* Output Preview */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ delay: 0.1 }}
+          >
+            <OutputPreview />
+          </motion.div>
+
+          {/* Product proof badges */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ delay: 0.2 }}
+            className="flex flex-wrap items-center justify-center gap-4 mt-12 text-white text-xs"
+          >
+            <span className="flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/20">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              Visa requirements checked first
+            </span>
+            <span className="flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/20">
+              <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+              Costs from real market data
+            </span>
+            <span className="flex items-center gap-2 bg-white/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/20">
+              <Clock className="w-3.5 h-3.5 text-emerald-400" />
+              Timing risks shown upfront
+            </span>
+          </motion.div>
+        </div>
       </section>
 
       {/* How It Works - Certainty-first */}

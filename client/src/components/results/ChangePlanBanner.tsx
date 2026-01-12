@@ -34,6 +34,31 @@ interface ChangePlanBannerProps {
   onDismissSuggestion?: (suggestion: NextFixSuggestion) => void;
   onSnoozeSuggestion?: (suggestion: NextFixSuggestion) => void;
   isApplyingFix?: boolean;
+  // Currency for cost display
+  currency?: string;
+}
+
+// Helper to get currency symbol from code
+function getCurrencySymbol(currency?: string): string {
+  const symbols: Record<string, string> = {
+    USD: '$',
+    CAD: 'CA$',
+    EUR: '€',
+    GBP: '£',
+    AUD: 'A$',
+    JPY: '¥',
+    INR: '₹',
+    CNY: '¥',
+    KRW: '₩',
+    SGD: 'S$',
+    HKD: 'HK$',
+    NZD: 'NZ$',
+    CHF: 'CHF ',
+    THB: '฿',
+    MXN: 'MX$',
+    BRL: 'R$',
+  };
+  return symbols[currency || 'USD'] || `${currency || '$'} `;
 }
 
 function ChangePlanBannerComponent({
@@ -55,6 +80,7 @@ function ChangePlanBannerComponent({
   onDismissSuggestion,
   onSnoozeSuggestion,
   isApplyingFix = false,
+  currency,
 }: ChangePlanBannerProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -89,10 +115,12 @@ function ChangePlanBannerComponent({
   const title = plan.uiInstructions?.banner?.title ?? "Trip updated.";
   const subtitle = plan.uiInstructions?.banner?.subtitle;
 
+  // Solid dark background matching other panels, with subtle tone overlay
   const toneClasses = useMemo(() => {
-    if (tone === "red") return "bg-red-500/10 border-red-500/20 text-red-200";
-    if (tone === "amber") return "bg-amber-500/10 border-amber-500/20 text-amber-200";
-    return "bg-emerald-500/10 border-emerald-500/20 text-emerald-200";
+    const base = "bg-slate-800"; // Solid background to match day cards and right rail
+    if (tone === "red") return `${base} border-red-500/30 text-red-200`;
+    if (tone === "amber") return `${base} border-amber-500/30 text-amber-200`;
+    return `${base} border-emerald-500/30 text-emerald-200`;
   }, [tone]);
 
   const iconColor = useMemo(() => {
@@ -103,17 +131,20 @@ function ChangePlanBannerComponent({
 
   const details = plan.deltaSummary;
 
+  // Get currency symbol for formatting
+  const currencySymbol = getCurrencySymbol(currency);
+
   // Format currency
   const formatCost = (value: number) => {
-    if (!value) return "$0";
-    return `$${value.toLocaleString()}`;
+    if (!value) return `${currencySymbol}0`;
+    return `${currencySymbol}${value.toLocaleString()}`;
   };
 
   // Format delta with sign
   const formatDelta = (value: number) => {
-    if (value === 0) return "$0";
+    if (value === 0) return `${currencySymbol}0`;
     const sign = value > 0 ? "+" : "";
-    return `${sign}$${value.toLocaleString()}`;
+    return `${sign}${currencySymbol}${value.toLocaleString()}`;
   };
 
   return (
@@ -137,12 +168,14 @@ function ChangePlanBannerComponent({
               <div className="flex items-start gap-2">
                 <Lightbulb className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
+                  <div className="text-[10px] text-white/50 uppercase tracking-wide mb-0.5">Suggested next step</div>
                   <div className="text-xs text-white/90 font-medium">
                     {suggestion.title}
                   </div>
-                  {/* Impact chips */}
+                  {/* Expected impact chips - clarify these are estimates */}
                   {(suggestion.impact.certaintyPoints || suggestion.impact.costDelta || suggestion.impact.bufferDays) && (
-                    <div className="flex flex-wrap gap-1.5 mt-1">
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      <span className="text-[9px] text-white/40">Expected:</span>
                       {suggestion.impact.certaintyPoints && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">
                           +{suggestion.impact.certaintyPoints}% certainty
@@ -301,52 +334,54 @@ function ChangePlanBannerComponent({
         </div>
       </div>
 
-      {/* Expanded details */}
+      {/* Expanded details - only show rows with actual changes */}
       {isOpen && details && (
         <div className="mt-3 pt-3 border-t border-white/10 text-xs text-white/70 space-y-2">
-          {/* Certainty delta */}
-          <div className="flex items-center justify-between">
-            <span>Certainty</span>
-            <span className="text-white/90">
-              {details.certainty.before} → {details.certainty.after}
-              {details.certainty.before !== details.certainty.after && (
-                <span className={details.certainty.after > details.certainty.before ? "text-emerald-400 ml-1" : "text-amber-400 ml-1"}>
-                  ({details.certainty.after > details.certainty.before ? "+" : ""}{details.certainty.after - details.certainty.before})
+          {/* Certainty delta - only show if changed */}
+          {details.certainty.before !== details.certainty.after && (
+            <>
+              <div className="flex items-center justify-between">
+                <span>Certainty</span>
+                <span className="text-white/90">
+                  {details.certainty.before} → {details.certainty.after}
+                  <span className={details.certainty.after > details.certainty.before ? "text-emerald-400 ml-1" : "text-amber-400 ml-1"}>
+                    ({details.certainty.after > details.certainty.before ? "+" : ""}{details.certainty.after - details.certainty.before})
+                  </span>
                 </span>
+              </div>
+              {details.certainty.reason && (
+                <div className="text-white/50 text-[10px] -mt-1 pl-2">
+                  {details.certainty.reason}
+                </div>
               )}
-            </span>
-          </div>
-          {details.certainty.reason && (
-            <div className="text-white/50 text-[10px] -mt-1 pl-2">
-              {details.certainty.reason}
-            </div>
+            </>
           )}
 
-          {/* Cost delta */}
-          <div className="flex items-center justify-between">
-            <span>Estimated Cost</span>
-            <span className="text-white/90">
-              {formatCost(details.totalCost.before)} → {formatCost(details.totalCost.after)}
-              {details.totalCost.delta !== 0 && (
+          {/* Cost delta - only show if changed */}
+          {details.totalCost.delta !== 0 && (
+            <div className="flex items-center justify-between">
+              <span>Estimated Cost</span>
+              <span className="text-white/90">
+                {formatCost(details.totalCost.before)} → {formatCost(details.totalCost.after)}
                 <span className={details.totalCost.delta < 0 ? "text-emerald-400 ml-1" : "text-amber-400 ml-1"}>
                   ({formatDelta(details.totalCost.delta)})
                 </span>
-              )}
-            </span>
-          </div>
+              </span>
+            </div>
+          )}
 
-          {/* Blockers delta */}
-          <div className="flex items-center justify-between">
-            <span>Blockers</span>
-            <span className="text-white/90">
-              {details.blockers.before} → {details.blockers.after}
-              {details.blockers.before !== details.blockers.after && (
+          {/* Blockers delta - only show if changed */}
+          {details.blockers.before !== details.blockers.after && (
+            <div className="flex items-center justify-between">
+              <span>Blockers</span>
+              <span className="text-white/90">
+                {details.blockers.before} → {details.blockers.after}
                 <span className={details.blockers.after < details.blockers.before ? "text-emerald-400 ml-1" : "text-red-400 ml-1"}>
                   ({details.blockers.after < details.blockers.before ? "-" : "+"}{Math.abs(details.blockers.after - details.blockers.before)})
                 </span>
-              )}
-            </span>
-          </div>
+              </span>
+            </div>
+          )}
 
           {/* Blocker delta chips - show when we have delta data */}
           {blockerDelta && (blockerDelta.resolved.length > 0 || blockerDelta.added.length > 0) && (
@@ -396,8 +431,8 @@ function ChangePlanBannerComponent({
             </div>
           )}
 
-          {/* Fix blockers link - show when blockers remain */}
-          {details.blockers.after > 0 && (
+          {/* Fix blockers link - only show when blockers exist AND changed or there are new blockers */}
+          {details.blockers.after > 0 && (details.blockers.before !== details.blockers.after || (blockerDelta && blockerDelta.added.length > 0)) && (
             <button
               onClick={() => openFixBlockersEvent.emit({ source: "change_banner", reason: "visa_timing" })}
               className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2 mt-1"
@@ -406,7 +441,7 @@ function ChangePlanBannerComponent({
             </button>
           )}
 
-          {/* Itinerary changes */}
+          {/* Itinerary changes - only show if day count changed */}
           {details.itinerary.dayCountBefore !== details.itinerary.dayCountAfter && (
             <div className="flex items-center justify-between">
               <span>Days</span>
@@ -422,6 +457,17 @@ function ChangePlanBannerComponent({
               {details.itinerary.majorDiffs.map((diff, i) => (
                 <div key={i}>• {diff}</div>
               ))}
+            </div>
+          )}
+
+          {/* No changes fallback message */}
+          {details.certainty.before === details.certainty.after &&
+           details.totalCost.delta === 0 &&
+           details.blockers.before === details.blockers.after &&
+           details.itinerary.dayCountBefore === details.itinerary.dayCountAfter &&
+           details.itinerary.majorDiffs.length === 0 && (
+            <div className="text-white/50 text-center py-2">
+              No measurable changes detected.
             </div>
           )}
         </div>

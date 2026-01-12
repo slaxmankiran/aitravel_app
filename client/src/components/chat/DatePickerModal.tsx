@@ -71,18 +71,28 @@ export function DatePickerModal({
     onClose();
   };
 
+  // State for flexible month carousel position
+  const [flexibleMonthOffset, setFlexibleMonthOffset] = useState(0);
+  const MONTHS_VISIBLE = 6; // Show 6 months at a time
+
   const getMonthsToShow = () => {
     const now = new Date();
-    const months: { month: string; year: number }[] = [];
-    for (let i = 0; i < 12; i++) {
+    const months: { month: string; shortMonth: string; year: number }[] = [];
+    // Show 13 months (current month to same month next year)
+    for (let i = 0; i < 13; i++) {
       const date = new Date(now.getFullYear(), now.getMonth() + i, 1);
       months.push({
         month: MONTHS[date.getMonth()],
+        shortMonth: MONTHS[date.getMonth()].slice(0, 3),
         year: date.getFullYear(),
       });
     }
     return months;
   };
+
+  const allFlexibleMonths = getMonthsToShow();
+  const canScrollLeft = flexibleMonthOffset > 0;
+  const canScrollRight = flexibleMonthOffset < allFlexibleMonths.length - MONTHS_VISIBLE;
 
   const getDaysInMonth = (year: number, month: number) => {
     return new Date(year, month + 1, 0).getDate();
@@ -264,26 +274,70 @@ export function DatePickerModal({
                   </div>
                 </div>
 
-                {/* Month selector */}
+                {/* Month selector with arrow navigation */}
                 <div>
                   <p className="text-sm font-medium text-slate-700 mb-3 text-center">Preferred month (optional)</p>
-                  <div className="flex gap-2 overflow-x-auto pb-2 -mx-2 px-2">
-                    {getMonthsToShow().map(({ month, year }) => (
-                      <button
-                        key={`${month}-${year}`}
-                        onClick={() => setSelectedMonth(selectedMonth === month ? undefined : month)}
-                        className={`
-                          flex-shrink-0 flex flex-col items-center gap-1 px-4 py-3 rounded-xl border transition-all
-                          ${selectedMonth === month
-                            ? 'bg-slate-900 text-white border-slate-900'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
-                          }
-                        `}
-                      >
-                        <Calendar className="w-4 h-4" />
-                        <span className="text-sm font-medium">{month}</span>
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    {/* Left arrow */}
+                    <button
+                      onClick={() => setFlexibleMonthOffset(Math.max(0, flexibleMonthOffset - 1))}
+                      disabled={!canScrollLeft}
+                      className={`p-2 rounded-full transition-colors flex-shrink-0 ${
+                        canScrollLeft
+                          ? 'hover:bg-slate-100 text-slate-600'
+                          : 'text-slate-300 cursor-not-allowed'
+                      }`}
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+
+                    {/* Month grid - equal size boxes */}
+                    <div className="flex-1 grid grid-cols-6 gap-2">
+                      {allFlexibleMonths
+                        .slice(flexibleMonthOffset, flexibleMonthOffset + MONTHS_VISIBLE)
+                        .map(({ month, shortMonth, year }) => {
+                          const monthKey = `${month}-${year}`;
+                          const isSelected = selectedMonth === month &&
+                            // Handle year disambiguation for months that appear twice
+                            (!allFlexibleMonths.some((m, i) =>
+                              m.month === month && m.year !== year &&
+                              i >= flexibleMonthOffset && i < flexibleMonthOffset + MONTHS_VISIBLE
+                            ) || true);
+
+                          return (
+                            <button
+                              key={monthKey}
+                              onClick={() => setSelectedMonth(selectedMonth === month ? undefined : month)}
+                              className={`
+                                flex flex-col items-center justify-center gap-0.5 py-3 rounded-xl border transition-all
+                                ${isSelected
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : 'bg-white border-slate-200 hover:border-slate-400'
+                                }
+                              `}
+                            >
+                              <Calendar className="w-4 h-4" />
+                              <span className="text-sm font-medium">{shortMonth}</span>
+                              <span className={`text-[10px] ${isSelected ? 'text-slate-300' : 'text-slate-400'}`}>
+                                {year.toString().slice(-2)}
+                              </span>
+                            </button>
+                          );
+                        })}
+                    </div>
+
+                    {/* Right arrow */}
+                    <button
+                      onClick={() => setFlexibleMonthOffset(Math.min(allFlexibleMonths.length - MONTHS_VISIBLE, flexibleMonthOffset + 1))}
+                      disabled={!canScrollRight}
+                      className={`p-2 rounded-full transition-colors flex-shrink-0 ${
+                        canScrollRight
+                          ? 'hover:bg-slate-100 text-slate-600'
+                          : 'text-slate-300 cursor-not-allowed'
+                      }`}
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
                   </div>
                 </div>
               </div>

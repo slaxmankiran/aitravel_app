@@ -31,6 +31,8 @@ interface VersionsPanelProps {
   tripId: number;
   onRestore?: (version: TripVersionResponse) => void;
   onExport?: (versionId: number) => void;
+  /** When true, renders without PanelAccordion wrapper (for drawer use) */
+  compact?: boolean;
 }
 
 // Format relative time
@@ -259,7 +261,7 @@ function VersionRow({
 }
 
 // Main panel component
-function VersionsPanelComponent({ tripId, onRestore, onExport }: VersionsPanelProps) {
+function VersionsPanelComponent({ tripId, onRestore, onExport, compact = false }: VersionsPanelProps) {
   const {
     versions,
     isLoading,
@@ -301,6 +303,68 @@ function VersionsPanelComponent({ tripId, onRestore, onExport }: VersionsPanelPr
   // Count for badge
   const versionCount = versions.length;
 
+  // Content to render
+  const content = (
+    <div className={compact ? "space-y-1" : "space-y-1 -mx-1"}>
+      {/* Loading state */}
+      {isLoading && (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="w-5 h-5 text-white/40 animate-spin" />
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && !isLoading && (
+        <div className="flex flex-col items-center justify-center py-6 text-center">
+          <AlertCircle className="w-8 h-8 text-red-400/60 mb-2" />
+          <p className="text-sm text-white/60 mb-3">Failed to load versions</p>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => refetch()}
+            className="text-xs text-white/70 hover:text-white"
+          >
+            Try again
+          </Button>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!isLoading && !error && versions.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-8 text-center">
+          <History className="w-10 h-10 text-white/20 mb-3" />
+          <p className="text-sm text-white/60 mb-1">No versions saved yet</p>
+          <p className="text-xs text-white/40">
+            Versions are created when you make changes via AI chat
+          </p>
+        </div>
+      )}
+
+      {/* Versions list */}
+      {!isLoading && !error && versions.length > 0 && (
+        <div className={compact ? "space-y-0.5" : "max-h-[350px] overflow-y-auto pr-1 -mr-1 space-y-0.5"}>
+          {versions.map((version, index) => (
+            <VersionRow
+              key={version.id}
+              version={version}
+              isLatest={index === 0}
+              onRestore={() => handleRestore(version)}
+              onExport={() => handleExport(version.id)}
+              onCopyLink={() => handleCopyLink(version.id)}
+              isRestoring={isRestoring}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // In compact mode, return content directly (for drawer use)
+  if (compact) {
+    return content;
+  }
+
+  // Normal mode: wrap in PanelAccordion
   return (
     <PanelAccordion
       title="Version History"
@@ -319,58 +383,7 @@ function VersionsPanelComponent({ tripId, onRestore, onExport }: VersionsPanelPr
           : "No versions yet"
       }
     >
-      <div className="space-y-1 -mx-1">
-        {/* Loading state */}
-        {isLoading && (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-5 h-5 text-white/40 animate-spin" />
-          </div>
-        )}
-
-        {/* Error state */}
-        {error && !isLoading && (
-          <div className="flex flex-col items-center justify-center py-6 text-center">
-            <AlertCircle className="w-8 h-8 text-red-400/60 mb-2" />
-            <p className="text-sm text-white/60 mb-3">Failed to load versions</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => refetch()}
-              className="text-xs text-white/70 hover:text-white"
-            >
-              Try again
-            </Button>
-          </div>
-        )}
-
-        {/* Empty state */}
-        {!isLoading && !error && versions.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <History className="w-10 h-10 text-white/20 mb-3" />
-            <p className="text-sm text-white/60 mb-1">No versions saved yet</p>
-            <p className="text-xs text-white/40">
-              Versions are created when you make changes via AI chat
-            </p>
-          </div>
-        )}
-
-        {/* Versions list */}
-        {!isLoading && !error && versions.length > 0 && (
-          <div className="max-h-[350px] overflow-y-auto pr-1 -mr-1 space-y-0.5">
-            {versions.map((version, index) => (
-              <VersionRow
-                key={version.id}
-                version={version}
-                isLatest={index === 0}
-                onRestore={() => handleRestore(version)}
-                onExport={() => handleExport(version.id)}
-                onCopyLink={() => handleCopyLink(version.id)}
-                isRestoring={isRestoring}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      {content}
     </PanelAccordion>
   );
 }

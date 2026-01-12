@@ -39,6 +39,8 @@ interface DayCardProps {
   previousDayCity?: string | null; // For detecting city transitions
   forceExpanded?: boolean; // External control for expand/collapse all
   showDistances?: boolean; // Show distances between activities
+  /** Destination for activity images */
+  destination?: string;
   onDayClick: (dayIndex: number) => void;
   onActivityClick: (activityKey: string) => void;
   onActivityHover: (activityKey: string | null) => void;
@@ -60,6 +62,7 @@ function DayCardComponent({
   previousDayCity,
   forceExpanded,
   showDistances = false,
+  destination,
   onDayClick,
   onActivityClick,
   onActivityHover,
@@ -81,8 +84,14 @@ function DayCardComponent({
     setUserOverride(prev => prev !== null ? !prev : !isExpanded);
   };
 
-  // Bucket activities by time slot
+  // Bucket activities by time slot (also de-duplicates)
   const buckets = useMemo(() => bucketActivities(day.activities), [day.activities]);
+
+  // Count de-duped activities
+  const activityCount = useMemo(
+    () => buckets.morning.length + buckets.afternoon.length + buckets.evening.length,
+    [buckets]
+  );
 
   // Phase detection
   const isFirstDay = dayIndex === 0;
@@ -104,18 +113,24 @@ function DayCardComponent({
   const formattedDate = useMemo(() => {
     const dateToFormat = actualDate || day.date;
     try {
+      // Use UTC timezone to match header dates and avoid timezone shifts
       return new Date(dateToFormat).toLocaleDateString("en-US", {
         weekday: "short",
         month: "short",
         day: "numeric",
+        timeZone: "UTC",
       });
     } catch {
       return dateToFormat;
     }
   }, [actualDate, day.date]);
 
-  // Render a time slot section
-  const renderTimeSlot = (slot: TimeSlot, activities: typeof day.activities) => {
+  // Render a time slot section with cross-slot distance tracking
+  const renderTimeSlot = (
+    slot: TimeSlot,
+    activities: typeof day.activities,
+    lastActivityFromPreviousSlot: typeof day.activities[0] | null
+  ) => {
     if (activities.length === 0) return null;
 
     const config = TIME_SLOT_CONFIG[slot];
@@ -136,13 +151,19 @@ function DayCardComponent({
           {activities.map((activity, idx) => {
             const originalIndex = day.activities.findIndex((a) => a === activity);
             const activityKey = getSimpleActivityKey(day.day, originalIndex);
-            const isFirst = idx === 0;
 
-            // Calculate distance from previous activity
-            const prevActivity = idx > 0 ? activities[idx - 1] : null;
+            // For first activity in slot, use last activity from previous slot
+            // For subsequent activities, use previous activity in this slot
+            const prevActivity = idx > 0
+              ? activities[idx - 1]
+              : lastActivityFromPreviousSlot;
+
             const distanceFromPrevious = prevActivity
               ? getDistanceBetweenActivities(prevActivity, activity)
               : null;
+
+            // Show transport for all except the very first activity of the day
+            const isVeryFirstActivity = idx === 0 && !lastActivityFromPreviousSlot;
 
             return (
               <ActivityRow
@@ -152,10 +173,11 @@ function DayCardComponent({
                 currencySymbol={currencySymbol}
                 isActive={activeActivityKey === activityKey}
                 isHovered={hoveredActivityKey === activityKey}
-                showTransport={!isFirst}
+                showTransport={!isVeryFirstActivity}
                 distanceFromPrevious={distanceFromPrevious}
                 prevActivity={prevActivity}
                 showDistance={showDistances}
+                destination={destination}
                 onClick={() => onActivityClick(activityKey)}
                 onMouseEnter={() => onActivityHover(activityKey)}
                 onMouseLeave={() => onActivityHover(null)}
@@ -167,15 +189,20 @@ function DayCardComponent({
     );
   };
 
+  // Get last activity from a bucket (for cross-slot distance calculation)
+  const getLastActivity = (activities: typeof day.activities) =>
+    activities.length > 0 ? activities[activities.length - 1] : null;
+
   return (
     <div
       className={cn(
-        "relative rounded-2xl border overflow-hidden transition-all",
-        "bg-white/5 border-white/10 shadow-[0_10px_30px_-18px_rgba(0,0,0,0.8)]",
-        "hover:border-white/15 hover:bg-white/6",
+        "relative rounded-xl overflow-hidden transition-all",
+        // Glass design - matches DecisionStack/RightRail cards
+        "bg-slate-900/50 backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
+        "hover:border-white/[0.12]",
         isActiveDay && "border-primary/40 ring-1 ring-primary/20",
         // Subtle emphasis for milestone days
-        (isFirstDay || isLastDay) && "border-white/15"
+        (isFirstDay || isLastDay) && "border-white/[0.12]"
       )}
       data-active={isActiveDay ? "true" : "false"}
     >
@@ -246,7 +273,7 @@ function DayCardComponent({
               <Calendar className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">{formattedDate}</span>
               <span className="text-white/20">•</span>
-              <span className="truncate">{day.activities.length} activities</span>
+              <span className="truncate">{activityCount} activities</span>
             </div>
           </div>
         </div>
@@ -280,9 +307,9 @@ function DayCardComponent({
             transition={{ duration: 0.22 }}
           >
             <div className="p-3.5">
-              {renderTimeSlot("morning", buckets.morning)}
-              {renderTimeSlot("afternoon", buckets.afternoon)}
-              {renderTimeSlot("evening", buckets.evening)}
+              {renderTimeSlot("morning", buckets.morning, null)}
+              {renderTimeSlot("afternoon", buckets.afternoon, getLastActivity(buckets.morning))}
+              {renderTimeSlot("evening", buckets.evening, getLastActivity(buckets.afternoon) || getLastActivity(buckets.morning))}
             </div>
           </motion.div>
         )}

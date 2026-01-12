@@ -17,8 +17,9 @@ interface TripSummaryPillsProps {
   dateType: 'specific' | 'flexible';
   dateDisplay?: string; // e.g., "Feb 15-22" or "Flexible"
   travelers: { adults: number; children: number; infants: number };
-  travelStyle: 'budget' | 'comfort' | 'luxury';
+  travelStyle: 'budget' | 'comfort' | 'luxury' | 'custom';
   passport?: string;
+  currency?: string;
   onDestinationClick: () => void;
   onDateClick: () => void;
   onTravelersClick: () => void;
@@ -33,6 +34,7 @@ export function TripSummaryPills({
   travelers,
   travelStyle,
   passport,
+  currency,
   onDestinationClick,
   onDateClick,
   onTravelersClick,
@@ -47,10 +49,12 @@ export function TripSummaryPills({
   };
 
   const formatStyle = () => {
+    const currencySuffix = currency && currency !== 'USD' ? ` (${currency})` : '';
     switch (travelStyle) {
-      case 'budget': return 'Budget';
-      case 'luxury': return 'Luxury';
-      default: return 'Comfort';
+      case 'budget': return `Budget${currencySuffix}`;
+      case 'luxury': return `Luxury${currencySuffix}`;
+      case 'custom': return `Custom${currencySuffix}`;
+      default: return `Comfort${currencySuffix}`;
     }
   };
 

@@ -9,6 +9,11 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { trackTripEvent } from "@/lib/analytics";
+import {
+  buildSnapshotFromTrip,
+  buildVersionSummary,
+  type VersionSource,
+} from "./useTripVersions";
 import type {
   TripResponse,
   ChangeableField,
@@ -43,6 +48,13 @@ type ApplyChangesArgs = {
   setBannerPlan?: (plan: ChangePlannerResponse | null, source?: string) => void;
   source?: string; // For URL sharing: "fix_blocker", "edit_trip", "quick_chip"
   analyticsContext?: Record<string, any>;
+  // Version creation callback - receives updated trip + version info
+  onVersionCreate?: (args: {
+    source: VersionSource;
+    changeId: string;
+    snapshot: ReturnType<typeof buildSnapshotFromTrip>;
+    summary: ReturnType<typeof buildVersionSummary>;
+  }) => Promise<void>;
 };
 
 type ApplyChangesResult = {
@@ -129,12 +141,15 @@ export function useChangePlanner() {
   }, []);
 
   const applyChanges = useCallback((args: ApplyChangesArgs): ApplyChangesResult => {
-    const { tripId, plan, setWorkingTrip, setBannerPlan, source, analyticsContext } = args;
+    const { tripId, plan, setWorkingTrip, setBannerPlan, source, analyticsContext, onVersionCreate } = args;
 
     const start = performance.now();
 
     // Show banner (with source for URL sharing)
     setBannerPlan?.(plan, source);
+
+    // Track the updated trip for version creation
+    let updatedTrip: TripResponse | null = null;
 
     // Patch data into workingTrip deterministically
     setWorkingTrip((prev) => {
@@ -164,7 +179,8 @@ export function useChangePlanner() {
         next.feasibilityReport.score = plan.deltaSummary.certainty.after;
       }
 
-      return next as TripResponse;
+      updatedTrip = next as TripResponse;
+      return updatedTrip;
     });
 
     // Track change applied
@@ -182,6 +198,38 @@ export function useChangePlanner() {
       },
       analyticsContext
     );
+
+    // Create version if callback provided and we have updated trip
+    if (onVersionCreate && updatedTrip) {
+      const versionSource: VersionSource = source === "fix_blocker" ? "next_fix" : "change_plan";
+      const changeId = `${versionSource}:${tripId}:${Date.now()}`;
+
+      // Build change chips from detected changes
+      const chips: string[] = [];
+      if (plan.detectedChanges) {
+        for (const change of plan.detectedChanges.slice(0, 3)) {
+          // Use field and impact to create chip
+          const fieldLabel = change.field.charAt(0).toUpperCase() + change.field.slice(1);
+          chips.push(`${fieldLabel} changed`);
+        }
+      }
+      if (chips.length === 0) {
+        chips.push("Plan updated");
+      }
+
+      const snapshot = buildSnapshotFromTrip(updatedTrip);
+      const summary = buildVersionSummary(snapshot, chips, versionSource);
+
+      // Fire and forget - don't block UI
+      onVersionCreate({
+        source: versionSource,
+        changeId,
+        snapshot,
+        summary,
+      }).catch((err) => {
+        console.error("[applyChanges] Failed to create version:", err);
+      });
+    }
 
     return {
       highlightSections: plan.uiInstructions?.highlightSections ?? [],

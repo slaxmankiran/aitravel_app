@@ -1,7 +1,7 @@
 # Version History Implementation (Item 18)
 
-**Status:** Implemented
-**Date:** 2026-01-09
+**Status:** Implemented & Tested
+**Date:** 2026-01-09 (Updated: 2026-01-11)
 
 ## Overview
 
@@ -377,15 +377,15 @@ DATABASE_URL="postgres://voyageai:voyageai@localhost:5432/voyageai" npx drizzle-
 
 ## Testing Checklist
 
-- [ ] Version created on Change Planner apply
-- [ ] Version created on Fix suggestion apply
-- [ ] Version created on Undo
-- [ ] Versions list shows in panel
-- [ ] Restore version works
-- [ ] Export version works (PDF with version data)
-- [ ] Copy share link works
-- [ ] Deduplication works (same changeId updates existing)
-- [ ] Analytics events fire correctly
+- [x] Version created on Change Planner apply (via `onVersionCreate` callback in `useChangePlanner`)
+- [x] Version created on Fix suggestion apply (via `onVersionCreate` in `ApplyFixContext`)
+- [x] Version created on Undo (via `handleVersionCreate` in TripResultsV1)
+- [x] Versions list shows in panel (VersionsPanel in history drawer)
+- [x] Restore version works (POST `/api/trips/:id/versions/:versionId/restore`)
+- [x] Export version works (TripExport handles `?version=` param)
+- [x] Copy share link works (VersionsPanel `handleCopyLink`)
+- [x] Deduplication works (server upserts on `tripId + changeId`)
+- [x] Analytics events fire correctly (`version_created`, `version_restored`, etc.)
 
 ---
 

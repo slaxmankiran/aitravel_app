@@ -58,6 +58,12 @@ interface TripChatProps {
   }) => void;
   /** Optional prefilled message to populate input field */
   prefillMessage?: string;
+  /**
+   * Render mode:
+   * - 'floating' (default): Fixed position floating panel with open/close button
+   * - 'inline': Fills parent container, no floating UI (for use inside drawers)
+   */
+  mode?: 'floating' | 'inline';
 }
 
 // Quick suggestion buttons for common refinements
@@ -70,8 +76,9 @@ const QUICK_SUGGESTIONS = [
   'Include hidden gems',
 ];
 
-export function TripChat({ tripId, destination, tripContext, onTripUpdate, prefillMessage }: TripChatProps) {
-  const [isOpen, setIsOpen] = useState(false);
+export function TripChat({ tripId, destination, tripContext, onTripUpdate, prefillMessage, mode = 'floating' }: TripChatProps) {
+  // For inline mode, always "open" (no toggle needed)
+  const [isOpen, setIsOpen] = useState(mode === 'inline');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -84,11 +91,12 @@ export function TripChat({ tripId, destination, tripContext, onTripUpdate, prefi
   const { toast } = useToast();
 
   // Load conversation history on mount
+  // For inline mode, load immediately; for floating mode, load when opened
   useEffect(() => {
-    if (isOpen && messages.length === 0) {
+    if ((mode === 'inline' || isOpen) && messages.length === 0) {
       loadConversation();
     }
-  }, [isOpen]);
+  }, [isOpen, mode]);
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
@@ -299,6 +307,202 @@ export function TripChat({ tripId, destination, tripContext, onTripUpdate, prefi
     }
   }
 
+  // ============================================================================
+  // INLINE MODE - Renders content directly without floating wrapper
+  // Used when TripChat is placed inside a drawer or other container
+  // ============================================================================
+  if (mode === 'inline') {
+    return (
+      <div className="h-full flex flex-col">
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Welcome message if no messages */}
+          {messages.length === 0 && (
+            <div className="text-center py-8">
+              <Bot className="w-12 h-12 text-primary mx-auto mb-3" />
+              <h4 className="font-medium text-white mb-2">
+                How can I help with your trip?
+              </h4>
+              <p className="text-sm text-slate-400">
+                Ask me to add activities, change plans, or get recommendations.
+              </p>
+            </div>
+          )}
+
+          {/* Messages list */}
+          {messages.map((message) => (
+            <motion.div
+              key={message.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              {message.role === 'assistant' && (
+                <div className="w-8 h-8 rounded-full bg-primary/20 flex-shrink-0 flex items-center justify-center">
+                  <Bot className="w-4 h-4 text-primary" />
+                </div>
+              )}
+              <div
+                className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                  message.role === 'user'
+                    ? 'bg-primary text-white rounded-tr-sm'
+                    : 'bg-slate-800 text-slate-100 rounded-tl-sm'
+                }`}
+              >
+                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                <p className="text-[10px] opacity-60 mt-1">
+                  {message.timestamp.toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </p>
+              </div>
+              {message.role === 'user' && (
+                <div className="w-8 h-8 rounded-full bg-slate-700 flex-shrink-0 flex items-center justify-center">
+                  <User className="w-4 h-4 text-slate-300" />
+                </div>
+              )}
+            </motion.div>
+          ))}
+
+          {/* Loading indicator */}
+          {isLoading && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex gap-3"
+            >
+              <div className="w-8 h-8 rounded-full bg-primary/20 flex-shrink-0 flex items-center justify-center">
+                <Bot className="w-4 h-4 text-primary" />
+              </div>
+              <div className="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3">
+                <div className="flex gap-1">
+                  <div className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Quick Suggestions - show initial or dynamic (hide when pending changes exist) */}
+        {!isLoading && !activePendingChange && (showSuggestions && messages.length === 0 || dynamicSuggestions.length > 0) && (
+          <div className="px-4 pb-2">
+            <div className="flex flex-wrap gap-2">
+              {(dynamicSuggestions.length > 0 ? dynamicSuggestions : QUICK_SUGGESTIONS).slice(0, 4).map((suggestion) => (
+                <button
+                  key={suggestion}
+                  onClick={() => {
+                    setDynamicSuggestions([]);
+                    handleSend(suggestion);
+                  }}
+                  disabled={isLoading}
+                  className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors border border-slate-700 hover:border-slate-600"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Pending Changes Confirmation Panel */}
+        <AnimatePresence>
+          {activePendingChange && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="mx-3 mb-2 p-3 bg-gradient-to-r from-amber-500/20 to-orange-500/20 border border-amber-500/30 rounded-xl max-h-40 flex flex-col"
+            >
+              <div className="flex items-center gap-2 mb-2 flex-shrink-0">
+                <div className="w-6 h-6 rounded-full bg-amber-500/20 flex items-center justify-center">
+                  <AlertCircle className="w-3 h-3 text-amber-400" />
+                </div>
+                <h4 className="text-xs font-semibold text-white">
+                  {activePendingChange.preview.items.length} change{activePendingChange.preview.items.length > 1 ? 's' : ''} proposed
+                </h4>
+                {activePendingChange.preview.estimatedCostChange > 0 && (
+                  <span className="text-xs text-amber-300 ml-auto">
+                    +${activePendingChange.preview.estimatedCostChange}
+                  </span>
+                )}
+              </div>
+              {activePendingChange.preview.items.length > 2 && (
+                <div className="overflow-y-auto max-h-16 mb-2 pr-1 scrollbar-thin">
+                  {activePendingChange.preview.items.slice(0, 5).map((item, idx) => (
+                    <p key={idx} className="text-[10px] text-amber-100/70 truncate">• {item}</p>
+                  ))}
+                  {activePendingChange.preview.items.length > 5 && (
+                    <p className="text-[10px] text-amber-300">...and {activePendingChange.preview.items.length - 5} more</p>
+                  )}
+                </div>
+              )}
+              <div className="flex gap-2 flex-shrink-0">
+                <Button
+                  size="sm"
+                  onClick={handleConfirmChanges}
+                  disabled={isConfirming}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs h-7 flex-1"
+                >
+                  {isConfirming ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <>
+                      <Check className="w-3 h-3 mr-1" />
+                      Apply
+                    </>
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleRejectChanges}
+                  disabled={isConfirming}
+                  className="text-slate-300 hover:text-white hover:bg-slate-700 text-xs h-7"
+                >
+                  <X className="w-3 h-3" />
+                </Button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Input */}
+        <div className="p-4 border-t border-slate-700/50">
+          <div className="flex gap-2">
+            <Input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder="Ask me anything about your trip..."
+              disabled={isLoading}
+              className="flex-1 bg-slate-900/50 border-slate-700 text-white placeholder:text-slate-500"
+            />
+            <Button
+              onClick={() => handleSend()}
+              disabled={!input.trim() || isLoading}
+              className="bg-primary hover:bg-primary/90"
+            >
+              {isLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================================
+  // FLOATING MODE (default) - Fixed position floating panel with toggle button
+  // ============================================================================
   return (
     <>
       {/* Floating Chat Button */}

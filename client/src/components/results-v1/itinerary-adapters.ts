@@ -136,7 +136,37 @@ function parseHour(time: string): number {
 }
 
 /**
+ * Generate a stable key for de-duplication.
+ * Uses time + name/description + cost.
+ */
+function getDedupeKey(activity: Activity): string {
+  const time = activity.time || '';
+  const name = (activity.name || activity.description || '').toLowerCase().trim();
+  const cost = activity.estimatedCost || activity.cost || 0;
+  return `${time}|${name}|${cost}`;
+}
+
+/**
+ * De-duplicate activities (removes entries with same time + name + cost).
+ */
+export function dedupeActivities(activities: Activity[]): Activity[] {
+  const seen = new Set<string>();
+  const result: Activity[] = [];
+
+  for (const activity of activities) {
+    const key = getDedupeKey(activity);
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(activity);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Bucket activities into morning/afternoon/evening groups.
+ * Also de-duplicates activities before bucketing.
  */
 export function bucketActivities(activities: Activity[]): BucketedActivities {
   const buckets: BucketedActivities = {
@@ -145,7 +175,10 @@ export function bucketActivities(activities: Activity[]): BucketedActivities {
     evening: [],
   };
 
-  for (const activity of activities) {
+  // De-duplicate before bucketing
+  const dedupedActivities = dedupeActivities(activities);
+
+  for (const activity of dedupedActivities) {
     const slot = getTimeSlot(activity.time);
     buckets[slot].push(activity);
   }

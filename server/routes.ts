@@ -33,6 +33,7 @@ import subscriptionsRouter from "./routes/subscriptions";
 import changePlanRouter from "./routes/changePlan";
 import fixOptionsRouter from "./routes/fixOptions";
 import appliedPlansRouter from "./routes/appliedPlans";
+import versionsRouter from "./routes/versions";
 
 // ============ FEASIBILITY ANALYTICS ============
 // Decision-quality metrics for validation
@@ -456,6 +457,17 @@ async function getDestinationCoords(destination: string): Promise<{ center: { la
 // Helper to parse date range string to start/end dates
 function parseDateRange(dateStr: string): { startDate: string; endDate: string } | null {
   try {
+    // Format 0: "2026-04-01 to 2026-04-15" (ISO format with 'to' separator)
+    const toMatch = dateStr.match(/(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})/);
+    if (toMatch) {
+      const [, startStr, endStr] = toMatch;
+      const start = new Date(startStr);
+      const end = new Date(endStr);
+      if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+        return { startDate: startStr, endDate: endStr };
+      }
+    }
+
     // Format 1: "Jan 15, 2026 - Jan 22, 2026"
     const parts = dateStr.split(' - ');
     if (parts.length === 2) {
@@ -3734,11 +3746,142 @@ Return JSON: {"attractions": [{"name": "Place name", "lat": 0.0, "lng": 0.0, "ty
             }
           };
 
-          // First attempt with full JSON prompt
-          console.log(`[Itinerary] Attempt 1: Full JSON prompt for ${input.destination} (${numDays} days)`);
-          let { result, rawResponse } = await generateItinerary();
+          // ============================================================================
+          // CHUNKED PARALLEL GENERATION - For long trips (8+ days)
+          // Instead of one 12000-token call taking 60+ seconds,
+          // we make 3-4 parallel calls of ~2000 tokens each, taking ~15-20 seconds total
+          // ============================================================================
+          const generateChunkedItinerary = async (): Promise<any> => {
+            const CHUNK_SIZE = 4; // Days per batch
+            const numChunks = Math.ceil(numDays / CHUNK_SIZE);
 
-          // Check if first attempt succeeded
+            console.log(`[Chunked] Generating ${numDays} days in ${numChunks} parallel batches of ${CHUNK_SIZE} days`);
+            updateProgress(tripId, { step: 4, message: "Creating itinerary" }, `Generating ${numChunks} sections in parallel...`);
+
+            // Create chunk promises
+            const chunkPromises = Array.from({ length: numChunks }, async (_, chunkIndex) => {
+              const startDay = chunkIndex * CHUNK_SIZE + 1;
+              const endDay = Math.min((chunkIndex + 1) * CHUNK_SIZE, numDays);
+              const chunkDays = endDay - startDay + 1;
+
+              // Calculate date for this chunk
+              const chunkStartDate = new Date(departureDate);
+              chunkStartDate.setDate(chunkStartDate.getDate() + startDay - 1);
+              const chunkDateStr = chunkStartDate.toISOString().split('T')[0];
+
+              // Determine what phase this chunk is in
+              const isFirstChunk = chunkIndex === 0;
+              const isLastChunk = chunkIndex === numChunks - 1;
+              const phaseNote = isFirstChunk
+                ? "Day 1 is ARRIVAL: travelers arrive around 14:00, hotel check-in, 1-2 light activities only."
+                : isLastChunk
+                  ? `Day ${endDay} is DEPARTURE: morning checkout by 11:00, 1 quick activity, then head to airport/station.`
+                  : `These are MID-TRIP days: full exploration, 3-4 activities per day.`;
+
+              const chunkPrompt = `Generate days ${startDay}-${endDay} of a ${numDays}-day ${input.destination} itinerary.
+
+CRITICAL CONTEXT:
+- Total trip: ${numDays} days (${departureDate} to ${returnDate})
+- This chunk: Days ${startDay}-${endDay} (${chunkDays} days starting ${chunkDateStr})
+- ${phaseNote}
+- Travel style: ${budgetTier.toUpperCase()}
+- Local transport: ${localTransport}
+
+OUTPUT FORMAT (JSON):
+{"days":[{
+  "day":${startDay},
+  "date":"${chunkDateStr}",
+  "title":"Creative Thematic Title",
+  "activities":[{"time":"09:00","description":"Specific place","type":"activity","location":"Place name","coordinates":{"lat":0.0,"lng":0.0},"estimatedCost":15,"transportMode":"walk"}],
+  "localFood":[{"meal":"lunch","name":"Restaurant","cuisine":"Local","priceRange":"$$","estimatedCost":20,"note":"Why visit"}]
+}]}
+
+RULES:
+- ${chunkDays} days total (${startDay} to ${endDay})
+- 3-4 activities per day (less for arrival/departure)
+- Real GPS coordinates for ${input.destination}
+- Real restaurant names
+- Creative day titles (NOT "Day X")
+- Costs in USD
+
+${budgetTier === 'budget' ? 'Focus on FREE attractions, street food, public transport.' : budgetTier === 'luxury' ? 'Focus on premium experiences, fine dining, private transport.' : 'Balance of quality attractions and good value.'}`;
+
+              const chunkStart = Date.now();
+
+              try {
+                // More generous token limit to avoid truncation
+                // Each day needs ~600 tokens for complete JSON with activities + localFood
+                const chunkMaxTokens = Math.max(2500, chunkDays * 600);
+
+                const response = await openai!.chat.completions.create({
+                  model: aiModel,
+                  messages: [
+                    { role: "system", content: "You are a travel planner. Return valid JSON only. Be concise but complete." },
+                    { role: "user", content: chunkPrompt }
+                  ],
+                  response_format: { type: "json_object" },
+                  temperature: 0.4,
+                  max_tokens: chunkMaxTokens,
+                });
+
+                const chunkMs = Date.now() - chunkStart;
+                console.log(`[Chunked] Batch ${chunkIndex + 1}/${numChunks} (days ${startDay}-${endDay}) completed in ${chunkMs}ms`);
+
+                const content = response.choices[0].message.content || "{}";
+                return safeJsonParse(content, { days: [] });
+              } catch (error) {
+                console.error(`[Chunked] Batch ${chunkIndex + 1} failed:`, error);
+                return { days: [] };
+              }
+            });
+
+            // Run ALL chunks in parallel
+            const startParallel = Date.now();
+            const chunkResults = await Promise.all(chunkPromises);
+            const parallelMs = Date.now() - startParallel;
+
+            // Merge all days
+            const allDays: any[] = [];
+            for (const chunk of chunkResults) {
+              if (chunk.days?.length > 0) {
+                allDays.push(...chunk.days);
+              }
+            }
+
+            // Sort by day number to ensure order
+            allDays.sort((a, b) => a.day - b.day);
+
+            console.log(`[Chunked] All ${numChunks} batches completed in ${parallelMs}ms (${allDays.length} days total)`);
+
+            return { days: allDays };
+          };
+
+          // Decide generation strategy based on trip length
+          const USE_CHUNKED_THRESHOLD = 8; // Use chunked for trips 8+ days
+          let result: any;
+          let rawResponse = "";
+
+          if (numDays >= USE_CHUNKED_THRESHOLD) {
+            // FAST PATH: Chunked parallel generation for long trips
+            console.log(`[Itinerary] Using CHUNKED parallel generation for ${numDays}-day trip`);
+            result = await generateChunkedItinerary();
+
+            // Fallback to single-call if chunked failed
+            if (!result.days || result.days.length < numDays * 0.5) {
+              console.log(`[Itinerary] Chunked generation incomplete (${result.days?.length || 0}/${numDays} days), falling back to single call`);
+              const fallback = await generateItinerary();
+              result = fallback.result;
+              rawResponse = fallback.rawResponse;
+            }
+          } else {
+            // STANDARD PATH: Single call for short trips (faster for <8 days)
+            console.log(`[Itinerary] Using SINGLE call for ${numDays}-day trip`);
+            const singleResult = await generateItinerary();
+            result = singleResult.result;
+            rawResponse = singleResult.rawResponse;
+          }
+
+          // Check if first attempt succeeded (for both chunked and single)
           if (!result.days || result.days.length === 0) {
             console.log(`[Itinerary] Attempt 1 FAILED - Empty days array`);
             console.log(`[Itinerary] Raw response length: ${rawResponse.length} chars`);
@@ -4485,10 +4628,14 @@ export async function registerRoutes(
   app.use("/api", changePlanRouter);
   app.use("/api", fixOptionsRouter);
   app.use("/api", appliedPlansRouter);
+  app.use("/api", versionsRouter);
 
   app.post(api.trips.create.path, async (req, res) => {
     try {
       const input = api.trips.create.input.parse(req.body);
+
+      // Extract voyage_uid from header (Item 21: Account-lite)
+      const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
 
       // Validate dates are not in the past
       const dates = parseDateRange(input.dates);
@@ -4520,7 +4667,8 @@ export async function registerRoutes(
       }
 
       // Create trip immediately with pending status
-      const trip = await storage.createTrip(input);
+      // Include voyageUid for anonymous user tracking (Item 21)
+      const trip = await storage.createTrip({ ...input, voyageUid });
 
       // Return immediately - don't wait for AI processing
       res.status(201).json(trip);
@@ -4542,12 +4690,244 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================================
+  // UPDATE TRIP - Modify existing trip (Edit mode)
+  // ============================================================================
+  app.put('/api/trips/:id', async (req, res) => {
+    try {
+      const tripId = Number(req.params.id);
+      const input = api.trips.create.input.parse(req.body);
+
+      // Extract voyage_uid from header
+      const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
+
+      // Check if trip exists and belongs to user
+      const existingTrip = await storage.getTrip(tripId);
+      if (!existingTrip) {
+        return res.status(404).json({ message: 'Trip not found' });
+      }
+
+      // Verify ownership (if trip has a voyageUid, it must match)
+      if (existingTrip.voyageUid && voyageUid && existingTrip.voyageUid !== voyageUid) {
+        return res.status(403).json({ message: 'Not authorized to edit this trip' });
+      }
+
+      // Validate dates are not in the past
+      const dates = parseDateRange(input.dates);
+      if (dates) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const startDate = new Date(dates.startDate);
+        if (startDate < today) {
+          return res.status(400).json({
+            message: "Travel dates must be in the future. Please select upcoming dates.",
+            field: "dates"
+          });
+        }
+      }
+
+      // Validate minimum budget for custom travel style
+      const isCustomBudget = input.travelStyle === 'custom';
+      if (isCustomBudget) {
+        const numDays = dates ? Math.ceil((new Date(dates.endDate).getTime() - new Date(dates.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 7;
+        const groupSize = input.groupSize || 1;
+        const minBudget = groupSize * numDays * 50;
+        if (input.budget < minBudget) {
+          return res.status(400).json({
+            message: `Budget too low. Minimum budget for ${input.groupSize} traveler(s) for ${numDays} days is approximately $${minBudget.toLocaleString()}`,
+            field: "budget"
+          });
+        }
+      }
+
+      // Update the trip (this resets feasibility and itinerary)
+      const updatedTrip = await storage.updateTrip(tripId, input);
+      if (!updatedTrip) {
+        return res.status(500).json({ message: 'Failed to update trip' });
+      }
+
+      // Return updated trip
+      res.json(updatedTrip);
+
+      // Run feasibility check in background
+      processFeasibilityOnly(tripId, input).catch(err => {
+        console.error('Feasibility check failed after update:', err);
+      });
+
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          message: err.errors[0].message,
+          field: err.errors[0].path.join('.'),
+        });
+      }
+      console.error('Error updating trip:', err);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // ============================================================================
+  // LIST MY TRIPS - Returns trips for the current anonymous user (Item 21)
+  // ============================================================================
+  app.get('/api/my-trips', async (req, res) => {
+    try {
+      const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
+      console.log('[MyTrips] voyage_uid from header:', voyageUid);
+
+      if (!voyageUid) {
+        return res.json({ trips: [], message: "No voyage_uid provided" });
+      }
+
+      const limit = Math.min(Number(req.query.limit) || 20, 50);
+      const trips = await storage.listTripsByUid(voyageUid, limit);
+
+      // Return minimal data for list view
+      const tripSummaries = trips.map(trip => {
+        const feasibility = trip.feasibilityReport as any;
+        const itinerary = trip.itinerary as any;
+        const costBreakdown = itinerary?.costBreakdown;
+
+        return {
+          id: trip.id,
+          destination: trip.destination,
+          dates: trip.dates,
+          certaintyScore: feasibility?.score ?? null,
+          certaintyLabel: feasibility?.score ? (feasibility.score >= 70 ? 'high' : feasibility.score >= 40 ? 'medium' : 'low') : null,
+          estimatedCost: costBreakdown?.grandTotal ?? costBreakdown?.total ?? null,
+          currency: costBreakdown?.currency || trip.currency || 'USD',
+          travelers: trip.groupSize || 1,
+          travelStyle: trip.travelStyle,
+          status: trip.status,
+          feasibilityStatus: trip.feasibilityStatus,
+          createdAt: trip.createdAt,
+          updatedAt: trip.updatedAt,
+        };
+      });
+
+      res.json({ trips: tripSummaries });
+    } catch (err) {
+      console.error('[my-trips] Error:', err);
+      res.status(500).json({ message: 'Failed to fetch trips' });
+    }
+  });
+
   app.get(api.trips.get.path, async (req, res) => {
-    const trip = await storage.getTrip(Number(req.params.id));
+    const tripId = Number(req.params.id);
+    const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
+
+    let trip = await storage.getTrip(tripId);
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
+
+    // Ownership check: if trip has voyageUid and it doesn't match request, deny access
+    // This prevents accidental data leakage while keeping share links for legacy (null uid) trips
+    if (trip.voyageUid && voyageUid && trip.voyageUid !== voyageUid) {
+      return res.status(404).json({ message: 'Trip not found' });
+    }
+
+    // Soft backfill: if trip has no voyageUid and request provides one, adopt it
+    // This makes old trips "adoptable" without exposing them in My Trips list
+    if (!trip.voyageUid && voyageUid) {
+      const adopted = await storage.adoptTrip(tripId, voyageUid);
+      if (adopted) {
+        trip = adopted;
+        console.log(`[TripOwnership] Trip ${tripId} adopted by uid ${voyageUid.slice(0, 8)}...`);
+      }
+    }
+
     res.json(trip);
+  });
+
+  // ============================================================================
+  // DELETE TRIP - Permanently removes a trip and its associated data
+  // ============================================================================
+  app.delete('/api/trips/:id', async (req, res) => {
+    const tripId = Number(req.params.id);
+    const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
+
+    if (isNaN(tripId) || tripId <= 0) {
+      return res.status(400).json({ message: 'Invalid trip ID' });
+    }
+
+    try {
+      // Get trip first to verify ownership
+      const trip = await storage.getTrip(tripId);
+      if (!trip) {
+        return res.status(404).json({ message: 'Trip not found' });
+      }
+
+      // Ownership check: only owner can delete
+      // If trip has a voyageUid, it must match the request
+      // If trip has no voyageUid (legacy), allow deletion if any voyageUid provided
+      if (trip.voyageUid && voyageUid && trip.voyageUid !== voyageUid) {
+        return res.status(403).json({ message: 'Not authorized to delete this trip' });
+      }
+
+      // Delete the trip and associated data
+      await storage.deleteTrip(tripId);
+
+      console.log(`[TripDelete] Trip ${tripId} deleted by uid ${voyageUid?.slice(0, 8) || 'unknown'}...`);
+
+      res.json({ success: true, message: 'Trip deleted successfully' });
+    } catch (error) {
+      console.error('[TripDelete] Error:', error);
+      res.status(500).json({ message: 'Failed to delete trip' });
+    }
+  });
+
+  // ============================================================================
+  // PUBLIC SHARE ENDPOINT - Returns trip data without ownership check
+  // Used for view-only shared links (Phase 3.6)
+  // ============================================================================
+  app.get('/api/share/:id', async (req, res) => {
+    const tripId = Number(req.params.id);
+
+    if (isNaN(tripId) || tripId <= 0) {
+      return res.status(400).json({ message: 'Invalid trip ID' });
+    }
+
+    try {
+      const trip = await storage.getTrip(tripId);
+
+      if (!trip) {
+        return res.status(404).json({ message: 'Trip not found' });
+      }
+
+      // Return trip data for public viewing
+      // Note: No ownership check - anyone with the link can view
+      // We strip any sensitive user data (if any existed)
+      const shareableTrip = {
+        id: trip.id,
+        destination: trip.destination,
+        origin: trip.origin,
+        startDate: trip.startDate,
+        endDate: trip.endDate,
+        groupSize: trip.groupSize,
+        adults: trip.adults,
+        children: trip.children,
+        infants: trip.infants,
+        travelStyle: trip.travelStyle,
+        budget: trip.budget,
+        currency: trip.currency,
+        passport: trip.passport,
+        residence: trip.residence,
+        feasibilityReport: trip.feasibilityReport,
+        itinerary: trip.itinerary,
+        status: trip.status,
+        feasibilityStatus: trip.feasibilityStatus,
+        createdAt: trip.createdAt,
+        // Explicitly exclude: userId, voyageUid, userNotes, etc.
+      };
+
+      // Track share view analytics
+      console.log(`[ShareView] Trip ${tripId} viewed via share link`);
+
+      res.json(shareableTrip);
+    } catch (error) {
+      console.error('[ShareView] Error:', error);
+      res.status(500).json({ message: 'Failed to load shared trip' });
+    }
   });
 
   // ============================================================================
@@ -4575,6 +4955,22 @@ export async function registerRoutes(
       console.error('[DemoTrip] Error fetching demo trip:', error);
       // Return fallback on any error
       res.json(DEMO_TRIP_FALLBACK);
+    }
+  });
+
+  // DEBUG: Seed trip with demo data (for testing export)
+  app.post('/api/debug/seed-trip/:id', async (req, res) => {
+    const tripId = Number(req.params.id);
+    try {
+      // Update trip with demo data
+      await storage.updateTripItinerary(tripId, DEMO_TRIP_FALLBACK.itinerary);
+      await storage.updateTripFeasibility(tripId, 'yes', DEMO_TRIP_FALLBACK.feasibilityReport as any);
+      const updated = await storage.getTrip(tripId);
+      console.log(`[Debug] Seeded trip ${tripId} with demo data`);
+      res.json(updated);
+    } catch (error) {
+      console.error('[Debug] Seed error:', error);
+      res.status(500).json({ error: 'Failed to seed trip' });
     }
   });
 
@@ -4631,13 +5027,17 @@ export async function registerRoutes(
           elapsed: 0,
         });
       } else {
-        // Feasibility done but itinerary in progress
+        // Feasibility done but no itinerary exists
+        // IMPORTANT: This does NOT mean generation is in progress!
+        // It means user hasn't triggered generation yet.
+        // Return step 3.5 to indicate "ready to generate"
         res.json({
-          step: 4,
-          message: "Creating your itinerary",
+          step: 3.5,
+          message: "Ready to generate itinerary",
           totalSteps: 6,
-          percentComplete: 67,
+          percentComplete: 50,
           elapsed: 0,
+          needsGeneration: true, // Signal to client that generation should be triggered
         });
       }
     }

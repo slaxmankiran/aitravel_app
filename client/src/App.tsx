@@ -12,6 +12,9 @@ import CreateTrip from "@/pages/CreateTrip";
 import ChatTrip from "@/pages/ChatTrip";
 import ChatTripV2 from "@/pages/ChatTripV2";
 import TripResultsV1 from "@/pages/TripResultsV1";
+import TripShareView from "@/pages/TripShareView";
+import { TripExport } from "@/pages/TripExport";
+import { TripCompareExport } from "@/pages/TripCompareExport";
 import FeasibilityResults from "@/pages/FeasibilityResults";
 import MyTrips from "@/pages/MyTrips";
 import Explore from "@/pages/Explore";
@@ -88,7 +91,10 @@ function Router() {
       <Route path="/demo" component={DemoTrip} />
       <Route path="/create" component={CreateTrip} />
       <Route path="/chat" component={ChatTripV2} />
+      <Route path="/share/:tripId" component={TripShareView} />
       <Route path="/chat-legacy" component={ChatTrip} />
+      <Route path="/trips/:id/export/compare" component={TripCompareExport} />
+      <Route path="/trips/:id/export" component={TripExport} />
       <Route path="/trips/:id/feasibility" component={FeasibilityResults} />
       {/* @ts-expect-error - TripResultsV1 has optional props that are unused in this route */}
       <Route path="/trips/:id/results-v1" component={TripResultsV1} />

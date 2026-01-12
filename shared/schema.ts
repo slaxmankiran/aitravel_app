@@ -73,6 +73,7 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
 export const trips = pgTable("trips", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").references(() => users.id, { onDelete: "set null" }), // Null for anonymous trips
+  voyageUid: text("voyage_uid"), // Anonymous user ID from localStorage (Item 21: Account-lite)
 
   // Trip Details
   passport: text("passport").notNull(),
@@ -121,6 +122,7 @@ export const trips = pgTable("trips", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => ({
   userIdIdx: index("trips_user_id_idx").on(table.userId),
+  voyageUidIdx: index("trips_voyage_uid_idx").on(table.voyageUid),
   destinationIdx: index("trips_destination_idx").on(table.destination),
   isTemplateIdx: index("trips_is_template_idx").on(table.isTemplate),
 }));
@@ -202,6 +204,52 @@ export const tripAppliedPlans = pgTable("trip_applied_plans", {
   tripChangeUnique: uniqueIndex("trip_applied_plans_trip_change_uniq").on(table.tripId, table.changeId),
   // Index for recent plans queries
   tripAppliedIdx: index("trip_applied_plans_trip_applied_idx").on(table.tripId, table.appliedAt),
+}));
+
+// ============================================================================
+// TRIP VERSIONS (Version History - Item 18)
+// ============================================================================
+
+/**
+ * Stores versioned snapshots of a trip for history/restore functionality.
+ * Created when:
+ *   - Change planner applies a plan
+ *   - Apply Fix dispatcher applies a patch
+ *   - User clicks "Save version"
+ *
+ * Snapshot stores TripExportModel-lite for PDF stability across schema changes.
+ */
+export const tripVersions = pgTable("trip_versions", {
+  id: serial("id").primaryKey(),
+  tripId: integer("trip_id").references(() => trips.id, { onDelete: "cascade" }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+
+  // Source of this version
+  source: text("source").notNull(), // 'change_plan' | 'next_fix' | 'manual_save' | 'system' | 'restore'
+
+  // Links to change planner identity (for deduplication)
+  changeId: text("change_id"), // nullable - manual saves don't have a changeId
+
+  // Optional display name for later "named versions" feature
+  label: text("label"),
+
+  // Snapshot of trip state (TripExportModel-lite)
+  // Contains: inputs, costs, certainty, itinerary summary
+  snapshot: jsonb("snapshot").notNull(),
+
+  // Quick summary for list display (no need to parse snapshot)
+  summary: jsonb("summary").notNull(), // { chips: string[], certaintyAfter?: number, totalAfter?: number|null }
+
+  // Optional: pin important versions
+  isPinned: boolean("is_pinned").default(false),
+}, (table) => ({
+  // Index for listing versions by trip
+  tripIdIdx: index("trip_versions_trip_id_idx").on(table.tripId),
+  // Unique constraint: one version per tripId + changeId (when changeId is present)
+  // This prevents duplicates from the same change plan application
+  tripChangeIdUnique: uniqueIndex("trip_versions_trip_change_id_uniq")
+    .on(table.tripId, table.changeId)
+    .where(sql`change_id IS NOT NULL`),
 }));
 
 // ============================================================================
@@ -420,6 +468,106 @@ export type InsertPackingList = z.infer<typeof insertPackingListSchema>;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type AffiliateClick = typeof affiliateClicks.$inferSelect;
 export type WeatherCache = typeof weatherCache.$inferSelect;
+
+// Trip Versions
+export type TripVersion = typeof tripVersions.$inferSelect;
+export type InsertTripVersion = typeof tripVersions.$inferInsert;
+
+// ============================================================================
+// VERSION HISTORY TYPES (Item 18)
+// ============================================================================
+
+/**
+ * Source of a version creation
+ */
+export type VersionSource = 'change_plan' | 'next_fix' | 'manual_save' | 'system' | 'restore';
+
+/**
+ * Snapshot stored in trip_versions.snapshot
+ * This is a TripExportModel-lite for PDF stability across schema changes.
+ */
+export interface VersionSnapshot {
+  // Trip inputs
+  inputs: {
+    passport: string;
+    destination: string;
+    dates: string;
+    budget: number;
+    currency: string;
+    groupSize: number;
+    adults: number;
+    children: number;
+    infants: number;
+    travelStyle?: string;
+    origin?: string;
+  };
+
+  // Cost breakdown
+  costs: {
+    grandTotal: number | null;
+    perPerson: number | null;
+    currency: string;
+    rows: Array<{
+      category: string;
+      amount: number | null;
+      note?: string;
+    }>;
+  };
+
+  // Certainty state
+  certainty: {
+    score: number;
+    visaRisk: 'low' | 'medium' | 'high';
+    bufferDays?: number;
+    verdict: 'yes' | 'no' | 'warning';
+  };
+
+  // Itinerary summary (compact, not full activities)
+  itinerarySummary: {
+    totalDays: number;
+    dayHeadings: string[]; // ["Day 1: Arrival", "Day 2: Temple Tours", ...]
+    totalActivities: number;
+  };
+
+  // Optional: full itinerary for restore (can be large)
+  itinerary?: any; // Full itinerary JSON for restore functionality
+}
+
+/**
+ * Summary stored in trip_versions.summary for quick list display
+ */
+export interface VersionSummary {
+  chips: string[]; // ["+3 buffer days", "Cost -$120", "Visa risk lowered"]
+  certaintyAfter?: number;
+  totalAfter?: number | null;
+  source?: string; // Display-friendly source label
+}
+
+/**
+ * Full version record for API responses
+ */
+export interface TripVersionResponse {
+  id: number;
+  tripId: number;
+  createdAt: string;
+  source: VersionSource;
+  changeId?: string;
+  label?: string;
+  summary: VersionSummary;
+  snapshot: VersionSnapshot;
+  isPinned: boolean;
+}
+
+/**
+ * Request body for creating a version
+ */
+export interface CreateVersionRequest {
+  source: VersionSource;
+  changeId?: string;
+  label?: string;
+  snapshot: VersionSnapshot;
+  summary: VersionSummary;
+}
 
 // ============================================================================
 // API TYPES

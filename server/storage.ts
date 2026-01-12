@@ -1,6 +1,6 @@
 import { users, trips, type User, type InsertUser, type Trip, type InsertTrip, type FeasibilityReport } from "@shared/schema";
 import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, desc, isNull, and } from "drizzle-orm";
 
 export interface IStorage {
   // User operations
@@ -10,7 +10,12 @@ export interface IStorage {
 
   // Trip operations
   createTrip(trip: InsertTrip): Promise<Trip>;
+  updateTrip(id: number, trip: Partial<InsertTrip>): Promise<Trip | null>; // Update existing trip
   getTrip(id: number): Promise<Trip | undefined>;
+  listTrips(): Promise<Trip[]>; // List all trips (for demo lookup)
+  listTripsByUid(voyageUid: string, limit?: number): Promise<Trip[]>; // List trips by anonymous user ID
+  adoptTrip(id: number, voyageUid: string): Promise<Trip | null>; // Adopt orphan trip (soft backfill)
+  deleteTrip(id: number): Promise<void>; // Permanently delete trip and associated data
   updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip>;
   setTripFeasibilityPending(id: number): Promise<Trip>; // Sets pending status with timestamp
   updateTripItinerary(id: number, itinerary: any): Promise<Trip>;
@@ -37,9 +42,57 @@ export class DatabaseStorage implements IStorage {
     return newTrip;
   }
 
+  async updateTrip(id: number, tripData: Partial<InsertTrip>): Promise<Trip | null> {
+    // Reset feasibility and itinerary when trip details change
+    const [updatedTrip] = await db
+      .update(trips)
+      .set({
+        ...tripData,
+        feasibilityStatus: 'pending',
+        feasibilityReport: null,
+        feasibilityError: null,
+        itinerary: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(trips.id, id))
+      .returning();
+    return updatedTrip || null;
+  }
+
   async getTrip(id: number): Promise<Trip | undefined> {
     const [trip] = await db.select().from(trips).where(eq(trips.id, id));
     return trip;
+  }
+
+  async listTrips(): Promise<Trip[]> {
+    return db.select().from(trips).orderBy(desc(trips.createdAt));
+  }
+
+  async listTripsByUid(voyageUid: string, limit = 20): Promise<Trip[]> {
+    return db
+      .select()
+      .from(trips)
+      .where(eq(trips.voyageUid, voyageUid))
+      .orderBy(desc(trips.createdAt))
+      .limit(limit);
+  }
+
+  // Adopt an orphan trip (soft backfill) - only updates if voyageUid is currently null
+  async adoptTrip(id: number, voyageUid: string): Promise<Trip | null> {
+    const [updatedTrip] = await db
+      .update(trips)
+      .set({ voyageUid })
+      .where(and(eq(trips.id, id), isNull(trips.voyageUid)))
+      .returning();
+    return updatedTrip || null;
+  }
+
+  // Delete trip and associated data (conversations, comments, etc.)
+  async deleteTrip(id: number): Promise<void> {
+    // Note: If there are foreign key constraints, they should be set to CASCADE DELETE
+    // For now, just delete the trip - associated data will be orphaned
+    // TODO: Add explicit cleanup for tripConversations, tripComments, etc.
+    await db.delete(trips).where(eq(trips.id, id));
   }
 
   async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {
@@ -112,8 +165,53 @@ export class InMemoryStorage implements IStorage {
     return newTrip;
   }
 
+  async updateTrip(id: number, tripData: Partial<InsertTrip>): Promise<Trip | null> {
+    const trip = this.trips.find(t => t.id === id) as any;
+    if (!trip) return null;
+
+    // Update trip fields and reset feasibility/itinerary
+    Object.assign(trip, tripData, {
+      feasibilityStatus: 'pending',
+      feasibilityReport: null,
+      feasibilityError: null,
+      itinerary: null,
+      updatedAt: new Date().toISOString(),
+    });
+    return trip;
+  }
+
   async getTrip(id: number): Promise<Trip | undefined> {
     return this.trips.find(t => t.id === id);
+  }
+
+  async listTrips(): Promise<Trip[]> {
+    return [...this.trips].sort((a, b) =>
+      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+  }
+
+  async listTripsByUid(voyageUid: string, limit = 20): Promise<Trip[]> {
+    return this.trips
+      .filter(t => (t as any).voyageUid === voyageUid)
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+      .slice(0, limit);
+  }
+
+  // Adopt an orphan trip (soft backfill) - only updates if voyageUid is currently null
+  async adoptTrip(id: number, voyageUid: string): Promise<Trip | null> {
+    const trip = this.trips.find(t => t.id === id) as any;
+    if (!trip) return null;
+    if (trip.voyageUid !== null && trip.voyageUid !== undefined) return null; // Already owned
+    trip.voyageUid = voyageUid;
+    return trip;
+  }
+
+  // Delete trip from memory
+  async deleteTrip(id: number): Promise<void> {
+    const index = this.trips.findIndex(t => t.id === id);
+    if (index !== -1) {
+      this.trips.splice(index, 1);
+    }
   }
 
   async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {

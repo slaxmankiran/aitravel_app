@@ -363,71 +363,69 @@ function getProcessingTime(processingDays) {
 
 ---
 
-## Edit Trip Flow (2026-01-08)
+## Edit Trip Flow (2026-01-08, Updated 2026-01-11)
 
-### Status: Implemented
+### Status: Implemented with Edit-in-Place
 
-Hybrid approach: Edit always opens `/create` form, with tracking for future routing.
+Edit updates the SAME trip ID (industry best practice) instead of creating duplicates.
 
-### Option A: Edit Opens Form (Shipped)
+### API Endpoint
 
-**HeaderBar.tsx**
-- Button label: "Edit trip details"
-- Tooltip: "Opens the form for accurate edits"
-- URL format: `/create?editTripId=2&returnTo=%2Ftrips%2F2%2Fresults-v1`
+**PUT /api/trips/:id** - Updates existing trip in place
+- Validates trip exists and ownership via `x-voyage-uid` header
+- Resets `feasibilityStatus`, `feasibilityReport`, `itinerary` on update
+- Triggers background feasibility re-analysis
 
-**CreateTrip.tsx**
-- Fetches trip by `editTripId` param
-- Shows "Editing: [destination]" header banner
-- Loading state while fetching
-- CTA: "Update & Re-check Feasibility"
-- Passes `returnTo` through feasibility flow
+### Client Hook
 
-**FeasibilityResults.tsx**
-- Parses `returnTo` param
-- Redirects to `returnTo` after generation
+**`useUpdateTrip()`** in `client/src/hooks/use-trips.ts`
+- Sends PUT request with updated trip data
+- Invalidates React Query cache for the trip
+- Shows toast on error
 
-### Option B: Origin Tracking (Shipped)
+### Edit Flow
 
-**Schema Addition**
-```sql
-created_from TEXT DEFAULT 'form'  -- 'chat' | 'form' | 'demo'
-```
-
-**ChatTripV2.tsx**
-- Sets `createdFrom: 'chat'` when creating trips
-
-### Flow Diagram
-
+**From Results Page:**
 ```
 Results Page → [Edit trip details] → /create?editTripId=2&returnTo=...
                                            ↓
                                     CreateTrip (Edit Mode)
-                                    - Shows "Editing: Rome, Italy"
-                                    - Prefills all fields
+                                    - Uses useUpdateTrip() for existing trips
+                                    - Same trip ID preserved
                                     - CTA: "Update & Re-check Feasibility"
                                            ↓
                                     FeasibilityResults?returnTo=...
                                            ↓
-                                    Back to Results Page (returnTo)
+                                    Back to Results Page (same trip ID)
+```
+
+**From My Trips:**
+```
+My Trips → [3-dot menu] → Edit → /create?editTripId=X&returnTo=/trips
+                                           ↓
+                                    CreateTrip (Edit Mode)
+                                           ↓
+                                    FeasibilityResults
+                                           ↓
+                                    Trip Results Page (not back to My Trips)
 ```
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `HeaderBar.tsx` | Edit button label, tooltip, URL with returnTo |
-| `CreateTrip.tsx` | Edit mode header, fetch by ID, smart CTA |
-| `FeasibilityResults.tsx` | Parse & use returnTo param |
-| `shared/schema.ts` | Added `created_from` field |
-| `ChatTripV2.tsx` | Sets `createdFrom: 'chat'` |
+| `server/storage.ts` | Added `updateTrip()` method to IStorage interface |
+| `server/routes.ts` | Added `PUT /api/trips/:id` endpoint |
+| `client/src/hooks/use-trips.ts` | Added `useUpdateTrip()` hook |
+| `CreateTrip.tsx` | Uses update vs create based on `editTripId` |
+| `FeasibilityResults.tsx` | Redirects to results (not My Trips) after edit |
+| `HeaderBar.tsx` | "Trips" breadcrumb links to `/trips` |
 
-### Benefits
+### Key Behaviors
 
-1. **Consistent UX** - Form is precision tool for editing
-2. **Flow continuity** - returnTo preserves user context
-3. **Analytics ready** - `created_from` enables segmentation
-4. **Future routing** - Can route to different editors based on origin
+1. **Same Trip ID** - Edit updates existing record, no duplicates
+2. **Smart Redirect** - From My Trips edit → goes to results page, not back to list
+3. **Ownership Check** - Only trip owner (via voyage_uid) can edit
 
 ---
 
@@ -802,6 +800,96 @@ Smart agent that detects user changes after seeing results, recomputes only impa
 | AI       | Deepseek API (OpenAI SDK compatible)       |
 | State    | React Query                                |
 | Routing  | Wouter (client), Express (server)          |
+
+---
+
+## Share View (Phase 3.6) - Beta Complete (2026-01-11)
+
+### Status: Implemented and Tested
+
+Public, read-only trip sharing with OG meta tags for social previews.
+
+**Route:** `/share/:tripId`
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| Public API | `GET /api/share/:id` returns trip without auth |
+| OG Meta Tags | Dynamic title, description for Facebook/Twitter previews |
+| Read-only UI | No edit affordances, clean view-only rendering |
+| Plan Own CTA | Prominent "Plan your own trip" conversion button |
+| Full Itinerary | Day cards, map, cost summary - all visible |
+
+### Files Created/Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/pages/TripShareView.tsx` | New page component |
+| `client/src/App.tsx` | Added `/share/:tripId` route |
+| `server/routes.ts` | Added `GET /api/share/:id` endpoint |
+| `server/vite.ts` | OG meta tag injection (development) |
+| `server/static.ts` | OG meta tag injection (production) |
+
+### API Endpoint
+
+```typescript
+// GET /api/share/:id - Public endpoint, no auth required
+// Returns: Shareable trip data (excludes sensitive fields)
+{
+  id, destination, origin, startDate, endDate,
+  groupSize, travelStyle, budget, currency,
+  feasibilityReport, itinerary, certaintyScore,
+  trueCostBreakdown, visaDetails, actionItems
+  // Excludes: userId, voyageUid, userNotes
+}
+```
+
+### OG Meta Tags
+
+```html
+<title>Paris, France Trip | VoyageAI</title>
+<meta property="og:title" content="Paris, France Trip | VoyageAI" />
+<meta property="og:description" content="AI-powered travel plan for Paris, France. 2 travelers, moderate style." />
+<meta name="twitter:card" content="summary_large_image" />
+```
+
+### Layout Structure
+
+```
+┌──────────────────────────────────────────────────┐
+│ ShareViewHeader (brand left, "Plan own trip" CTA)│
+├──────────────────────────────────────────────────┤
+│ Hero Section (destination, dates, travelers)     │
+├──────────────────────────────────────────────────┤
+│ CertaintyBar (visa status, score)                │
+├──────────────────────────────────────────────────┤
+│ Main Content                                      │
+│ ┌────────────────────┬─────────────────────────┐ │
+│ │ DayCardList        │ ItineraryMap (sticky)   │ │
+│ │ - Day cards        │                         │ │
+│ │ - Activities       │ CostSummaryCard         │ │
+│ └────────────────────┴─────────────────────────┘ │
+├──────────────────────────────────────────────────┤
+│ PlanOwnCTA (sticky bottom bar)                   │
+└──────────────────────────────────────────────────┘
+```
+
+### Key Implementation Details
+
+1. **ResultsBackground as wrapper**: All content rendered as children of `ResultsBackground` for proper layering
+2. **No duplicate destination**: Header shows only brand, destination appears only in hero
+3. **ItineraryMap props**: Uses `trip={tripResponse}` interface, not individual location props
+4. **Social crawler detection**: OG tags injected server-side before Vite transforms
+
+### Test Checklist
+
+- [x] `/share/:tripId` loads in incognito (no auth)
+- [x] OG meta tags appear (curl test)
+- [x] Map displays correctly
+- [x] Day cards render with activities
+- [x] Cost summary visible
+- [x] "Plan your own trip" navigates to `/create`
 
 ---
 
@@ -1767,3 +1855,365 @@ All exit criteria satisfied:
 - ✅ Robust budget parsing in both view model and page
 
 **Ready for Phase 2**: Activity images, distance display reliability, preference capture
+
+---
+
+## Edit-in-Place Implementation (2026-01-11)
+
+### Status: Implemented and Tested
+
+Updated edit flow to UPDATE existing trips instead of creating duplicates.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/hooks/use-trips.ts` | Added `useUpdateTrip()` hook |
+| `client/src/pages/CreateTrip.tsx` | Uses update vs create based on editTripId |
+| `client/src/pages/FeasibilityResults.tsx` | Handles returnTo param redirect |
+| `client/src/components/results/HeaderBar.tsx` | Edit link with returnTo encoding |
+
+### useUpdateTrip Hook
+
+```typescript
+export function useUpdateTrip() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: CreateTripRequest }) => {
+      const payload = {
+        ...data,
+        budget: Number(data.budget),
+        groupSize: Number(data.groupSize),
+        adults: Number(data.adults) || 1,
+        children: Number(data.children) || 0,
+        infants: Number(data.infants) || 0,
+      };
+      const validated = api.trips.create.input.parse(payload);
+      const res = await fetch(`/api/trips/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...getVoyageHeaders() },
+        body: JSON.stringify(validated),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return api.trips.create.responses[201].parse(await res.json());
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [api.trips.get.path, data.id] });
+      queryClient.invalidateQueries({ queryKey: ['/api/trips'] });
+    },
+    onError: (error) => {
+      toast({ title: "Update Failed", description: error.message, variant: "destructive" });
+    },
+  });
+}
+```
+
+### Edit Flow Logic
+
+In CreateTrip.tsx:
+- When `editTripId` param present: uses PUT to update existing trip
+- When no editTripId: uses POST to create new trip
+- Smart redirect: If returnTo=/trips, redirects to results-v1 page instead
+
+### Redirect Fix
+
+```typescript
+// In handleSuccess()
+if (decodedReturnTo === '/trips' || decodedReturnTo === '/trips/') {
+  // Editing from My Trips page - redirect to results, not back to list
+  finalReturnTo = `/trips/${tripId}/results-v1?updated=1${changesParam}`;
+} else {
+  finalReturnTo = `${decodedReturnTo}?updated=1${changesParam}`;
+}
+```
+
+---
+
+## UI Improvements (2026-01-11)
+
+### Status: Implemented
+
+Various UI refinements based on user feedback.
+
+### 1. Trips Breadcrumb Link
+
+Made "Trips" in HeaderBar breadcrumb a clickable link to My Trips page.
+
+```tsx
+// client/src/components/results/HeaderBar.tsx
+<Link href="/trips" className="shrink-0 hover:text-white/70 transition-colors">
+  Trips
+</Link>
+```
+
+### 2. Passport/Nationality Pill
+
+Added nationality display in trip results hero with proper adjective formatting.
+
+**File**: `client/src/pages/TripResultsV1.tsx`
+
+```typescript
+const NATIONALITY_MAP: Record<string, string> = {
+  'India': 'Indian',
+  'United States': 'American',
+  'USA': 'American',
+  'United Kingdom': 'British',
+  'UK': 'British',
+  'Canada': 'Canadian',
+  // ... 40+ countries mapped
+};
+
+function getNationalityAdjective(country: string): string {
+  if (NATIONALITY_MAP[country]) return NATIONALITY_MAP[country];
+  // Case-insensitive fallback
+  for (const [key, value] of Object.entries(NATIONALITY_MAP)) {
+    if (key.toLowerCase() === country.toLowerCase()) return value;
+  }
+  return country;
+}
+```
+
+Usage in hero:
+```tsx
+{passport && (
+  <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1">
+    <Flag className="w-4 h-4" />
+    <span>{getNationalityAdjective(passport)} Passport</span>
+  </div>
+)}
+```
+
+### 3. Activity Cost Icons Removed
+
+Removed Coins icon from activity cost badges in `ActivityRow.tsx`. Now shows clean "Free" or price text only.
+
+### 4. Glass Design for DayCard
+
+Updated DayCard background to match glass design system:
+
+```tsx
+// client/src/components/results-v1/DayCard.tsx
+"bg-slate-900/50 backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+```
+
+### 5. Distances Toggle Fix
+
+Fixed toggle to actually control distance display + improved UI to on/off switch:
+
+**ActivityRow.tsx fix**:
+```typescript
+const shouldShowTransport = showTransport && showDistance &&
+  (distanceFromPrevious !== null || activity.transportMode);
+```
+
+**Toggle UI in TripResultsV1.tsx**:
+```tsx
+<button onClick={() => setShowDistances(!showDistances)} className="flex items-center gap-2...">
+  <Route className="w-3 h-3 text-white/50" />
+  <span className="text-white/60">Distances</span>
+  <div className={`relative w-7 h-4 rounded-full transition-colors ${
+    showDistances ? 'bg-emerald-500' : 'bg-white/20'
+  }`}>
+    <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${
+      showDistances ? 'translate-x-3.5' : 'translate-x-0.5'
+    }`} />
+  </div>
+</button>
+```
+
+### 6. Cross-Slot Distance Calculation
+
+Fixed distances to show across time slots (morning → afternoon → evening):
+
+```tsx
+// client/src/components/results-v1/DayCard.tsx
+const renderTimeSlot = (
+  slot: TimeSlot,
+  activities: typeof day.activities,
+  lastActivityFromPreviousSlot: typeof day.activities[0] | null
+) => { /* ... */ };
+
+const getLastActivity = (activities: typeof day.activities) =>
+  activities.length > 0 ? activities[activities.length - 1] : null;
+
+// Usage:
+{renderTimeSlot("morning", buckets.morning, null)}
+{renderTimeSlot("afternoon", buckets.afternoon, getLastActivity(buckets.morning))}
+{renderTimeSlot("evening", buckets.evening,
+  getLastActivity(buckets.afternoon) || getLastActivity(buckets.morning))}
+```
+
+---
+
+## RAG + Agentic AI Implementation (2026-01-12)
+
+### Status: In Progress
+
+Adding RAG (Retrieval Augmented Generation) for cited visa answers and agentic AI for smart trip planning.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     RAG + Agent Architecture                    │
+├─────────────────────────────────────────────────────────────────┤
+│  User Message                                                   │
+│       ↓                                                         │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐        │
+│  │ RAG Layer   │    │ Tool Layer  │    │ Rules Layer │        │
+│  │ (pgvector)  │    │ (APIs)      │    │ (your code) │        │
+│  │             │    │             │    │             │        │
+│  │ • Visa docs │    │ • Flights   │    │ • Verdict   │        │
+│  │ • Entry req │    │ • Hotels    │    │ • Certainty │        │
+│  │ • Safety    │    │ • Weather   │    │ • Budget    │        │
+│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘        │
+│         └──────────────────┼──────────────────┘                │
+│                            ↓                                    │
+│                    ┌───────────────┐                           │
+│                    │  Agent Loop   │                           │
+│                    │  (DeepSeek)   │                           │
+│                    └───────┬───────┘                           │
+│                            ↓                                    │
+│              ┌─────────────────────────────┐                   │
+│              │  Structured Output          │                   │
+│              │  { ui: [...], text, cite }  │                   │
+│              └─────────────────────────────┘                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation Phases
+
+| Phase | Focus | Timeline | Status |
+|-------|-------|----------|--------|
+| **Phase 1** | Quick wins (due dates, caching) | Week 1 | 🟡 In Progress |
+| **Phase 2** | RAG foundation (pgvector, knowledge base) | Weeks 2-3 | ⬜ Pending |
+| **Phase 3** | Agent loop with tools | Weeks 4-6 | ⬜ Pending |
+
+### Phase 1: Quick Wins
+
+#### 1A. Due Date Calculator ✅
+
+**File:** `server/services/dueDates.ts`
+
+Computes "Apply visa by X date" based on travel date and processing time:
+- `computeApplyByDate()` - returns ISO date string
+- `computeDueDate()` - returns full result with urgency level
+- `parseTravelStartDate()` - parses various date formats
+- `buildVisaDueDates()` - convenience function for visa action items
+
+```typescript
+// Usage
+import { buildVisaDueDates } from './services/dueDates';
+
+const dueDate = buildVisaDueDates(visaDetails, trip.dates);
+// Returns: { applyByDate: "2026-01-08", urgency: "urgent", recommendation: "Apply within this week" }
+```
+
+### Phase 2: RAG Foundation
+
+#### Environment Variables (Required)
+
+```bash
+# Add to .env
+EMBEDDING_DIM=768                    # Must match your embedding model
+OLLAMA_URL=http://localhost:11434    # Local Ollama for embeddings
+```
+
+#### 2A. Enable pgvector
+
+```bash
+docker exec -it voyageai-postgres psql -U voyageai -d voyageai \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+#### 2B. Knowledge Schema
+
+**File:** `shared/knowledgeSchema.ts`
+
+```typescript
+// Tables:
+// - knowledge_sources: Where content comes from (gov, airline, curated)
+// - knowledge_chunks: Searchable content pieces with embeddings
+
+// Key fields:
+// - embedding: vector(EMBEDDING_DIM) with HNSW index
+// - category: 'visa' | 'entry' | 'safety' | 'transport'
+// - trustLevel: 'high' | 'medium' | 'low'
+```
+
+#### 2C. Embeddings Service
+
+**File:** `server/services/embeddings.ts`
+
+- Local: Ollama with `nomic-embed-text` (free, for dev)
+- Production: OpenAI `text-embedding-3-small`
+- Runtime validation ensures embedding dimensions match schema
+
+#### 2D. RAG Retrieval Endpoint
+
+**File:** `server/routes/knowledge.ts`
+
+```
+POST /api/knowledge/search
+  Body: { query: string, filters?: { category, destination, passport } }
+  Returns: { chunks: Array<{ chunkText, title, url, sourceName, trustLevel, score }> }
+```
+
+Uses Drizzle's `cosineDistance()` helper for pgvector queries.
+
+### Phase 3: Agent Loop (Future)
+
+#### Tool Definitions
+
+```typescript
+// server/services/agentTools.ts
+- getVisaFactsRAG: Get visa info with citations
+- computeVerdict: Run certainty engine
+- getFlightEstimate: Fetch flight pricing
+- getHotelEstimate: Fetch hotel pricing
+- getWeather: Seasonal weather summary
+```
+
+#### Agent Endpoint
+
+```
+POST /api/trips/:id/assistant
+  Body: { message: string }
+  Returns: { ui: { cards: [...] }, text: string, citations: [...] }
+```
+
+### Files Created/Modified
+
+| File | Purpose | Status |
+|------|---------|--------|
+| `server/services/dueDates.ts` | Due date calculator | ✅ Created |
+| `shared/knowledgeSchema.ts` | pgvector tables | ⬜ Pending |
+| `server/services/embeddings.ts` | Ollama/OpenAI embeddings | ⬜ Pending |
+| `server/routes/knowledge.ts` | RAG search endpoint | ⬜ Pending |
+| `server/services/agentTools.ts` | Agent tool definitions | ⬜ Pending |
+| `server/services/agentLoop.ts` | Agent orchestration | ⬜ Pending |
+
+### Local Development Setup
+
+```bash
+# 1. Enable pgvector
+docker exec -it voyageai-postgres psql -U voyageai -d voyageai \
+  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 2. Install Ollama (macOS)
+brew install ollama
+ollama pull nomic-embed-text  # 768-dim embeddings
+
+# 3. Start Ollama
+ollama serve  # Runs on localhost:11434
+
+# 4. Set environment
+echo "EMBEDDING_DIM=768" >> .env
+echo "OLLAMA_URL=http://localhost:11434" >> .env
+
+# 5. Push schema changes
+DATABASE_URL="postgres://voyageai:voyageai@localhost:5432/voyageai" npx drizzle-kit push
+```

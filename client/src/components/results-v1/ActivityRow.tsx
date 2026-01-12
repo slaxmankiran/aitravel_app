@@ -10,7 +10,6 @@
 import React from "react";
 import {
   MapPin,
-  Coins,
   Car,
   Bus,
   Train,
@@ -30,6 +29,7 @@ import {
   formatDistance,
   getSmartTransportMode,
 } from "./itinerary-adapters";
+import { ActivityImage } from "./ActivityImage";
 
 // ============================================================================
 // TRANSPORT ICON MAPPING
@@ -98,6 +98,8 @@ interface ActivityRowProps {
   distanceFromPrevious?: number | null; // Distance in km from previous activity
   prevActivity?: Activity | null; // Previous activity for context
   showDistance?: boolean;
+  /** Destination for activity image context */
+  destination?: string;
   onClick: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
@@ -113,6 +115,7 @@ function ActivityRowComponent({
   distanceFromPrevious,
   prevActivity,
   showDistance = false,
+  destination,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -124,6 +127,9 @@ function ActivityRowComponent({
   const colors = TYPE_COLORS[activity.type] || TYPE_COLORS.activity;
   const TypeIcon = getActivityTypeIcon(activity.type);
 
+  // Show image for main activity types (not transport)
+  const showImage = destination && activity.type !== 'transport';
+
   // Get smart transport mode based on distance and context
   const smartTransport = getSmartTransportMode(
     distanceFromPrevious ?? null,
@@ -133,8 +139,11 @@ function ActivityRowComponent({
   const TransportIcon = getTransportIcon(smartTransport.icon);
   const transportColor = getTransportColor(smartTransport.icon);
 
-  // Show transport if we have distance or explicit transport mode
-  const shouldShowTransport = showTransport && (distanceFromPrevious !== null || activity.transportMode);
+  // Show transport/distance when:
+  // 1. showTransport is true (not first activity in slot)
+  // 2. showDistance toggle is enabled
+  // 3. We have distance or explicit transport mode
+  const shouldShowTransport = showTransport && showDistance && (distanceFromPrevious !== null || activity.transportMode);
 
   return (
     <div className="relative">
@@ -188,16 +197,26 @@ function ActivityRowComponent({
           </span>
         </div>
 
-        {/* Type icon */}
-        <div
-          className={cn(
-            "w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0",
-            colors.bg,
-            "ring-1 ring-white/10"
-          )}
-        >
-          <TypeIcon className={cn("w-4 h-4", colors.text)} />
-        </div>
+        {/* Activity image or type icon */}
+        {showImage ? (
+          <ActivityImage
+            activityName={name}
+            destination={destination!}
+            activityType={activity.type}
+            size="sm"
+            className="ring-1 ring-white/10"
+          />
+        ) : (
+          <div
+            className={cn(
+              "w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0",
+              colors.bg,
+              "ring-1 ring-white/10"
+            )}
+          >
+            <TypeIcon className={cn("w-4 h-4", colors.text)} />
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-grow min-w-0">
@@ -223,17 +242,16 @@ function ActivityRowComponent({
               )}
             </div>
 
-            {/* Cost badge */}
+            {/* Cost badge - no icon, just text */}
             {cost !== null && (
               <div
                 className={cn(
-                  "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium shrink-0",
+                  "px-2 py-0.5 rounded-full text-[11px] font-medium shrink-0",
                   cost === 0
                     ? "bg-green-500/15 text-green-300"
                     : "bg-white/10 text-white/70"
                 )}
               >
-                <Coins className="w-3 h-3" />
                 {cost === 0 ? "Free" : `${currencySymbol}${cost.toLocaleString()}`}
               </div>
             )}
