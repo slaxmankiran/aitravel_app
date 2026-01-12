@@ -58,29 +58,29 @@ interface ResultsBackgroundProps {
 type DestinationType = 'beach' | 'mountain' | 'city' | 'default';
 
 // ============================================================================
-// AMBIENT GRADIENT CONFIG
+// AMBIENT GRADIENT CONFIG (Premium: very subtle, 3-5% opacity)
 // ============================================================================
 
 const AMBIENT_GRADIENTS = {
   neutral: [
-    'radial-gradient(ellipse at 20% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 50% 50%, rgba(16, 185, 129, 0.04) 0%, transparent 60%)',
+    'radial-gradient(ellipse at 20% 80%, rgba(59, 130, 246, 0.04) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.03) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 50% 50%, rgba(16, 185, 129, 0.025) 0%, transparent 60%)',
   ],
   go: [
-    'radial-gradient(ellipse at 20% 80%, rgba(16, 185, 129, 0.10) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 80% 20%, rgba(52, 211, 153, 0.08) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 50% 50%, rgba(16, 185, 129, 0.05) 0%, transparent 60%)',
+    'radial-gradient(ellipse at 20% 80%, rgba(16, 185, 129, 0.05) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 80% 20%, rgba(52, 211, 153, 0.04) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 50% 50%, rgba(16, 185, 129, 0.03) 0%, transparent 60%)',
   ],
   possible: [
-    'radial-gradient(ellipse at 20% 80%, rgba(245, 158, 11, 0.08) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 80% 20%, rgba(251, 191, 36, 0.06) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 50% 50%, rgba(217, 119, 6, 0.04) 0%, transparent 60%)',
+    'radial-gradient(ellipse at 20% 80%, rgba(245, 158, 11, 0.04) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 80% 20%, rgba(251, 191, 36, 0.03) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 50% 50%, rgba(217, 119, 6, 0.025) 0%, transparent 60%)',
   ],
   difficult: [
-    'radial-gradient(ellipse at 20% 80%, rgba(239, 68, 68, 0.08) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 80% 20%, rgba(248, 113, 113, 0.06) 0%, transparent 50%)',
-    'radial-gradient(ellipse at 50% 50%, rgba(220, 38, 38, 0.04) 0%, transparent 60%)',
+    'radial-gradient(ellipse at 20% 80%, rgba(239, 68, 68, 0.04) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 80% 20%, rgba(248, 113, 113, 0.03) 0%, transparent 50%)',
+    'radial-gradient(ellipse at 50% 50%, rgba(220, 38, 38, 0.025) 0%, transparent 60%)',
   ],
 };
 
@@ -91,63 +91,64 @@ const AMBIENT_GRADIENTS = {
 const NOISE_SVG = `data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E`;
 
 // ============================================================================
-// LIGHT BLOOM CONFIG
+// LIGHT BLOOM CONFIG (Premium: very subtle, 3-5% opacity, slow pulse)
 // ============================================================================
 
 const BLOOM_ORBS = [
-  { x: '15%', y: '25%', size: 300, color: 'rgba(59, 130, 246, 0.12)', delay: 0 },
-  { x: '75%', y: '15%', size: 250, color: 'rgba(139, 92, 246, 0.10)', delay: 2 },
-  { x: '85%', y: '70%', size: 200, color: 'rgba(16, 185, 129, 0.08)', delay: 4 },
-  { x: '25%', y: '80%', size: 180, color: 'rgba(245, 158, 11, 0.06)', delay: 6 },
+  { x: '15%', y: '25%', size: 350, color: 'rgba(59, 130, 246, 0.05)', delay: 0 },
+  { x: '75%', y: '15%', size: 300, color: 'rgba(139, 92, 246, 0.04)', delay: 3 },
+  { x: '85%', y: '70%', size: 250, color: 'rgba(16, 185, 129, 0.035)', delay: 6 },
+  { x: '25%', y: '80%', size: 220, color: 'rgba(245, 158, 11, 0.03)', delay: 9 },
 ];
 
 // ============================================================================
-// DESTINATION MOTION ACCENTS CONFIG
+// DESTINATION MOTION ACCENTS CONFIG (Premium: 30-60s cycles, 3-4% opacity)
+// If users notice the animation consciously, it's too much.
 // ============================================================================
 
 const MOTION_ACCENTS = {
   beach: {
-    // Ocean shimmer - horizontal waves with blue tints
+    // Ocean shimmer - very slow horizontal drift
     gradients: [
-      'linear-gradient(90deg, transparent 0%, rgba(14, 165, 233, 0.06) 50%, transparent 100%)',
-      'linear-gradient(90deg, transparent 0%, rgba(56, 189, 248, 0.04) 50%, transparent 100%)',
+      'linear-gradient(90deg, transparent 0%, rgba(14, 165, 233, 0.035) 50%, transparent 100%)',
+      'linear-gradient(90deg, transparent 0%, rgba(56, 189, 248, 0.025) 50%, transparent 100%)',
     ],
     animation: {
       x: ['-100%', '100%'],
-      transition: { duration: 8, repeat: Infinity, ease: 'linear' },
+      transition: { duration: 45, repeat: Infinity, ease: 'linear' },
     },
   },
   city: {
-    // City light sweep - vertical light bars
+    // City light sweep - slow vertical ambient
     gradients: [
-      'linear-gradient(0deg, transparent 0%, rgba(99, 102, 241, 0.05) 50%, transparent 100%)',
-      'linear-gradient(0deg, transparent 0%, rgba(168, 85, 247, 0.04) 50%, transparent 100%)',
+      'linear-gradient(0deg, transparent 0%, rgba(99, 102, 241, 0.03) 50%, transparent 100%)',
+      'linear-gradient(0deg, transparent 0%, rgba(168, 85, 247, 0.025) 50%, transparent 100%)',
     ],
     animation: {
       y: ['100%', '-100%'],
-      transition: { duration: 12, repeat: Infinity, ease: 'linear' },
+      transition: { duration: 35, repeat: Infinity, ease: 'linear' },
     },
   },
   mountain: {
-    // Mountain fog - horizontal drift with soft white
+    // Mountain fog - very slow drift
     gradients: [
-      'linear-gradient(90deg, transparent 0%, rgba(148, 163, 184, 0.08) 30%, rgba(148, 163, 184, 0.08) 70%, transparent 100%)',
-      'linear-gradient(90deg, transparent 0%, rgba(203, 213, 225, 0.05) 40%, rgba(203, 213, 225, 0.05) 60%, transparent 100%)',
+      'linear-gradient(90deg, transparent 0%, rgba(148, 163, 184, 0.04) 30%, rgba(148, 163, 184, 0.04) 70%, transparent 100%)',
+      'linear-gradient(90deg, transparent 0%, rgba(203, 213, 225, 0.03) 40%, rgba(203, 213, 225, 0.03) 60%, transparent 100%)',
     ],
     animation: {
-      x: ['-50%', '50%'],
-      transition: { duration: 20, repeat: Infinity, ease: 'easeInOut', repeatType: 'reverse' as const },
+      x: ['-30%', '30%'],
+      transition: { duration: 60, repeat: Infinity, ease: 'easeInOut', repeatType: 'reverse' as const },
     },
   },
   default: {
-    // Generic ambient motion
+    // Generic ambient - subtle pulse
     gradients: [
-      'radial-gradient(ellipse at 30% 70%, rgba(99, 102, 241, 0.05) 0%, transparent 50%)',
+      'radial-gradient(ellipse at 30% 70%, rgba(99, 102, 241, 0.03) 0%, transparent 50%)',
     ],
     animation: {
-      scale: [1, 1.1, 1],
-      opacity: [0.5, 0.8, 0.5],
-      transition: { duration: 15, repeat: Infinity, ease: 'easeInOut' },
+      scale: [1, 1.05, 1],
+      opacity: [0.6, 0.9, 0.6],
+      transition: { duration: 40, repeat: Infinity, ease: 'easeInOut' },
     },
   },
 };
@@ -190,11 +191,11 @@ function LightBloomLayer({ reducedMotion }: { reducedMotion: boolean }) {
             transform: 'translate(-50%, -50%)',
           }}
           animate={{
-            scale: [1, 1.3, 1],
-            opacity: [0.4, 0.7, 0.4],
+            scale: [1, 1.15, 1],
+            opacity: [0.5, 0.75, 0.5],
           }}
           transition={{
-            duration: 8 + i * 2,
+            duration: 30 + i * 5,
             delay: orb.delay,
             repeat: Infinity,
             ease: 'easeInOut',
@@ -367,58 +368,38 @@ function CinematicBackground({
         reducedMotion={reducedMotion}
       />
 
-      {/* Layer 2: Dark vignette + readability gradient */}
+      {/* Layer 2: Cinematic color grading + readability */}
       <div className="fixed inset-0 z-[1]">
-        {/* Top fade for header readability */}
-        <div className="absolute inset-x-0 top-0 h-48 bg-gradient-to-b from-slate-900/95 via-slate-900/70 to-transparent" />
-
-        {/* Bottom fade for content readability */}
-        <div className="absolute inset-x-0 bottom-0 h-96 bg-gradient-to-t from-slate-900 via-slate-900/90 to-transparent" />
-
-        {/* Overall darken - slightly reduced for parallax visibility */}
-        <div className="absolute inset-0 bg-slate-900/55" />
-
-        {/* Vignette edges */}
+        {/* Cinematic color grade - slight teal/orange for film look */}
         <div
           className="absolute inset-0"
           style={{
-            background: 'radial-gradient(ellipse at center, transparent 0%, rgba(15, 23, 42, 0.5) 100%)',
+            background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.3) 0%, rgba(15, 23, 42, 0.2) 30%, rgba(30, 41, 59, 0.35) 100%)',
+            mixBlendMode: 'multiply',
+          }}
+        />
+
+        {/* Top fade for header readability */}
+        <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-slate-900/80 to-transparent" />
+
+        {/* Bottom fade for content readability */}
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-slate-900/95 via-slate-900/60 to-transparent" />
+
+        {/* Strong cinematic vignette */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background: 'radial-gradient(ellipse 80% 60% at 50% 40%, transparent 0%, rgba(15, 23, 42, 0.7) 100%)',
           }}
         />
       </div>
 
-      {/* Layer 3: Light bloom orbs */}
-      <LightBloomLayer reducedMotion={reducedMotion} />
+      {/* NOTE: Light bloom and motion accents disabled for cleaner cinematic look */}
+      {/* The destination photo should be the hero, not animated overlays */}
 
-      {/* Layer 4: Destination-aware motion accents */}
-      <DestinationAccentsLayer destType={destType} reducedMotion={reducedMotion} />
-
-      {/* Layer 5: Animated ambient gradients */}
-      {!reducedMotion && (
-        <div className="fixed inset-0 z-[4] pointer-events-none overflow-hidden">
-          {ambientGradients.map((gradient, i) => (
-            <motion.div
-              key={i}
-              className="absolute inset-0"
-              style={{ background: gradient }}
-              animate={{
-                x: [0, 50, -30, 0],
-                y: [0, -40, 30, 0],
-                scale: [1, 1.1, 0.95, 1],
-              }}
-              transition={{
-                duration: 30 + i * 10,
-                repeat: Infinity,
-                ease: 'easeInOut',
-              }}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Layer 6: Noise texture */}
+      {/* Layer 3: Film grain noise - slightly visible for cinematic texture */}
       <div
-        className="fixed inset-0 z-[5] pointer-events-none opacity-[0.012]"
+        className="fixed inset-0 z-[5] pointer-events-none opacity-[0.025]"
         style={{
           backgroundImage: `url("${NOISE_SVG}")`,
           backgroundRepeat: 'repeat',

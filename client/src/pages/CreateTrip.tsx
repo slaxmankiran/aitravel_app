@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { motion, AnimatePresence } from "framer-motion";
 import { insertTripSchema, type CreateTripRequest } from "@shared/schema";
-import { useCreateTrip } from "@/hooks/use-trips";
+import { useCreateTrip, useUpdateTrip } from "@/hooks/use-trips";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1346,6 +1346,7 @@ export default function CreateTrip() {
   const flowCompletedRef = useRef(false); // Track if user completed the flow
 
   const createTrip = useCreateTrip();
+  const updateTrip = useUpdateTrip();
   const { toast } = useToast();
 
   // Track create_started event on initial mount (not edit mode)
@@ -1441,53 +1442,80 @@ export default function CreateTrip() {
       setStep(step + 1);
     } else {
       // Prevent double submission
-      if (isSubmitting || createTrip.isPending) {
+      if (isSubmitting || createTrip.isPending || updateTrip.isPending) {
         console.log("Already submitting, ignoring");
         return;
       }
 
       setIsSubmitting(true);
 
-      // Final submission
-      console.log("Submitting trip data:", updatedData);
-      createTrip.mutate(updatedData as CreateTripRequest, {
-        onSuccess: (response) => {
-          // Mark flow as completed to prevent abandoned tracking
-          flowCompletedRef.current = true;
+      // Final submission - UPDATE existing trip or CREATE new one
+      console.log("Submitting trip data:", updatedData, editTripId ? `(updating trip ${editTripId})` : "(creating new)");
 
-          console.log("Trip created successfully:", response);
-          clearFormStorage(); // Clear saved form data on success
+      // Shared success handler
+      const handleSuccess = (tripId: number) => {
+        // Mark flow as completed to prevent abandoned tracking
+        flowCompletedRef.current = true;
+        clearFormStorage(); // Clear saved form data on success
 
-          // Show "saved for later" toast (only for new trips, not edits)
-          if (!returnTo) {
-            toast({
-              title: "Trip saved!",
-              description: "Find it anytime in My Trips.",
-            });
-          }
+        // Calculate what changed for the "What Changed?" banner
+        const changes = diffTrip(originalTripRef.current, updatedData);
+        const changesParam = changes.length > 0 ? `&changes=${encodeURIComponent(JSON.stringify(changes))}` : '';
 
-          // If returnTo is specified (edit mode), go back there after re-checking feasibility
-          // Otherwise navigate to feasibility page for new trips
-          if (returnTo) {
-            // Calculate what changed for the "What Changed?" banner
-            const changes = diffTrip(originalTripRef.current, updatedData);
-            const changesParam = changes.length > 0 ? `&changes=${encodeURIComponent(JSON.stringify(changes))}` : '';
-
-            // Build returnTo with updated flag and changes
-            const updatedReturnTo = `${decodeURIComponent(returnTo)}?updated=1${changesParam}`;
-
-            // In edit mode, go through feasibility first then back to results
-            setLocation(`/trips/${response.id}/feasibility?returnTo=${encodeURIComponent(updatedReturnTo)}`);
+        // If returnTo is specified (edit mode), go back there after re-checking feasibility
+        if (returnTo) {
+          const decodedReturnTo = decodeURIComponent(returnTo);
+          // If returnTo is just /trips (My Trips list), redirect to results page instead
+          // Otherwise use the returnTo as specified
+          let finalReturnTo: string;
+          if (decodedReturnTo === '/trips' || decodedReturnTo === '/trips/') {
+            // Coming from My Trips - go to the trip's results page
+            finalReturnTo = `/trips/${tripId}/results-v1?updated=1${changesParam}`;
           } else {
-            setLocation(`/trips/${response.id}/feasibility`);
+            // Coming from results page or elsewhere - go back there
+            finalReturnTo = `${decodedReturnTo}?updated=1${changesParam}`;
           }
-        },
-        onError: (error) => {
-          console.error("Trip creation failed:", error);
-          setIsSubmitting(false);
-          alert("Failed to create trip: " + error.message);
+          setLocation(`/trips/${tripId}/feasibility?returnTo=${encodeURIComponent(finalReturnTo)}`);
+        } else {
+          // New trip - show toast and navigate to feasibility
+          toast({
+            title: "Trip saved!",
+            description: "Find it anytime in My Trips.",
+          });
+          setLocation(`/trips/${tripId}/feasibility`);
         }
-      });
+      };
+
+      // Shared error handler
+      const handleError = (error: Error, action: string) => {
+        console.error(`Trip ${action} failed:`, error);
+        setIsSubmitting(false);
+        alert(`Failed to ${action} trip: ${error.message}`);
+      };
+
+      // Use UPDATE for existing trips (edit mode with editTripId), CREATE for new trips
+      if (editTripId) {
+        console.log(`Updating existing trip ${editTripId}`);
+        updateTrip.mutate(
+          { id: Number(editTripId), data: updatedData as CreateTripRequest },
+          {
+            onSuccess: (response) => {
+              console.log("Trip updated successfully:", response);
+              handleSuccess(response.id); // Same trip ID
+            },
+            onError: (error) => handleError(error, "update"),
+          }
+        );
+      } else {
+        console.log("Creating new trip");
+        createTrip.mutate(updatedData as CreateTripRequest, {
+          onSuccess: (response) => {
+            console.log("Trip created successfully:", response);
+            handleSuccess(response.id);
+          },
+          onError: (error) => handleError(error, "create"),
+        });
+      }
     }
   };
 
@@ -1597,10 +1625,12 @@ export default function CreateTrip() {
           <CardContent className="p-6 pt-8">
             <AnimatePresence mode="wait">
               {step === 1 && (
-                <Step1Form 
-                  key="step1" 
-                  defaultValues={formData as Step1Data} 
-                  onSubmit={handleNext} 
+                <Step1Form
+                  key="step1"
+                  defaultValues={formData as Step1Data}
+                  onSubmit={handleNext}
+                  isEditMode={isEditMode}
+                  returnTo={returnTo}
                 />
               )}
               {step === 2 && (
@@ -1636,7 +1666,12 @@ export default function CreateTrip() {
   );
 }
 
-function Step1Form({ defaultValues, onSubmit }: { defaultValues: Step1Data, onSubmit: (data: Step1Data) => void }) {
+function Step1Form({ defaultValues, onSubmit, isEditMode, returnTo }: {
+  defaultValues: Step1Data;
+  onSubmit: (data: Step1Data) => void;
+  isEditMode?: boolean;
+  returnTo?: string | null;
+}) {
   const form = useForm<Step1Data>({
     resolver: zodResolver(step1Schema),
     defaultValues: defaultValues || { passport: "", residence: "" }
@@ -1644,6 +1679,22 @@ function Step1Form({ defaultValues, onSubmit }: { defaultValues: Step1Data, onSu
 
   const passportValue = form.watch("passport");
   const residenceValue = form.watch("residence");
+
+  // Determine back button behavior based on context
+  const getBackButton = () => {
+    if (isEditMode && returnTo) {
+      // Editing from somewhere specific - go back there
+      const decodedReturnTo = decodeURIComponent(returnTo);
+      if (decodedReturnTo.includes('/trips')) {
+        return { label: 'Cancel', href: decodedReturnTo };
+      }
+      return { label: 'Cancel', href: decodedReturnTo };
+    }
+    // Default: go home
+    return { label: 'Back to Home', href: '/' };
+  };
+
+  const backButton = getBackButton();
 
   return (
     <motion.form
@@ -1682,11 +1733,11 @@ function Step1Form({ defaultValues, onSubmit }: { defaultValues: Step1Data, onSu
           onClick={() => {
             sessionStorage.removeItem('createTrip_step');
             sessionStorage.removeItem('createTrip_formData');
-            window.location.href = '/';
+            window.location.href = backButton.href;
           }}
         >
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Home
+          {backButton.label}
         </Button>
         <Button type="submit" size="lg" className="flex-1">Next Step</Button>
       </div>

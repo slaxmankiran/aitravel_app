@@ -1,29 +1,29 @@
 /**
  * TripUpdateBanner.tsx
  *
- * Shows a subtle banner when user returns from edit flow.
+ * Shows a centered popup when user returns from edit flow.
  * Displays what changed and confirms feasibility was rechecked.
  *
  * - Auto-dismisses after 5 seconds
- * - Dismiss on X click
+ * - Dismiss on X click or clicking outside
  * - Does not reappear on refresh (controlled by parent via URL params)
  *
  * Performance: Memoized to prevent page-wide cascades.
  */
 
 import React, { useEffect } from "react";
-import { motion } from "framer-motion";
-import { CheckCircle, X } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { CheckCircle, X, RefreshCw } from "lucide-react";
 
 // Static dictionary mapping field keys to user-friendly labels
 const CHANGE_LABELS: Record<string, string> = {
-  destination: "Destination updated",
-  dates: "Dates changed",
-  groupSize: "Travelers updated",
-  travelStyle: "Style adjusted",
-  budget: "Budget adjusted",
-  passport: "Passport changed",
-  origin: "Origin updated",
+  destination: "Destination",
+  dates: "Travel dates",
+  groupSize: "Travelers",
+  travelStyle: "Travel style",
+  budget: "Budget",
+  passport: "Passport",
+  origin: "Origin",
 };
 
 interface TripUpdateBannerProps {
@@ -43,51 +43,87 @@ function TripUpdateBannerComponent({
     return () => clearTimeout(timer);
   }, [onDismiss, autoDismissMs]);
 
-  // Build display text: max 3 changes + feasibility
+  // Build list of changed fields
   const changeLabels = changes
-    .slice(0, 3)
-    .map((key) => CHANGE_LABELS[key] || `${key} updated`)
+    .slice(0, 4)
+    .map((key) => CHANGE_LABELS[key] || key)
     .filter(Boolean);
-
-  // Always include feasibility confirmation
-  const displayParts = [
-    "Trip updated",
-    ...changeLabels,
-    "Feasibility rechecked",
-  ];
-
-  // If no specific changes, just show base message
-  const displayText =
-    changeLabels.length > 0
-      ? displayParts.join(" · ")
-      : "Trip updated · Feasibility rechecked";
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -10 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
-      className="bg-slate-800/80 backdrop-blur-sm border-b border-emerald-500/30"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
     >
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-2.5">
-        <div className="flex items-center justify-between gap-4">
-          {/* Left: Icon + Text */}
-          <div className="flex items-center gap-2.5 min-w-0">
-            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span className="text-sm text-white/90 truncate">{displayText}</span>
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onDismiss}
+      />
+
+      {/* Modal */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        transition={{ duration: 0.2, ease: "easeOut" }}
+        className="relative bg-slate-800 border border-white/10 rounded-xl shadow-2xl max-w-sm w-full overflow-hidden"
+      >
+        {/* Close button */}
+        <button
+          onClick={onDismiss}
+          className="absolute top-3 right-3 p-1.5 hover:bg-white/10 rounded-lg transition-colors z-10"
+          aria-label="Dismiss"
+        >
+          <X className="w-4 h-4 text-white/50 hover:text-white/80" />
+        </button>
+
+        {/* Content */}
+        <div className="p-6 text-center">
+          {/* Success icon */}
+          <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-emerald-500/20 flex items-center justify-center">
+            <CheckCircle className="w-7 h-7 text-emerald-400" />
           </div>
 
-          {/* Right: Dismiss button */}
-          <button
-            onClick={onDismiss}
-            className="p-1 hover:bg-white/10 rounded transition-colors shrink-0"
-            aria-label="Dismiss"
-          >
-            <X className="w-4 h-4 text-white/50 hover:text-white/80" />
-          </button>
+          {/* Title */}
+          <h3 className="text-lg font-semibold text-white mb-2">
+            Trip Updated!
+          </h3>
+
+          {/* What changed */}
+          {changeLabels.length > 0 && (
+            <div className="mb-4">
+              <p className="text-sm text-white/60 mb-2">Changes applied:</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {changeLabels.map((label, i) => (
+                  <span
+                    key={i}
+                    className="px-2.5 py-1 text-xs bg-white/10 text-white/80 rounded-full"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Feasibility rechecked */}
+          <div className="flex items-center justify-center gap-2 text-sm text-emerald-400">
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Feasibility rechecked</span>
+          </div>
         </div>
-      </div>
+
+        {/* Progress bar for auto-dismiss */}
+        <motion.div
+          initial={{ scaleX: 1 }}
+          animate={{ scaleX: 0 }}
+          transition={{ duration: autoDismissMs / 1000, ease: "linear" }}
+          className="h-1 bg-emerald-500/50 origin-left"
+        />
+      </motion.div>
     </motion.div>
   );
 }

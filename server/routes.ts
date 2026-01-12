@@ -4691,11 +4691,88 @@ export async function registerRoutes(
   });
 
   // ============================================================================
+  // UPDATE TRIP - Modify existing trip (Edit mode)
+  // ============================================================================
+  app.put('/api/trips/:id', async (req, res) => {
+    try {
+      const tripId = Number(req.params.id);
+      const input = api.trips.create.input.parse(req.body);
+
+      // Extract voyage_uid from header
+      const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
+
+      // Check if trip exists and belongs to user
+      const existingTrip = await storage.getTrip(tripId);
+      if (!existingTrip) {
+        return res.status(404).json({ message: 'Trip not found' });
+      }
+
+      // Verify ownership (if trip has a voyageUid, it must match)
+      if (existingTrip.voyageUid && voyageUid && existingTrip.voyageUid !== voyageUid) {
+        return res.status(403).json({ message: 'Not authorized to edit this trip' });
+      }
+
+      // Validate dates are not in the past
+      const dates = parseDateRange(input.dates);
+      if (dates) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const startDate = new Date(dates.startDate);
+        if (startDate < today) {
+          return res.status(400).json({
+            message: "Travel dates must be in the future. Please select upcoming dates.",
+            field: "dates"
+          });
+        }
+      }
+
+      // Validate minimum budget for custom travel style
+      const isCustomBudget = input.travelStyle === 'custom';
+      if (isCustomBudget) {
+        const numDays = dates ? Math.ceil((new Date(dates.endDate).getTime() - new Date(dates.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 7;
+        const groupSize = input.groupSize || 1;
+        const minBudget = groupSize * numDays * 50;
+        if (input.budget < minBudget) {
+          return res.status(400).json({
+            message: `Budget too low. Minimum budget for ${input.groupSize} traveler(s) for ${numDays} days is approximately $${minBudget.toLocaleString()}`,
+            field: "budget"
+          });
+        }
+      }
+
+      // Update the trip (this resets feasibility and itinerary)
+      const updatedTrip = await storage.updateTrip(tripId, input);
+      if (!updatedTrip) {
+        return res.status(500).json({ message: 'Failed to update trip' });
+      }
+
+      // Return updated trip
+      res.json(updatedTrip);
+
+      // Run feasibility check in background
+      processFeasibilityOnly(tripId, input).catch(err => {
+        console.error('Feasibility check failed after update:', err);
+      });
+
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          message: err.errors[0].message,
+          field: err.errors[0].path.join('.'),
+        });
+      }
+      console.error('Error updating trip:', err);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+
+  // ============================================================================
   // LIST MY TRIPS - Returns trips for the current anonymous user (Item 21)
   // ============================================================================
   app.get('/api/my-trips', async (req, res) => {
     try {
       const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
+      console.log('[MyTrips] voyage_uid from header:', voyageUid);
 
       if (!voyageUid) {
         return res.json({ trips: [], message: "No voyage_uid provided" });
@@ -4760,6 +4837,43 @@ export async function registerRoutes(
     }
 
     res.json(trip);
+  });
+
+  // ============================================================================
+  // DELETE TRIP - Permanently removes a trip and its associated data
+  // ============================================================================
+  app.delete('/api/trips/:id', async (req, res) => {
+    const tripId = Number(req.params.id);
+    const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
+
+    if (isNaN(tripId) || tripId <= 0) {
+      return res.status(400).json({ message: 'Invalid trip ID' });
+    }
+
+    try {
+      // Get trip first to verify ownership
+      const trip = await storage.getTrip(tripId);
+      if (!trip) {
+        return res.status(404).json({ message: 'Trip not found' });
+      }
+
+      // Ownership check: only owner can delete
+      // If trip has a voyageUid, it must match the request
+      // If trip has no voyageUid (legacy), allow deletion if any voyageUid provided
+      if (trip.voyageUid && voyageUid && trip.voyageUid !== voyageUid) {
+        return res.status(403).json({ message: 'Not authorized to delete this trip' });
+      }
+
+      // Delete the trip and associated data
+      await storage.deleteTrip(tripId);
+
+      console.log(`[TripDelete] Trip ${tripId} deleted by uid ${voyageUid?.slice(0, 8) || 'unknown'}...`);
+
+      res.json({ success: true, message: 'Trip deleted successfully' });
+    } catch (error) {
+      console.error('[TripDelete] Error:', error);
+      res.status(500).json({ message: 'Failed to delete trip' });
+    }
   });
 
   // ============================================================================

@@ -4,12 +4,13 @@
  * Change Planner Agent - mounted at /api by routes.ts
  * POST /api/change-plan
  *
- * Change Planner Agent endpoint that:
- * 1. Diffs inputs (prev vs next)
- * 2. Uses impact matrix to compute which modules need recomputation
- * 3. Executes module recomputes in priority order
- * 4. Produces delta summary
- * 5. Returns ChangePlannerResponse with partial failures supported
+ * Now uses Agentic AI for intelligent recomputation:
+ * 1. AI analyzes what changed and its impact
+ * 2. AI calls tools (visa lookup, flight search, hotel search, etc.)
+ * 3. AI synthesizes results into delta summary + natural language explanation
+ * 4. Returns ChangePlannerResponse with updated data
+ *
+ * Set USE_AGENT=false to use deterministic fallback mode.
  */
 
 import type { Request, Response, Router } from "express";
@@ -24,15 +25,32 @@ import type {
   ChangePlannerResponse,
   TripResponse,
 } from "@shared/schema";
+import {
+  runChangePlannerAgent,
+  initializeChangePlannerAgent,
+  isAgentInitialized,
+} from "../services/changePlannerAgent";
 
 const router: Router = express.Router();
 
+// Initialize agent with API key (done once at startup)
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+if (DEEPSEEK_API_KEY) {
+  initializeChangePlannerAgent(DEEPSEEK_API_KEY, "https://api.deepseek.com", "deepseek-chat");
+  console.log("[ChangePlan] Agentic AI mode enabled");
+} else {
+  console.log("[ChangePlan] No DEEPSEEK_API_KEY, using deterministic mode");
+}
+
+// Toggle for agent mode (can be overridden per-request or by env var)
+const USE_AGENT_DEFAULT = process.env.USE_CHANGE_PLANNER_AGENT !== "false";
+
 // ---------------------------------------------------------------------------
-// Impact matrix (from spec)
+// Impact matrix (for deterministic fallback)
 // ---------------------------------------------------------------------------
 const IMPACT: Record<ChangeableField, RecomputableModule[]> = {
-  dates: ["flights", "hotels", "itinerary", "certainty", "action_items"], // visa conditional
-  budget: ["hotels", "itinerary", "certainty", "action_items"], // re-rank style
+  dates: ["flights", "hotels", "itinerary", "certainty", "action_items"],
+  budget: ["hotels", "itinerary", "certainty", "action_items"],
   origin: ["flights", "action_items"],
   destination: ["visa", "flights", "hotels", "itinerary", "certainty", "action_items"],
   passport: ["visa", "certainty", "action_items"],
@@ -41,7 +59,6 @@ const IMPACT: Record<ChangeableField, RecomputableModule[]> = {
   constraints: ["flights", "hotels", "itinerary", "action_items"],
 };
 
-// Priorities per spec (1 = highest priority, computed first)
 const MODULE_PRIORITY: Record<RecomputableModule, 1 | 2 | 3> = {
   visa: 1,
   certainty: 1,
@@ -52,7 +69,7 @@ const MODULE_PRIORITY: Record<RecomputableModule, 1 | 2 | 3> = {
 };
 
 // ---------------------------------------------------------------------------
-// Diffing helpers (deterministic)
+// Deterministic helpers (fallback mode)
 // ---------------------------------------------------------------------------
 function deepEqual(a: any, b: any): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -60,14 +77,7 @@ function deepEqual(a: any, b: any): boolean {
 
 function detectChanges(prevInput: UserTripInput, nextInput: UserTripInput): DetectedChange[] {
   const fields: ChangeableField[] = [
-    "dates",
-    "budget",
-    "origin",
-    "destination",
-    "passport",
-    "travelers",
-    "preferences",
-    "constraints",
+    "dates", "budget", "origin", "destination", "passport", "travelers", "preferences", "constraints",
   ];
 
   const changes: DetectedChange[] = [];
@@ -77,17 +87,11 @@ function detectChanges(prevInput: UserTripInput, nextInput: UserTripInput): Dete
     const after = (nextInput as any)?.[field];
     if (deepEqual(before, after)) continue;
 
-    const impact = [...IMPACT[field]];
-
-    // Severity based on field type
     const severity: ChangeSeverity =
-      field === "destination" || field === "passport"
-        ? "high"
-        : field === "dates"
-          ? "medium"
-          : "low";
+      field === "destination" || field === "passport" ? "high" :
+      field === "dates" ? "medium" : "low";
 
-    changes.push({ field, before, after, impact, severity });
+    changes.push({ field, before, after, impact: [...IMPACT[field]], severity });
   }
 
   return changes;
@@ -98,7 +102,6 @@ function computeModules(changes: DetectedChange[]): RecomputableModule[] {
   for (const c of changes) {
     c.impact.forEach((m) => set.add(m));
   }
-  // Keep deterministic ordering by priority then alpha
   return Array.from(set).sort((a, b) => {
     const pa = MODULE_PRIORITY[a];
     const pb = MODULE_PRIORITY[b];
@@ -118,295 +121,152 @@ function makeChangeId(tripId: number, prevInput: any, nextInput: any): string {
   return `chg_${hash}`;
 }
 
-// ---------------------------------------------------------------------------
-// Recompute stubs - Wire these to your real services
-// ---------------------------------------------------------------------------
-async function recomputeVisa(
-  trip: TripResponse,
-  nextInput: UserTripInput
-): Promise<any> {
-  // TODO: Call your visa data service (e.g., from feasibility analysis)
-  // For now, return existing visa details with updated passport context
-  const existing = (trip.feasibilityReport as any)?.visaDetails;
-  return existing ?? { type: "unknown", required: true };
-}
+function buildDeterministicResponse(
+  tripId: number,
+  prevInput: UserTripInput,
+  nextInput: UserTripInput,
+  currentResults: TripResponse
+): ChangePlannerResponse {
+  const detected = detectChanges(prevInput, nextInput);
+  const modules = computeModules(detected);
+  const changeId = makeChangeId(tripId, prevInput, nextInput);
 
-async function recomputeFlights(
-  trip: TripResponse,
-  nextInput: UserTripInput
-): Promise<any> {
-  // TODO: Call flight estimate service
-  // For now, return existing flight data
-  const existing = (trip.itinerary as any)?.costBreakdown?.flights;
-  return existing ?? null;
-}
+  const currentCertainty = Number((currentResults.feasibilityReport as any)?.score) || 0;
+  const currentCost = Number(
+    (currentResults.itinerary as any)?.costBreakdown?.grandTotal ||
+    (currentResults.itinerary as any)?.costBreakdown?.total
+  ) || 0;
 
-async function recomputeHotels(
-  trip: TripResponse,
-  nextInput: UserTripInput
-): Promise<any> {
-  // TODO: Call hotel estimate service
-  // For now, return existing hotel data
-  const existing = (trip.itinerary as any)?.costBreakdown?.accommodation;
-  return existing ?? null;
-}
-
-async function recomputeItinerary(
-  trip: TripResponse,
-  nextInput: UserTripInput
-): Promise<any> {
-  // TODO: Call itinerary generation/rerank service
-  // For now, return existing itinerary
-  return trip.itinerary ?? null;
-}
-
-function recomputeCertainty(
-  currentTrip: TripResponse,
-  updatedData: any,
-  changes: DetectedChange[]
-): { before: number; after: number; reason: string } {
-  const before = Number((currentTrip.feasibilityReport as any)?.score) || 0;
-
-  // Simple heuristic: high severity changes may reduce certainty
-  const hasHighSeverity = changes.some((c) => c.severity === "high");
-  const hasMediumSeverity = changes.some((c) => c.severity === "medium");
-
-  let delta = 0;
+  // Simple heuristic for certainty
+  const hasHighSeverity = detected.some((c) => c.severity === "high");
+  const hasMediumSeverity = detected.some((c) => c.severity === "medium");
+  let certaintyDelta = 0;
   let reason = "No significant certainty impact";
 
   if (hasHighSeverity) {
-    delta = -10;
+    certaintyDelta = -10;
     reason = "Major change detected (destination or passport)";
   } else if (hasMediumSeverity) {
-    delta = -3;
+    certaintyDelta = -3;
     reason = "Date change may affect availability";
   }
 
-  // Visa changes can further affect certainty
-  if (updatedData?.visa?.required && !(currentTrip.feasibilityReport as any)?.visaDetails?.required) {
-    delta -= 5;
-    reason = "Visa now required";
-  }
+  const certaintyAfter = Math.max(0, Math.min(100, currentCertainty + certaintyDelta));
 
-  const after = Math.max(0, Math.min(100, before + delta));
-  return { before, after, reason };
-}
+  // Blockers from visa
+  const visa = (currentResults.feasibilityReport as any)?.visaDetails;
+  const blockers = visa?.required && visa?.type !== "visa_free" ? 1 : 0;
 
-function computeCostDelta(
-  currentTrip: TripResponse,
-  updatedData: any
-): { before: number; after: number; delta: number; notes: string[] } {
-  const costBreakdown = (currentTrip.itinerary as any)?.costBreakdown;
-  const before = Number(costBreakdown?.grandTotal ?? costBreakdown?.total ?? 0) || 0;
+  const banner = blockers === 0
+    ? { tone: "green" as const, title: "Updated. No blockers found.", subtitle: "You're all set for planning." }
+    : { tone: "amber" as const, title: `Updated. ${blockers} item${blockers !== 1 ? "s" : ""} need attention.` };
 
-  // If we have updated cost breakdown, use it
-  const afterBreakdown = updatedData?.costBreakdown;
-  const after = afterBreakdown
-    ? Number(afterBreakdown?.grandTotal ?? afterBreakdown?.total ?? before) || before
-    : before;
+  const highlightSections: Array<"ActionItems" | "CostBreakdown" | "Itinerary" | "VisaCard"> = [];
+  if (modules.includes("action_items")) highlightSections.push("ActionItems");
+  if (modules.includes("hotels") || modules.includes("flights")) highlightSections.push("CostBreakdown");
+  if (modules.includes("itinerary")) highlightSections.push("Itinerary");
+  if (modules.includes("visa")) highlightSections.push("VisaCard");
 
   return {
-    before,
-    after,
-    delta: after - before,
-    notes: after !== before ? ["Cost estimate updated based on changes"] : [],
+    changeId,
+    detectedChanges: detected,
+    recomputePlan: {
+      modulesToRecompute: modules,
+      cacheKeysToInvalidate: [],
+      apiCalls: modules.map((m) => ({
+        name: `recompute_${m}`,
+        endpointKey: m,
+        priority: MODULE_PRIORITY[m],
+      })),
+    },
+    deltaSummary: {
+      certainty: { before: currentCertainty, after: certaintyAfter, reason },
+      totalCost: { before: currentCost, after: currentCost, delta: 0, notes: [] },
+      blockers: { before: blockers, after: blockers, resolved: [], new: [] },
+      itinerary: {
+        dayCountBefore: Number((currentResults.itinerary as any)?.days?.length ?? 0) || 0,
+        dayCountAfter: Number((currentResults.itinerary as any)?.days?.length ?? 0) || 0,
+        majorDiffs: [],
+      },
+    },
+    uiInstructions: {
+      banner,
+      highlightSections,
+      toasts: [{ tone: "success" as const, message: "Trip updated." }],
+    },
+    updatedData: { actionItems: [] },
+    failures: undefined,
+    fixOptions: undefined,
   };
-}
-
-/**
- * Compute blockers delta based on visa requirements only.
- * This matches how ActionItems.tsx derives "required" items on the client.
- * Currently visa is the only real blocker source in production.
- */
-function computeBlockersDelta(
-  trip: TripResponse,
-  updatedData: any,
-  changes: DetectedChange[]
-): { before: number; after: number; resolved: string[]; new: string[] } {
-  const feasibility = trip.feasibilityReport as any;
-  const resolved: string[] = [];
-  const newBlockers: string[] = [];
-
-  // Before: count visa blocker from current feasibility
-  const beforeVisa = feasibility?.visaDetails;
-  const beforeHasVisaBlocker = beforeVisa?.required && beforeVisa?.type !== "visa_free";
-  const beforeCount = beforeHasVisaBlocker ? 1 : 0;
-
-  // After: check if updated visa changes blocker status
-  const afterVisa = updatedData?.visa ?? beforeVisa;
-  const afterHasVisaBlocker = afterVisa?.required && afterVisa?.type !== "visa_free";
-  const afterCount = afterHasVisaBlocker ? 1 : 0;
-
-  // Track resolved/new blockers
-  if (beforeHasVisaBlocker && !afterHasVisaBlocker) {
-    resolved.push("Visa no longer required");
-  }
-  if (!beforeHasVisaBlocker && afterHasVisaBlocker) {
-    newBlockers.push("Visa now required");
-  }
-
-  // If passport/destination changed but we couldn't recompute visa, note uncertainty
-  const hasVisaImpactingChange = changes.some(
-    (c) => c.field === "passport" || c.field === "destination"
-  );
-  if (hasVisaImpactingChange && !updatedData?.visa) {
-    newBlockers.push("Visa requirements may have changed");
-  }
-
-  return {
-    before: beforeCount,
-    after: afterCount,
-    resolved,
-    new: newBlockers,
-  };
-}
-
-function buildBanner(blockersAfter: number): {
-  tone: "green" | "amber" | "red";
-  title: string;
-  subtitle?: string;
-} {
-  if (blockersAfter === 0) {
-    return {
-      tone: "green",
-      title: "Updated. No blockers found.",
-      subtitle: "You're all set for planning.",
-    };
-  }
-  if (blockersAfter <= 2) {
-    return {
-      tone: "amber",
-      title: `Updated. ${blockersAfter} item${blockersAfter !== 1 ? "s" : ""} need attention before your trip.`,
-      subtitle: undefined,
-    };
-  }
-  return {
-    tone: "red",
-    title: "Updated. This change introduced a blocker.",
-    subtitle: undefined,
-  };
-}
-
-function buildHighlightSections(
-  modules: RecomputableModule[]
-): Array<"ActionItems" | "CostBreakdown" | "Itinerary" | "VisaCard"> {
-  const sections: Array<"ActionItems" | "CostBreakdown" | "Itinerary" | "VisaCard"> = [];
-  if (modules.includes("action_items")) sections.push("ActionItems");
-  if (modules.includes("hotels") || modules.includes("flights")) sections.push("CostBreakdown");
-  if (modules.includes("itinerary")) sections.push("Itinerary");
-  if (modules.includes("visa")) sections.push("VisaCard");
-  return sections;
 }
 
 // ---------------------------------------------------------------------------
 // POST /change-plan (mounted at /api)
 // ---------------------------------------------------------------------------
 router.post("/change-plan", async (req: Request, res: Response) => {
+  const startTime = performance.now();
+
   try {
-    const { tripId, prevInput, nextInput, currentResults, source } = req.body as {
+    const { tripId, prevInput, nextInput, currentResults, source, useAgent } = req.body as {
       tripId: number;
       prevInput: UserTripInput;
       nextInput: UserTripInput;
       currentResults: TripResponse;
       source: "edit_trip" | "quick_chip" | "fix_blocker";
+      useAgent?: boolean; // Optional override per-request
     };
 
     if (!tripId || !prevInput || !nextInput || !currentResults) {
       return res.status(400).json({ error: "Missing required payload" });
     }
 
-    console.log(`[ChangePlan] Processing change for trip ${tripId}, source: ${source}`);
+    // Determine if we should use agent
+    const shouldUseAgent = useAgent ?? (USE_AGENT_DEFAULT && isAgentInitialized());
 
-    const detected = detectChanges(prevInput, nextInput);
-    const modules = computeModules(detected);
-    const changeId = makeChangeId(tripId, prevInput, nextInput);
+    console.log(`[ChangePlan] Processing trip ${tripId}, source: ${source}, mode: ${shouldUseAgent ? "AGENT" : "DETERMINISTIC"}`);
 
-    console.log(`[ChangePlan] Detected ${detected.length} changes, modules to recompute:`, modules);
+    let response: ChangePlannerResponse;
 
-    const failures: ChangePlannerResponse["failures"] = [];
-    const updatedData: any = {};
-
-    // Execute recomputes by priority
-    // Note: "action_items" module means UI should refresh checklist, but items are
-    // derived client-side from visaDetails, so we don't output actionItems here.
-    for (const module of modules) {
+    if (shouldUseAgent) {
+      // Use Agentic AI
       try {
-        if (module === "visa") {
-          updatedData.visa = await recomputeVisa(currentResults, nextInput);
-        }
-        if (module === "flights") {
-          updatedData.flights = await recomputeFlights(currentResults, nextInput);
-        }
-        if (module === "hotels") {
-          updatedData.hotels = await recomputeHotels(currentResults, nextInput);
-        }
-        if (module === "itinerary") {
-          updatedData.itinerary = await recomputeItinerary(currentResults, nextInput);
-        }
-        // "action_items" and "certainty" don't produce updatedData - they signal UI refresh
-      } catch (e: any) {
-        const msg = e?.message || String(e);
-        console.error(`[ChangePlan] Failed to recompute ${module}:`, msg);
-        failures.push({
-          module: module as any,
-          errorCode: e?.name || "Error",
-          errorMessage: msg,
-          retryable: true,
-        });
+        response = await runChangePlannerAgent(tripId, prevInput, nextInput, currentResults, source);
+        console.log(`[ChangePlan] Agent completed in ${Math.round(performance.now() - startTime)}ms`);
+      } catch (agentError: any) {
+        console.error("[ChangePlan] Agent failed, falling back to deterministic:", agentError.message);
+        response = buildDeterministicResponse(tripId, prevInput, nextInput, currentResults);
+        // Add warning toast about fallback
+        response.uiInstructions.toasts = [
+          { tone: "warning" as const, message: "Using simplified update (AI unavailable)." },
+        ];
       }
+    } else {
+      // Use deterministic mode
+      response = buildDeterministicResponse(tripId, prevInput, nextInput, currentResults);
     }
 
-    // Deltas and UI instructions are computed even if failures occurred
-    const certainty = recomputeCertainty(currentResults, updatedData, detected);
-    const totalCost = computeCostDelta(currentResults, updatedData);
-    const blockers = computeBlockersDelta(currentResults, updatedData, detected);
-
-    const response: ChangePlannerResponse = {
-      changeId,
-      detectedChanges: detected,
-      recomputePlan: {
-        modulesToRecompute: modules,
-        cacheKeysToInvalidate: [], // TODO: implement cache key generation
-        apiCalls: modules.map((m) => ({
-          name: `recompute_${m}`,
-          endpointKey: m,
-          priority: MODULE_PRIORITY[m],
-        })),
-      },
-      deltaSummary: {
-        certainty,
-        totalCost,
-        blockers,
-        itinerary: {
-          dayCountBefore: Number((currentResults.itinerary as any)?.days?.length ?? 0) || 0,
-          dayCountAfter:
-            Number(
-              (updatedData.itinerary as any)?.days?.length ??
-                (currentResults.itinerary as any)?.days?.length ??
-                0
-            ) || 0,
-          majorDiffs: [],
-        },
-      },
-      uiInstructions: {
-        banner: buildBanner(blockers.after),
-        highlightSections: buildHighlightSections(modules),
-        toasts: failures.length
-          ? [{ tone: "warning" as const, message: "Some sections could not be refreshed. Showing last known data." }]
-          : [{ tone: "success" as const, message: "Trip updated successfully." }],
-      },
-      updatedData,
-      failures: failures.length ? failures : undefined,
-      fixOptions: undefined, // TODO: implement smallest-fix algorithm
-    };
-
-    console.log(`[ChangePlan] Completed change ${changeId}, certainty: ${certainty.before} -> ${certainty.after}`);
+    const duration = Math.round(performance.now() - startTime);
+    console.log(
+      `[ChangePlan] Completed ${response.changeId} in ${duration}ms, ` +
+      `certainty: ${response.deltaSummary.certainty.before} → ${response.deltaSummary.certainty.after}`
+    );
 
     return res.json(response);
   } catch (error: any) {
     console.error("[ChangePlan] Error:", error);
     return res.status(500).json({ error: error.message || "Internal server error" });
   }
+});
+
+// ---------------------------------------------------------------------------
+// GET /change-plan/status - Check agent status
+// ---------------------------------------------------------------------------
+router.get("/change-plan/status", (_req: Request, res: Response) => {
+  res.json({
+    agentInitialized: isAgentInitialized(),
+    useAgentDefault: USE_AGENT_DEFAULT,
+    mode: isAgentInitialized() && USE_AGENT_DEFAULT ? "agent" : "deterministic",
+  });
 });
 
 export default router;

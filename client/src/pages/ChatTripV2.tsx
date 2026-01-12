@@ -36,6 +36,7 @@ import {
   Plane,
 } from "lucide-react";
 import { Link } from "wouter";
+import { COUNTRIES, searchCountries } from "@/lib/travelData";
 
 // ============================================================================
 // TYPES
@@ -46,6 +47,8 @@ interface Message {
   type: 'assistant' | 'system';
   content: string;
   timestamp: Date;
+  // Optional category for replaceable messages
+  category?: 'destination' | 'passport' | 'date' | 'travelers' | 'style';
 }
 
 interface TripState {
@@ -60,23 +63,6 @@ interface TripState {
   passport: string;
   keyDetails: string;
 }
-
-// ============================================================================
-// PASSPORT OPTIONS
-// ============================================================================
-
-const PASSPORT_OPTIONS = [
-  { code: 'US', name: 'United States' },
-  { code: 'UK', name: 'United Kingdom' },
-  { code: 'IN', name: 'India' },
-  { code: 'CN', name: 'China' },
-  { code: 'CA', name: 'Canada' },
-  { code: 'AU', name: 'Australia' },
-  { code: 'DE', name: 'Germany' },
-  { code: 'FR', name: 'France' },
-  { code: 'JP', name: 'Japan' },
-  { code: 'BR', name: 'Brazil' },
-];
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -99,8 +85,8 @@ function formatDateDisplay(state: TripState): string | undefined {
 
 function getDestinationDisplay(destinations: Array<{ city: string; country: string }>): string {
   if (destinations.length === 0) return '';
-  if (destinations.length === 1) return `${destinations[0].city}, ${destinations[0].country}`;
-  return `${destinations[0].city} + ${destinations.length - 1} more`;
+  // Single destination only (multi-city coming soon)
+  return destinations[0].city;
 }
 
 // ============================================================================
@@ -146,6 +132,7 @@ export default function ChatTripV2() {
 
   // UI states
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [passportSearch, setPassportSearch] = useState("");
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -219,17 +206,32 @@ export default function ChatTripV2() {
     }
   }, [isReady, enteredQuietMode]);
 
-  const addNarrativeMessage = (content: string) => {
-    // In quiet mode, suppress all narrative messages
-    // The UI has taken over - silence is better UX
-    if (enteredQuietMode) return;
+  const addNarrativeMessage = (content: string, category?: Message['category']) => {
+    // In quiet mode, suppress general narrative messages
+    // But allow updates to key fields (destination, passport) by replacing old messages
+    if (enteredQuietMode && !category) return;
 
-    setMessages(prev => [...prev, {
-      id: Date.now().toString(),
-      type: 'assistant',
-      content,
-      timestamp: new Date(),
-    }]);
+    setMessages(prev => {
+      // If this message has a category, replace any existing message with same category
+      if (category) {
+        const filtered = prev.filter(m => m.category !== category);
+        return [...filtered, {
+          id: Date.now().toString(),
+          type: 'assistant' as const,
+          content,
+          timestamp: new Date(),
+          category,
+        }];
+      }
+
+      // Otherwise just add the message
+      return [...prev, {
+        id: Date.now().toString(),
+        type: 'assistant' as const,
+        content,
+        timestamp: new Date(),
+      }];
+    });
   };
 
   const handleDestinationConfirm = (data: DestinationData) => {
@@ -240,7 +242,10 @@ export default function ChatTripV2() {
     }));
 
     const destDisplay = data.destinations.map(d => d.city).join(', ');
-    addNarrativeMessage(`**${destDisplay}** added to your trip! ${data.keyDetails ? "I've noted your preferences." : ""}`);
+    addNarrativeMessage(
+      `**${destDisplay}** added to your trip!${data.keyDetails ? " I've noted your preferences." : ""}`,
+      'destination'
+    );
   };
 
   const handleDateConfirm = (data: DateSelection) => {
@@ -254,11 +259,14 @@ export default function ChatTripV2() {
     }));
 
     if (data.type === 'flexible') {
-      addNarrativeMessage(`**${data.numDays} days${data.preferredMonth ? ` in ${data.preferredMonth}` : ', flexible'}** — I'll optimize for deals and weather.`);
+      addNarrativeMessage(
+        `**${data.numDays} days${data.preferredMonth ? ` in ${data.preferredMonth}` : ', flexible'}** — I'll optimize for deals and weather.`,
+        'date'
+      );
     } else if (data.startDate && data.endDate) {
       const start = data.startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       const end = data.endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      addNarrativeMessage(`**${start} - ${end}** — dates locked in.`);
+      addNarrativeMessage(`**${start} - ${end}** — dates locked in.`, 'date');
     }
   };
 
@@ -272,7 +280,7 @@ export default function ChatTripV2() {
     const desc = total === 1 ? "Solo trip" :
                  data.children > 0 || data.infants > 0 ? "Family trip" :
                  data.adults === 2 ? "Couple's trip" : `Group of ${total}`;
-    addNarrativeMessage(`**${desc}** — I'll tailor recommendations accordingly.`);
+    addNarrativeMessage(`**${desc}** — I'll tailor recommendations accordingly.`, 'travelers');
   };
 
   const handleStyleConfirm = (style: TravelStyle) => {
@@ -282,7 +290,7 @@ export default function ChatTripV2() {
     }));
 
     const labels = { budget: 'Budget', comfort: 'Comfort', luxury: 'Luxury' };
-    addNarrativeMessage(`**${labels[style]}** style selected — costs and recommendations adjusted.`);
+    addNarrativeMessage(`**${labels[style]}** style selected — costs and recommendations adjusted.`, 'style');
   };
 
   const handlePassportConfirm = (code: string) => {
@@ -292,8 +300,11 @@ export default function ChatTripV2() {
     }));
     setPassportModalOpen(false);
 
-    const country = PASSPORT_OPTIONS.find(p => p.code === code)?.name || code;
-    addNarrativeMessage(`**${country} passport** — I'll check visa requirements for your destinations.`);
+    const country = COUNTRIES.find(p => p.code === code)?.name || code;
+    addNarrativeMessage(
+      `**${country} passport** — I'll check visa requirements for your destinations.`,
+      'passport'
+    );
   };
 
   const handleSubmit = async () => {
@@ -600,7 +611,7 @@ export default function ChatTripV2() {
         initialStyle={tripState.travelStyle}
       />
 
-      {/* Passport Modal (inline for simplicity) */}
+      {/* Passport Modal with search */}
       <AnimatePresence>
         {passportModalOpen && (
           <motion.div
@@ -608,7 +619,10 @@ export default function ChatTripV2() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-            onClick={() => setPassportModalOpen(false)}
+            onClick={() => {
+              setPassportModalOpen(false);
+              setPassportSearch("");
+            }}
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -621,20 +635,40 @@ export default function ChatTripV2() {
                 <h2 className="text-lg font-semibold text-slate-900">Your Passport</h2>
                 <p className="text-sm text-slate-500">For visa requirement checks</p>
               </div>
-              <div className="p-4 max-h-80 overflow-y-auto">
-                {PASSPORT_OPTIONS.map((opt) => (
+              {/* Search input */}
+              <div className="px-4 pt-4">
+                <input
+                  type="text"
+                  value={passportSearch}
+                  onChange={(e) => setPassportSearch(e.target.value)}
+                  placeholder="Search country..."
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:border-slate-400 focus:outline-none text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="p-4 max-h-72 overflow-y-auto">
+                {searchCountries(passportSearch).map((opt) => (
                   <button
                     key={opt.code}
-                    onClick={() => handlePassportConfirm(opt.code)}
-                    className={`w-full p-3 rounded-xl text-left mb-2 transition-all ${
+                    onClick={() => {
+                      handlePassportConfirm(opt.code);
+                      setPassportSearch("");
+                    }}
+                    className={`w-full p-3 rounded-xl text-left mb-2 transition-all flex items-center gap-3 ${
                       tripState.passport === opt.code
                         ? 'bg-emerald-50 border-2 border-emerald-500'
                         : 'bg-slate-50 hover:bg-slate-100 border-2 border-transparent'
                     }`}
                   >
+                    <span className="text-xl">{opt.flag}</span>
                     <span className="font-medium">{opt.name}</span>
                   </button>
                 ))}
+                {searchCountries(passportSearch).length === 0 && (
+                  <p className="text-sm text-slate-400 text-center py-4">
+                    No countries found
+                  </p>
+                )}
               </div>
             </motion.div>
           </motion.div>

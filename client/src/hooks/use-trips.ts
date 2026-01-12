@@ -92,3 +92,65 @@ export function useCreateTrip() {
     // but we return the data so the UI can redirect to the details page
   });
 }
+
+// PUT /api/trips/:id - Update existing trip in place
+export function useUpdateTrip() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: CreateTripRequest }) => {
+      // Ensure numeric types are actually numbers
+      const payload = {
+        ...data,
+        budget: Number(data.budget),
+        groupSize: Number(data.groupSize),
+        adults: Number(data.adults) || 1,
+        children: Number(data.children) || 0,
+        infants: Number(data.infants) || 0,
+      };
+
+      // Client-side validation using the schema before sending
+      const validated = api.trips.create.input.parse(payload);
+
+      const res = await fetch(`/api/trips/${id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...getVoyageHeaders(),
+        },
+        body: JSON.stringify(validated),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error("Trip not found");
+        }
+        if (res.status === 403) {
+          throw new Error("Not authorized to edit this trip");
+        }
+        if (res.status === 400) {
+          const error = await res.json();
+          throw new Error(error.message || "Invalid trip data");
+        }
+        throw new Error("Failed to update trip");
+      }
+
+      return api.trips.create.responses[201].parse(await res.json());
+    },
+    onSuccess: (data) => {
+      // Invalidate the specific trip query to refetch fresh data
+      queryClient.invalidateQueries({ queryKey: [api.trips.get.path, data.id] });
+      // Invalidate trips list if user views My Trips
+      queryClient.invalidateQueries({ queryKey: ['/api/trips'] });
+    },
+    onError: (error) => {
+      toast({
+        title: "Update Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+}

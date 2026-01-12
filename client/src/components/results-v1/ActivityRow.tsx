@@ -10,7 +10,6 @@
 import React from "react";
 import {
   MapPin,
-  Coins,
   Car,
   Bus,
   Train,
@@ -140,8 +139,11 @@ function ActivityRowComponent({
   const TransportIcon = getTransportIcon(smartTransport.icon);
   const transportColor = getTransportColor(smartTransport.icon);
 
-  // Show transport if we have distance or explicit transport mode
-  const shouldShowTransport = showTransport && (distanceFromPrevious !== null || activity.transportMode);
+  // Show transport/distance when:
+  // 1. showTransport is true (not first activity in slot)
+  // 2. showDistance toggle is enabled
+  // 3. We have distance or explicit transport mode
+  const shouldShowTransport = showTransport && showDistance && (distanceFromPrevious !== null || activity.transportMode);
 
   return (
     <div className="relative">
@@ -240,17 +242,16 @@ function ActivityRowComponent({
               )}
             </div>
 
-            {/* Cost badge */}
+            {/* Cost badge - no icon, just text */}
             {cost !== null && (
               <div
                 className={cn(
-                  "flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium shrink-0",
+                  "px-2 py-0.5 rounded-full text-[11px] font-medium shrink-0",
                   cost === 0
                     ? "bg-green-500/15 text-green-300"
                     : "bg-white/10 text-white/70"
                 )}
               >
-                <Coins className="w-3 h-3" />
                 {cost === 0 ? "Free" : `${currencySymbol}${cost.toLocaleString()}`}
               </div>
             )}

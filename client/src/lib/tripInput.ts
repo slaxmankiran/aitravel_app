@@ -144,6 +144,24 @@ export function tripToUserTripInput(trip: TripResponse): UserTripInput {
   };
   const pace = paceMap[trip.pacePreference || "moderate"] || "moderate";
 
+  // Budget: prefer explicit budget, then itinerary's estimated total cost
+  // This ensures the AI sees a realistic budget even for:
+  //   - Chat-created trips (budget may be undefined)
+  //   - Budget/Standard/Luxury style trips (budget = $1 placeholder)
+  // The $1 placeholder is set by CreateTrip.tsx when user selects a predefined style
+  const explicitBudget = trip.budget;
+  const itineraryCost =
+    itinerary?.costBreakdown?.grandTotal ||
+    itinerary?.costBreakdown?.total ||
+    0;
+
+  // Use explicit budget if meaningful (> $100 threshold), otherwise use itinerary cost estimate
+  // $1 is the placeholder for Budget/Standard/Luxury styles - treat it as "no budget set"
+  const MIN_MEANINGFUL_BUDGET = 100;
+  const effectiveBudget = (explicitBudget && explicitBudget >= MIN_MEANINGFUL_BUDGET)
+    ? explicitBudget
+    : itineraryCost;
+
   return {
     dates: {
       start: dates?.start || "",
@@ -151,8 +169,8 @@ export function tripToUserTripInput(trip: TripResponse): UserTripInput {
       duration,
     },
     budget: {
-      total: trip.budget || 0,
-      perPerson: groupSize > 0 ? Math.round((trip.budget || 0) / groupSize) : 0,
+      total: effectiveBudget,
+      perPerson: groupSize > 0 ? Math.round(effectiveBudget / groupSize) : 0,
       currency,
     },
     origin: {

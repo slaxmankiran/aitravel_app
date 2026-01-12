@@ -264,7 +264,7 @@ export function TimeoutState({
               onClick={onRetry}
               disabled={isRetrying}
               variant="outline"
-              className="w-full border-white/20 text-white hover:bg-white/10"
+              className="w-full border-white/30 text-white/90 hover:bg-white/10 hover:text-white"
             >
               {isRetrying ? (
                 <>
@@ -368,6 +368,145 @@ export function ErrorState({
               </Link>
             )}
           </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+// ============================================================================
+// GENERATING STATE (Positive Loading Experience)
+// ============================================================================
+
+interface GeneratingStateProps {
+  destination: string;
+  dates?: string;
+  durationDays?: number;
+  travelers?: number;
+  travelStyle?: string;
+  elapsedSeconds?: number;
+  currentStep?: string;
+  stepDetails?: string;
+}
+
+/**
+ * Clean, focused generating state shown while itinerary is being created.
+ * Replaces the scattered skeleton approach with a centered, informative UI.
+ */
+export function GeneratingState({
+  destination,
+  dates,
+  durationDays,
+  travelers,
+  travelStyle,
+  elapsedSeconds,
+  currentStep,
+  stepDetails,
+}: GeneratingStateProps) {
+  // Dynamic messaging based on elapsed time
+  const getMessage = () => {
+    if (!elapsedSeconds || elapsedSeconds < 15) {
+      return "Gathering destination intel...";
+    } else if (elapsedSeconds < 30) {
+      return "Analyzing visa requirements & costs...";
+    } else if (elapsedSeconds < 60) {
+      return "Crafting your day-by-day itinerary...";
+    } else if (elapsedSeconds < 90) {
+      return "Adding local recommendations...";
+    } else {
+      return "Finalizing your perfect trip...";
+    }
+  };
+
+  const progressSteps = [
+    { label: "Destination", done: (elapsedSeconds || 0) > 5 },
+    { label: "Feasibility", done: (elapsedSeconds || 0) > 20 },
+    { label: "Itinerary", done: (elapsedSeconds || 0) > 60 },
+    { label: "Details", done: (elapsedSeconds || 0) > 90 },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="max-w-md w-full"
+      >
+        <div className="bg-slate-800/60 border border-white/10 rounded-2xl p-8 backdrop-blur-sm text-center">
+          {/* Animated globe/plane icon */}
+          <div className="relative w-20 h-20 mx-auto mb-6">
+            {/* Rotating outer ring */}
+            <motion.div
+              className="absolute inset-0 border-2 border-primary/30 rounded-full"
+              animate={{ rotate: 360 }}
+              transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+            />
+            {/* Inner pulsing circle */}
+            <motion.div
+              className="absolute inset-2 bg-primary/10 rounded-full flex items-center justify-center"
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              <Plane className="w-8 h-8 text-primary" />
+            </motion.div>
+          </div>
+
+          {/* Destination + trip details */}
+          <h1 className="text-2xl font-display font-bold text-white mb-2">
+            {destination}
+          </h1>
+          <div className="flex items-center justify-center gap-3 text-white/60 text-sm mb-6">
+            {durationDays && (
+              <span className="flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5" />
+                {durationDays} days
+              </span>
+            )}
+            {travelers && (
+              <span>{travelers} traveler{travelers !== 1 ? 's' : ''}</span>
+            )}
+            {travelStyle && (
+              <span className="capitalize">{travelStyle}</span>
+            )}
+          </div>
+
+          {/* Current step message */}
+          <div className="bg-white/5 rounded-xl px-4 py-3 mb-6">
+            <p className="text-white font-medium">
+              {currentStep || getMessage()}
+            </p>
+            {stepDetails && (
+              <p className="text-white/50 text-sm mt-1">{stepDetails}</p>
+            )}
+          </div>
+
+          {/* Progress indicator */}
+          <div className="flex items-center justify-center gap-1 mb-4">
+            {progressSteps.map((step, i) => (
+              <div key={step.label} className="flex items-center">
+                <div
+                  className={`w-2 h-2 rounded-full transition-colors ${
+                    step.done ? 'bg-primary' : 'bg-white/20'
+                  }`}
+                />
+                {i < progressSteps.length - 1 && (
+                  <div className={`w-8 h-0.5 ${step.done ? 'bg-primary/50' : 'bg-white/10'}`} />
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Time elapsed */}
+          {elapsedSeconds !== undefined && (
+            <p className="text-white/40 text-xs">
+              {formatElapsed(elapsedSeconds)} elapsed
+              {durationDays && durationDays >= 7 && (
+                <span className="block mt-1">
+                  Longer trips take a bit more time to plan perfectly
+                </span>
+              )}
+            </p>
+          )}
         </div>
       </motion.div>
     </div>

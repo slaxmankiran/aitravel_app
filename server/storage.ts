@@ -10,10 +10,12 @@ export interface IStorage {
 
   // Trip operations
   createTrip(trip: InsertTrip): Promise<Trip>;
+  updateTrip(id: number, trip: Partial<InsertTrip>): Promise<Trip | null>; // Update existing trip
   getTrip(id: number): Promise<Trip | undefined>;
   listTrips(): Promise<Trip[]>; // List all trips (for demo lookup)
   listTripsByUid(voyageUid: string, limit?: number): Promise<Trip[]>; // List trips by anonymous user ID
   adoptTrip(id: number, voyageUid: string): Promise<Trip | null>; // Adopt orphan trip (soft backfill)
+  deleteTrip(id: number): Promise<void>; // Permanently delete trip and associated data
   updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip>;
   setTripFeasibilityPending(id: number): Promise<Trip>; // Sets pending status with timestamp
   updateTripItinerary(id: number, itinerary: any): Promise<Trip>;
@@ -38,6 +40,23 @@ export class DatabaseStorage implements IStorage {
   async createTrip(trip: InsertTrip): Promise<Trip> {
     const [newTrip] = await db.insert(trips).values(trip).returning();
     return newTrip;
+  }
+
+  async updateTrip(id: number, tripData: Partial<InsertTrip>): Promise<Trip | null> {
+    // Reset feasibility and itinerary when trip details change
+    const [updatedTrip] = await db
+      .update(trips)
+      .set({
+        ...tripData,
+        feasibilityStatus: 'pending',
+        feasibilityReport: null,
+        feasibilityError: null,
+        itinerary: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(trips.id, id))
+      .returning();
+    return updatedTrip || null;
   }
 
   async getTrip(id: number): Promise<Trip | undefined> {
@@ -66,6 +85,14 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(trips.id, id), isNull(trips.voyageUid)))
       .returning();
     return updatedTrip || null;
+  }
+
+  // Delete trip and associated data (conversations, comments, etc.)
+  async deleteTrip(id: number): Promise<void> {
+    // Note: If there are foreign key constraints, they should be set to CASCADE DELETE
+    // For now, just delete the trip - associated data will be orphaned
+    // TODO: Add explicit cleanup for tripConversations, tripComments, etc.
+    await db.delete(trips).where(eq(trips.id, id));
   }
 
   async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {
@@ -138,6 +165,21 @@ export class InMemoryStorage implements IStorage {
     return newTrip;
   }
 
+  async updateTrip(id: number, tripData: Partial<InsertTrip>): Promise<Trip | null> {
+    const trip = this.trips.find(t => t.id === id) as any;
+    if (!trip) return null;
+
+    // Update trip fields and reset feasibility/itinerary
+    Object.assign(trip, tripData, {
+      feasibilityStatus: 'pending',
+      feasibilityReport: null,
+      feasibilityError: null,
+      itinerary: null,
+      updatedAt: new Date().toISOString(),
+    });
+    return trip;
+  }
+
   async getTrip(id: number): Promise<Trip | undefined> {
     return this.trips.find(t => t.id === id);
   }
@@ -162,6 +204,14 @@ export class InMemoryStorage implements IStorage {
     if (trip.voyageUid !== null && trip.voyageUid !== undefined) return null; // Already owned
     trip.voyageUid = voyageUid;
     return trip;
+  }
+
+  // Delete trip from memory
+  async deleteTrip(id: number): Promise<void> {
+    const index = this.trips.findIndex(t => t.id === id);
+    if (index !== -1) {
+      this.trips.splice(index, 1);
+    }
   }
 
   async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {

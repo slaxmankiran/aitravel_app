@@ -196,9 +196,12 @@ export interface TripDataForVerdict {
 /**
  * Extract VerdictInput from a trip response object.
  * Handles missing/optional fields with safe defaults.
+ *
+ * IMPORTANT: Uses report.score as the single source of truth for certainty.
+ * This is the same field read by CertaintyBar.
  */
 export function buildVerdictInput(trip: TripDataForVerdict, travelDate?: Date): VerdictInput {
-  const report = trip.feasibilityReport;
+  const report = trip.feasibilityReport as any; // Cast to allow flexible field access
 
   // Calculate days until travel
   let daysUntilTravel = 30; // default
@@ -208,8 +211,15 @@ export function buildVerdictInput(trip: TripDataForVerdict, travelDate?: Date): 
     daysUntilTravel = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
   }
 
+  // Single source of truth for certainty score:
+  // Priority: report.score (what server returns) > report.certaintyScore.score > default 50
+  const certaintyScore =
+    Number(report?.score) ||
+    Number(report?.certaintyScore?.score) ||
+    50;
+
   return {
-    certaintyScore: report?.certaintyScore?.score ?? 50,
+    certaintyScore,
     visaType: report?.visaDetails?.type ?? 'unknown',
     visaProcessingDays: report?.visaDetails?.processingTime ?? { minimum: 14, maximum: 21 },
     visaRisk: report?.visaDetails?.risk ?? 'medium',

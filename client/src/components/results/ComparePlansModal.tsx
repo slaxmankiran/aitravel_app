@@ -264,14 +264,14 @@ export function ComparePlansModal({
             aria-hidden="true"
           />
 
-          {/* Modal */}
+          {/* Modal - centered vertically and horizontally */}
           <motion.div
             ref={modalRef}
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
             transition={{ duration: 0.25, ease: "easeOut" }}
-            className="fixed inset-4 md:inset-auto md:left-1/2 md:top-1/2 md:-translate-x-1/2 md:-translate-y-1/2 md:w-[90vw] md:max-w-3xl md:max-h-[85vh] bg-slate-900 border border-white/10 rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden"
+            className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[95vw] max-w-3xl max-h-[80vh] bg-slate-900 border border-white/10 rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden"
             role="dialog"
             aria-modal="true"
             aria-labelledby="compare-plans-title"
@@ -353,7 +353,10 @@ export function ComparePlansModal({
                         ) : (
                           <span className="text-lg text-white/30 italic">Unavailable</span>
                         )}
-                        <CertaintyDeltaArrow direction={certaintyDelta.direction} />
+                        {/* Only show arrow when there's an actual change */}
+                        {certaintyDelta.direction !== "same" && certaintyDelta.direction !== "unavailable" && (
+                          <CertaintyDeltaArrow direction={certaintyDelta.direction} />
+                        )}
                       </div>
                       <div className="text-xs text-white/40 mt-0.5">
                         Updated
@@ -403,8 +406,8 @@ export function ComparePlansModal({
                 </div>
               </section>}
 
-              {/* Section 2: Cost Breakdown */}
-              {isComparable && <section>
+              {/* Section 2: Cost Breakdown - only show when cost data is available */}
+              {isComparable && totalCostDelta.direction !== "unavailable" && <section>
                 <div className="flex items-center gap-2 mb-3">
                   <Sparkles className="w-4 h-4 text-amber-400" />
                   <h3 className="text-sm font-semibold text-white uppercase tracking-wider">Cost Breakdown</h3>
@@ -422,11 +425,11 @@ export function ComparePlansModal({
                   <div className="mt-3 pt-3 border-t border-white/20 flex items-center justify-between">
                     <span className="text-white font-semibold">Total</span>
                     <div className="flex items-center gap-3">
-                      <span className={cn("tabular-nums", totalCostDelta.before === null ? "text-white/30 italic" : "text-white/50")}>
+                      <span className="tabular-nums text-white/50">
                         {formatMoney(totalCostDelta.before, currencySymbol)}
                       </span>
                       <span className="text-white/30">→</span>
-                      <span className={cn("font-bold tabular-nums text-lg", totalCostDelta.after === null ? "text-white/30 italic" : "text-white")}>
+                      <span className="font-bold tabular-nums text-lg text-white">
                         {formatMoney(totalCostDelta.after, currencySymbol)}
                       </span>
                       {totalCostDelta.delta !== null && totalCostDelta.delta !== 0 && (
@@ -442,9 +445,6 @@ export function ComparePlansModal({
                             <span className="text-xs opacity-70">({totalCostDelta.percentChange > 0 ? "+" : ""}{totalCostDelta.percentChange}%)</span>
                           )}
                         </span>
-                      )}
-                      {totalCostDelta.direction === "unavailable" && (
-                        <span className="text-xs text-white/30 italic">Cannot compare</span>
                       )}
                     </div>
                   </div>

@@ -18,7 +18,6 @@ import {
   Calendar,
   Users,
   Sparkles,
-  ChevronDown,
   Share2,
   Pencil,
   FileDown,
@@ -29,9 +28,6 @@ import {
   fetchDestinationImage,
   getDestinationFallbackGradient,
 } from '@/lib/destinationImages';
-import type { VerdictResult } from '@/lib/verdict';
-import { getVerdictDisplay } from '@/lib/verdict';
-
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -41,71 +37,10 @@ interface DestinationHeroProps {
   dates?: string;
   travelers?: number;
   travelStyle?: string;
-  verdictResult?: VerdictResult | null;
-  onShowDetails?: () => void;
   onShare?: () => void;
   onEdit?: () => void;
   onExportPdf?: () => void;
   className?: string;
-}
-
-// ============================================================================
-// VERDICT BADGE COMPONENT
-// ============================================================================
-
-function VerdictBadge({
-  verdictResult,
-  onShowDetails,
-}: {
-  verdictResult: VerdictResult;
-  onShowDetails?: () => void;
-}) {
-  const display = getVerdictDisplay(verdictResult.verdict);
-
-  return (
-    <motion.button
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.3, duration: 0.4 }}
-      onClick={onShowDetails}
-      className={cn(
-        'group flex items-center gap-2.5 px-3 py-2 rounded-lg',
-        'bg-black/40 backdrop-blur-md border',
-        'hover:bg-black/50 transition-colors cursor-pointer',
-        display.borderClass
-      )}
-    >
-      {/* Score circle - compact */}
-      <div
-        className={cn(
-          'w-9 h-9 rounded-full flex items-center justify-center',
-          'border-2 font-bold text-sm',
-          display.borderClass,
-          display.textClass
-        )}
-      >
-        {verdictResult.score}
-      </div>
-
-      {/* Verdict text - condensed */}
-      <div className="text-left">
-        <div className="flex items-center gap-1.5">
-          <span className={cn('font-semibold text-sm', display.textClass)}>
-            {verdictResult.verdict}
-          </span>
-          <span className="text-white/50 text-xs">
-            {verdictResult.score}%
-          </span>
-        </div>
-        <p className="text-white/60 text-xs line-clamp-1">
-          {display.headline}
-        </p>
-      </div>
-
-      {/* Expand indicator */}
-      <ChevronDown className="w-3.5 h-3.5 text-white/40 group-hover:text-white/60 transition-colors" />
-    </motion.button>
-  );
 }
 
 // ============================================================================
@@ -117,8 +52,6 @@ function DestinationHeroComponent({
   dates,
   travelers,
   travelStyle,
-  verdictResult,
-  onShowDetails,
   onShare,
   onEdit,
   onExportPdf,
@@ -169,10 +102,12 @@ function DestinationHeroComponent({
     const parts = dates.split(' to ');
     if (parts.length === 2) {
       try {
-        const start = new Date(parts[0]);
-        const end = new Date(parts[1]);
-        const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
-        return `${start.toLocaleDateString('en-US', options)} – ${end.toLocaleDateString('en-US', { ...options, year: 'numeric' })}`;
+        // Use noon UTC to avoid timezone issues (same as DayCardList)
+        const start = new Date(parts[0].trim() + 'T12:00:00Z');
+        const end = new Date(parts[1].trim() + 'T12:00:00Z');
+        const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', timeZone: 'UTC' };
+        const optionsWithYear: Intl.DateTimeFormatOptions = { ...options, year: 'numeric' };
+        return `${start.toLocaleDateString('en-US', options)} – ${end.toLocaleDateString('en-US', optionsWithYear)}`;
       } catch {
         return dates;
       }
@@ -294,13 +229,7 @@ function DestinationHeroComponent({
           )}
         </motion.div>
 
-        {/* Verdict badge */}
-        {verdictResult && (
-          <VerdictBadge
-            verdictResult={verdictResult}
-            onShowDetails={onShowDetails}
-          />
-        )}
+        {/* Verdict badge removed - DecisionStack is the single source of truth */}
       </div>
     </div>
   );

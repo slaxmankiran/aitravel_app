@@ -64,6 +64,7 @@ export interface CostViewModel {
   overByAmount: number;
   overByPercent: number;
   budgetStatus: BudgetStatus;
+  hasBudgetSet: boolean; // True only if user set a realistic budget (>= $100/person)
 }
 
 export interface ViewState {

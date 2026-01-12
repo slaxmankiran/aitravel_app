@@ -363,71 +363,69 @@ function getProcessingTime(processingDays) {
 
 ---
 
-## Edit Trip Flow (2026-01-08)
+## Edit Trip Flow (2026-01-08, Updated 2026-01-11)
 
-### Status: Implemented
+### Status: Implemented with Edit-in-Place
 
-Hybrid approach: Edit always opens `/create` form, with tracking for future routing.
+Edit updates the SAME trip ID (industry best practice) instead of creating duplicates.
 
-### Option A: Edit Opens Form (Shipped)
+### API Endpoint
 
-**HeaderBar.tsx**
-- Button label: "Edit trip details"
-- Tooltip: "Opens the form for accurate edits"
-- URL format: `/create?editTripId=2&returnTo=%2Ftrips%2F2%2Fresults-v1`
+**PUT /api/trips/:id** - Updates existing trip in place
+- Validates trip exists and ownership via `x-voyage-uid` header
+- Resets `feasibilityStatus`, `feasibilityReport`, `itinerary` on update
+- Triggers background feasibility re-analysis
 
-**CreateTrip.tsx**
-- Fetches trip by `editTripId` param
-- Shows "Editing: [destination]" header banner
-- Loading state while fetching
-- CTA: "Update & Re-check Feasibility"
-- Passes `returnTo` through feasibility flow
+### Client Hook
 
-**FeasibilityResults.tsx**
-- Parses `returnTo` param
-- Redirects to `returnTo` after generation
+**`useUpdateTrip()`** in `client/src/hooks/use-trips.ts`
+- Sends PUT request with updated trip data
+- Invalidates React Query cache for the trip
+- Shows toast on error
 
-### Option B: Origin Tracking (Shipped)
+### Edit Flow
 
-**Schema Addition**
-```sql
-created_from TEXT DEFAULT 'form'  -- 'chat' | 'form' | 'demo'
-```
-
-**ChatTripV2.tsx**
-- Sets `createdFrom: 'chat'` when creating trips
-
-### Flow Diagram
-
+**From Results Page:**
 ```
 Results Page → [Edit trip details] → /create?editTripId=2&returnTo=...
                                            ↓
                                     CreateTrip (Edit Mode)
-                                    - Shows "Editing: Rome, Italy"
-                                    - Prefills all fields
+                                    - Uses useUpdateTrip() for existing trips
+                                    - Same trip ID preserved
                                     - CTA: "Update & Re-check Feasibility"
                                            ↓
                                     FeasibilityResults?returnTo=...
                                            ↓
-                                    Back to Results Page (returnTo)
+                                    Back to Results Page (same trip ID)
+```
+
+**From My Trips:**
+```
+My Trips → [3-dot menu] → Edit → /create?editTripId=X&returnTo=/trips
+                                           ↓
+                                    CreateTrip (Edit Mode)
+                                           ↓
+                                    FeasibilityResults
+                                           ↓
+                                    Trip Results Page (not back to My Trips)
 ```
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `HeaderBar.tsx` | Edit button label, tooltip, URL with returnTo |
-| `CreateTrip.tsx` | Edit mode header, fetch by ID, smart CTA |
-| `FeasibilityResults.tsx` | Parse & use returnTo param |
-| `shared/schema.ts` | Added `created_from` field |
-| `ChatTripV2.tsx` | Sets `createdFrom: 'chat'` |
+| `server/storage.ts` | Added `updateTrip()` method to IStorage interface |
+| `server/routes.ts` | Added `PUT /api/trips/:id` endpoint |
+| `client/src/hooks/use-trips.ts` | Added `useUpdateTrip()` hook |
+| `CreateTrip.tsx` | Uses update vs create based on `editTripId` |
+| `FeasibilityResults.tsx` | Redirects to results (not My Trips) after edit |
+| `HeaderBar.tsx` | "Trips" breadcrumb links to `/trips` |
 
-### Benefits
+### Key Behaviors
 
-1. **Consistent UX** - Form is precision tool for editing
-2. **Flow continuity** - returnTo preserves user context
-3. **Analytics ready** - `created_from` enables segmentation
-4. **Future routing** - Can route to different editors based on origin
+1. **Same Trip ID** - Edit updates existing record, no duplicates
+2. **Smart Redirect** - From My Trips edit → goes to results page, not back to list
+3. **Ownership Check** - Only trip owner (via voyage_uid) can edit
 
 ---
 
@@ -1857,3 +1855,193 @@ All exit criteria satisfied:
 - ✅ Robust budget parsing in both view model and page
 
 **Ready for Phase 2**: Activity images, distance display reliability, preference capture
+
+---
+
+## Edit-in-Place Implementation (2026-01-11)
+
+### Status: Implemented and Tested
+
+Updated edit flow to UPDATE existing trips instead of creating duplicates.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `client/src/hooks/use-trips.ts` | Added `useUpdateTrip()` hook |
+| `client/src/pages/CreateTrip.tsx` | Uses update vs create based on editTripId |
+| `client/src/pages/FeasibilityResults.tsx` | Handles returnTo param redirect |
+| `client/src/components/results/HeaderBar.tsx` | Edit link with returnTo encoding |
+
+### useUpdateTrip Hook
+
+```typescript
+export function useUpdateTrip() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  return useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: CreateTripRequest }) => {
+      const payload = {
+        ...data,
+        budget: Number(data.budget),
+        groupSize: Number(data.groupSize),
+        adults: Number(data.adults) || 1,
+        children: Number(data.children) || 0,
+        infants: Number(data.infants) || 0,
+      };
+      const validated = api.trips.create.input.parse(payload);
+      const res = await fetch(`/api/trips/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...getVoyageHeaders() },
+        body: JSON.stringify(validated),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return api.trips.create.responses[201].parse(await res.json());
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [api.trips.get.path, data.id] });
+      queryClient.invalidateQueries({ queryKey: ['/api/trips'] });
+    },
+    onError: (error) => {
+      toast({ title: "Update Failed", description: error.message, variant: "destructive" });
+    },
+  });
+}
+```
+
+### Edit Flow Logic
+
+In CreateTrip.tsx:
+- When `editTripId` param present: uses PUT to update existing trip
+- When no editTripId: uses POST to create new trip
+- Smart redirect: If returnTo=/trips, redirects to results-v1 page instead
+
+### Redirect Fix
+
+```typescript
+// In handleSuccess()
+if (decodedReturnTo === '/trips' || decodedReturnTo === '/trips/') {
+  // Editing from My Trips page - redirect to results, not back to list
+  finalReturnTo = `/trips/${tripId}/results-v1?updated=1${changesParam}`;
+} else {
+  finalReturnTo = `${decodedReturnTo}?updated=1${changesParam}`;
+}
+```
+
+---
+
+## UI Improvements (2026-01-11)
+
+### Status: Implemented
+
+Various UI refinements based on user feedback.
+
+### 1. Trips Breadcrumb Link
+
+Made "Trips" in HeaderBar breadcrumb a clickable link to My Trips page.
+
+```tsx
+// client/src/components/results/HeaderBar.tsx
+<Link href="/trips" className="shrink-0 hover:text-white/70 transition-colors">
+  Trips
+</Link>
+```
+
+### 2. Passport/Nationality Pill
+
+Added nationality display in trip results hero with proper adjective formatting.
+
+**File**: `client/src/pages/TripResultsV1.tsx`
+
+```typescript
+const NATIONALITY_MAP: Record<string, string> = {
+  'India': 'Indian',
+  'United States': 'American',
+  'USA': 'American',
+  'United Kingdom': 'British',
+  'UK': 'British',
+  'Canada': 'Canadian',
+  // ... 40+ countries mapped
+};
+
+function getNationalityAdjective(country: string): string {
+  if (NATIONALITY_MAP[country]) return NATIONALITY_MAP[country];
+  // Case-insensitive fallback
+  for (const [key, value] of Object.entries(NATIONALITY_MAP)) {
+    if (key.toLowerCase() === country.toLowerCase()) return value;
+  }
+  return country;
+}
+```
+
+Usage in hero:
+```tsx
+{passport && (
+  <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1">
+    <Flag className="w-4 h-4" />
+    <span>{getNationalityAdjective(passport)} Passport</span>
+  </div>
+)}
+```
+
+### 3. Activity Cost Icons Removed
+
+Removed Coins icon from activity cost badges in `ActivityRow.tsx`. Now shows clean "Free" or price text only.
+
+### 4. Glass Design for DayCard
+
+Updated DayCard background to match glass design system:
+
+```tsx
+// client/src/components/results-v1/DayCard.tsx
+"bg-slate-900/50 backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+```
+
+### 5. Distances Toggle Fix
+
+Fixed toggle to actually control distance display + improved UI to on/off switch:
+
+**ActivityRow.tsx fix**:
+```typescript
+const shouldShowTransport = showTransport && showDistance &&
+  (distanceFromPrevious !== null || activity.transportMode);
+```
+
+**Toggle UI in TripResultsV1.tsx**:
+```tsx
+<button onClick={() => setShowDistances(!showDistances)} className="flex items-center gap-2...">
+  <Route className="w-3 h-3 text-white/50" />
+  <span className="text-white/60">Distances</span>
+  <div className={`relative w-7 h-4 rounded-full transition-colors ${
+    showDistances ? 'bg-emerald-500' : 'bg-white/20'
+  }`}>
+    <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${
+      showDistances ? 'translate-x-3.5' : 'translate-x-0.5'
+    }`} />
+  </div>
+</button>
+```
+
+### 6. Cross-Slot Distance Calculation
+
+Fixed distances to show across time slots (morning → afternoon → evening):
+
+```tsx
+// client/src/components/results-v1/DayCard.tsx
+const renderTimeSlot = (
+  slot: TimeSlot,
+  activities: typeof day.activities,
+  lastActivityFromPreviousSlot: typeof day.activities[0] | null
+) => { /* ... */ };
+
+const getLastActivity = (activities: typeof day.activities) =>
+  activities.length > 0 ? activities[activities.length - 1] : null;
+
+// Usage:
+{renderTimeSlot("morning", buckets.morning, null)}
+{renderTimeSlot("afternoon", buckets.afternoon, getLastActivity(buckets.morning))}
+{renderTimeSlot("evening", buckets.evening,
+  getLastActivity(buckets.afternoon) || getLastActivity(buckets.morning))}
+```

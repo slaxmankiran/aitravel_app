@@ -18,7 +18,7 @@ import { useTrip } from "@/hooks/use-trips";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { motion } from "framer-motion";
-import { Loader2, X, ChevronDown, ChevronUp, Route, Calendar, Users, Sparkles } from "lucide-react";
+import { Loader2, X, ChevronDown, ChevronUp, Route, Calendar, Users, Sparkles, Flag } from "lucide-react";
 
 // Layout components
 import { HeaderBar } from "@/components/results/HeaderBar";
@@ -41,6 +41,7 @@ import {
   ErrorState,
   InlineWarning,
   EmptyItineraryState,
+  GeneratingState,
 } from "@/components/results/FailureStates";
 
 // Existing working components
@@ -67,6 +68,9 @@ import {
 
 // Blocker deltas
 import { getBlockerDeltaUI, type BlockerDeltaUI } from "@/lib/blockerDeltas";
+
+// UI Events (for Fix Blockers modal)
+import { openFixBlockersEvent } from "@/lib/uiEvents";
 
 // Change Planner
 import { useChangePlanner } from "@/hooks/useChangePlanner";
@@ -246,31 +250,99 @@ function DemoBanner() {
 }
 
 // ============================================================================
+// HELPER: Convert country name to nationality adjective
+// ============================================================================
+const NATIONALITY_MAP: Record<string, string> = {
+  'India': 'Indian',
+  'United States': 'American',
+  'USA': 'American',
+  'United Kingdom': 'British',
+  'UK': 'British',
+  'Canada': 'Canadian',
+  'Australia': 'Australian',
+  'Germany': 'German',
+  'France': 'French',
+  'Italy': 'Italian',
+  'Spain': 'Spanish',
+  'Japan': 'Japanese',
+  'China': 'Chinese',
+  'Brazil': 'Brazilian',
+  'Mexico': 'Mexican',
+  'Singapore': 'Singaporean',
+  'Malaysia': 'Malaysian',
+  'Thailand': 'Thai',
+  'Indonesia': 'Indonesian',
+  'Philippines': 'Filipino',
+  'Vietnam': 'Vietnamese',
+  'South Korea': 'South Korean',
+  'Netherlands': 'Dutch',
+  'Switzerland': 'Swiss',
+  'Sweden': 'Swedish',
+  'Norway': 'Norwegian',
+  'Denmark': 'Danish',
+  'Finland': 'Finnish',
+  'Poland': 'Polish',
+  'Russia': 'Russian',
+  'South Africa': 'South African',
+  'New Zealand': 'New Zealand',
+  'Ireland': 'Irish',
+  'Portugal': 'Portuguese',
+  'Greece': 'Greek',
+  'Turkey': 'Turkish',
+  'Egypt': 'Egyptian',
+  'UAE': 'Emirati',
+  'United Arab Emirates': 'Emirati',
+  'Saudi Arabia': 'Saudi',
+  'Israel': 'Israeli',
+  'Argentina': 'Argentine',
+  'Chile': 'Chilean',
+  'Colombia': 'Colombian',
+  'Peru': 'Peruvian',
+  'Pakistan': 'Pakistani',
+  'Bangladesh': 'Bangladeshi',
+  'Sri Lanka': 'Sri Lankan',
+  'Nepal': 'Nepali',
+};
+
+function getNationalityAdjective(country: string): string {
+  // Check exact match first
+  if (NATIONALITY_MAP[country]) {
+    return NATIONALITY_MAP[country];
+  }
+  // Check case-insensitive match
+  const lowerCountry = country.toLowerCase();
+  for (const [key, value] of Object.entries(NATIONALITY_MAP)) {
+    if (key.toLowerCase() === lowerCountry) {
+      return value;
+    }
+  }
+  // Fallback: just return the country name as-is
+  return country;
+}
+
+// ============================================================================
 // CINEMATIC HERO OVERLAY (for cinematic theme)
 // ============================================================================
 
+/**
+ * CinematicHeroOverlay - Clean hero with destination metadata only.
+ * NO verdict/score here - that's shown in DecisionStack only.
+ */
 interface CinematicHeroOverlayProps {
   destination: string;
   dates?: string;
   travelers?: number;
   travelStyle?: string;
-  verdictResult?: VerdictResult | null;
-  onShowDetails?: () => void;
+  passport?: string;
 }
 
-/**
- * Floating hero overlay for cinematic theme.
- * No background image (canvas provides it) - just glass panel with text.
- */
 function CinematicHeroOverlay({
   destination,
   dates,
   travelers,
   travelStyle,
-  verdictResult,
-  onShowDetails,
+  passport,
 }: CinematicHeroOverlayProps) {
-  const display = verdictResult ? getVerdictDisplay(verdictResult.verdict) : null;
 
   // Format dates
   const formattedDates = useMemo(() => {
@@ -305,8 +377,8 @@ function CinematicHeroOverlay({
         {destination}
       </h1>
 
-      {/* Metadata row */}
-      <div className="flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm mb-4">
+      {/* Metadata row - NO verdict here, only destination facts */}
+      <div className="flex flex-wrap items-center gap-3 md:gap-4 text-white/80 text-sm">
         {formattedDates && (
           <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1">
             <Calendar className="w-4 h-4" />
@@ -325,38 +397,14 @@ function CinematicHeroOverlay({
             <span>{styleDisplay}</span>
           </div>
         )}
+        {passport && (
+          <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-sm rounded-full px-3 py-1">
+            <Flag className="w-4 h-4" />
+            <span>{getNationalityAdjective(passport)} Passport</span>
+          </div>
+        )}
       </div>
-
-      {/* Verdict badge */}
-      {verdictResult && display && (
-        <motion.button
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.3, duration: 0.4 }}
-          onClick={onShowDetails}
-          className={`group flex items-center gap-3 px-4 py-3 rounded-xl bg-black/30 backdrop-blur-md border hover:bg-black/40 transition-colors cursor-pointer ${display.borderClass}`}
-        >
-          <div
-            className={`w-11 h-11 rounded-full flex items-center justify-center border-2 font-bold text-lg ${display.borderClass} ${display.textClass}`}
-          >
-            {verdictResult.score}
-          </div>
-          <div className="text-left">
-            <div className="flex items-center gap-2">
-              <span className={`font-bold text-lg ${display.textClass}`}>
-                {verdictResult.verdict}
-              </span>
-              <span className="text-white/50 text-sm">
-                {verdictResult.score}% certainty
-              </span>
-            </div>
-            <p className="text-white/70 text-sm">
-              {display.headline}
-            </p>
-          </div>
-          <ChevronDown className="w-4 h-4 text-white/40 group-hover:text-white/60 transition-colors ml-2" />
-        </motion.button>
-      )}
+      {/* NOTE: Verdict/score is shown ONLY in DecisionStack (right rail) */}
     </motion.div>
   );
 }
@@ -545,6 +593,9 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   const originalTripRef = useRef<TripResponse | null>(null);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
   const compareButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // DecisionStack ref for scroll-to functionality
+  const decisionStackRef = useRef<HTMLDivElement | null>(null);
 
   // Timeout and retry state
   const [generationStartTime] = useState(() => Date.now());
@@ -926,6 +977,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     };
   }, []);
 
+
   const handleTripUpdate = useCallback((updatedData: { itinerary?: any; budgetBreakdown?: any }) => {
     setWorkingTrip(prev => {
       if (!prev) return prev;
@@ -1198,18 +1250,25 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
       : Number(String(workingTrip.budget || '').replace(/[^\d.]/g, '')) || 0;
 
     // Budget delta calculations
-    const overByAmount = grand - userBudget;
-    const overByPercent = userBudget > 0 ? (overByAmount / userBudget) * 100 : 0;
+    // Only calculate "over" if user specified a realistic budget (>= $100 per person)
+    const minRealisticBudget = 100 * size;
+    const hasBudgetSet = userBudget >= minRealisticBudget;
+
+    const overByAmount = hasBudgetSet ? grand - userBudget : 0;
+    const overByPercent = hasBudgetSet && userBudget > 0 ? (overByAmount / userBudget) * 100 : 0;
 
     // Budget status: under | near | over20 | over50
+    // If no realistic budget set, always show "under" (neutral state)
     let budgetStatus: 'under' | 'near' | 'over20' | 'over50' = 'under';
-    if (overByPercent >= 50) {
-      budgetStatus = 'over50';
-    } else if (overByPercent >= 20) {
-      budgetStatus = 'over20';
-    } else if (overByPercent > -10) {
-      // Within 10% under budget = "near"
-      budgetStatus = 'near';
+    if (hasBudgetSet) {
+      if (overByPercent >= 50) {
+        budgetStatus = 'over50';
+      } else if (overByPercent >= 20) {
+        budgetStatus = 'over20';
+      } else if (overByPercent > -10) {
+        // Within 10% under budget = "near"
+        budgetStatus = 'near';
+      }
     }
 
     return {
@@ -1229,6 +1288,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
       overByAmount,
       overByPercent,
       budgetStatus,
+      hasBudgetSet,
     };
   }, [workingTrip]);
 
@@ -1387,6 +1447,31 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     );
   }
 
+  // Generating state - show clean centered loading UI before itinerary is ready
+  // This replaces the scattered skeleton approach with a focused, premium experience
+  if (isGenerating) {
+    const itineraryData = workingTrip.itinerary as any;
+    const hasItinerary = !!(itineraryData?.days?.length);
+
+    // Show GeneratingState if we don't have an itinerary yet (initial generation)
+    // Once we have partial itinerary data, we switch to inline streaming progress
+    if (!hasItinerary) {
+      const elapsedSeconds = Math.floor((Date.now() - generationStartTime) / 1000);
+      return (
+        <GeneratingState
+          destination={workingTrip.destination || 'Your Destination'}
+          dates={workingTrip.dates || undefined}
+          durationDays={tripDurationDays}
+          travelers={workingTrip.groupSize || undefined}
+          travelStyle={workingTrip.travelStyle || undefined}
+          elapsedSeconds={elapsedSeconds}
+          currentStep={progress?.message}
+          stepDetails={progress?.details}
+        />
+      );
+    }
+  }
+
   // Extract derived values for rendering (costs and narrativeSubtitle are already memoized above)
   const itinerary = workingTrip.itinerary as any;
   const currency = workingTrip.currency || 'USD';
@@ -1402,9 +1487,9 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
         {isDemo && <DemoBanner />}
 
         {/* Sticky headers */}
-        <HeaderBar trip={workingTrip} />
+        <HeaderBar trip={workingTrip} isDemo={isDemo} />
 
-        {/* Destination Hero - compact overlay with verdict (no background image - canvas provides it) */}
+        {/* Destination Hero - compact overlay with destination image and metadata */}
         {theme !== 'cinematic' && (
           <div className="max-w-7xl mx-auto px-4 md:px-6 pt-4">
             <DestinationHero
@@ -1412,13 +1497,11 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
               dates={workingTrip.dates || undefined}
               travelers={workingTrip.groupSize || undefined}
               travelStyle={workingTrip.travelStyle || undefined}
-              verdictResult={verdictResult}
-              onShowDetails={() => setCertaintyDrawerOpen(true)}
             />
           </div>
         )}
 
-        {/* Cinematic mode: Floating hero overlay instead of card */}
+        {/* Cinematic mode: Floating hero overlay - destination metadata only */}
         {theme === 'cinematic' && (
           <div className="max-w-7xl mx-auto px-4 md:px-6 pt-6">
             <CinematicHeroOverlay
@@ -1426,8 +1509,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
               dates={workingTrip.dates || undefined}
               travelers={workingTrip.groupSize || undefined}
               travelStyle={workingTrip.travelStyle || undefined}
-              verdictResult={verdictResult}
-              onShowDetails={() => setCertaintyDrawerOpen(true)}
+              passport={workingTrip.passport || undefined}
             />
           </div>
         )}
@@ -1453,6 +1535,7 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
             onDismissSuggestion={handleDismissSuggestion}
             onSnoozeSuggestion={handleSnoozeSuggestion}
             isApplyingFix={isApplyingFix}
+            currency={workingTrip.currency || 'USD'}
           />
         </div>
       )}
@@ -1478,55 +1561,45 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
 
       {/* Main content - two column layout */}
       <main className="max-w-7xl mx-auto px-4 md:px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left column: Itinerary - scrollable container */}
-          <section className="lg:col-span-7 lg:max-h-[calc(100vh-80px)] lg:overflow-y-auto lg:overflow-x-hidden scrollbar-dark">
-            {/* Sticky header within scrollable area - compact controls only */}
-            <div className="sticky top-0 z-10 bg-slate-900 pb-3 -mx-1 px-1">
-              {/* Title row with controls - simplified since hero shows destination */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left column: Itinerary - scrollable container with glass card */}
+          <section className="lg:col-span-7">
+            {/* Glass card wrapper - matches right rail styling */}
+            <div className="bg-slate-800/20 rounded-2xl p-3 lg:max-h-[calc(100vh-80px)] lg:overflow-y-auto lg:overflow-x-hidden scrollbar-dark">
+              {/* Sticky header - glass material, no subtitle filler */}
+              <div className="sticky top-0 z-10 bg-slate-950/40 backdrop-blur-xl py-3 px-3 rounded-lg border border-white/[0.06]">
               <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold text-white">
-                    Your Itinerary
-                  </h2>
-                  <span className="text-sm text-white/50">
-                    {itinerary?.days?.length || '...'} days
-                  </span>
-                </div>
+                <h2 className="text-sm font-medium text-white/80">
+                  {itinerary?.days?.length || '...'}-Day Plan
+                </h2>
 
-                {/* Controls: Expand/Collapse All + Distance Toggle - compact */}
+                {/* Controls: Expand/Collapse All + Distance Toggle */}
                 {!isGenerating && itinerary?.days?.length > 0 && (
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       onClick={() => setAllDaysExpanded(!allDaysExpanded)}
-                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-white/10 text-white/60 hover:bg-white/15 hover:text-white transition-colors"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-white/[0.04] text-white/45 hover:bg-white/[0.08] hover:text-white/65 transition-all"
                       title={allDaysExpanded ? "Collapse all" : "Expand all"}
                     >
                       {allDaysExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                       <span>{allDaysExpanded ? "Collapse" : "Expand"}</span>
                     </button>
+                    {/* Distances toggle pill with on/off switch */}
                     <button
                       onClick={() => setShowDistances(!showDistances)}
-                      className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${
-                        showDistances
-                          ? "bg-primary/20 text-primary"
-                          : "bg-white/10 text-white/60 hover:bg-white/15 hover:text-white"
-                      }`}
+                      className="flex items-center gap-2 px-2.5 py-1 rounded-full text-[11px] font-medium bg-white/[0.04] hover:bg-white/[0.08] transition-all"
                       title={showDistances ? "Hide distances" : "Show distances"}
                     >
-                      <Route className="w-3 h-3" />
-                      <span>Distances</span>
+                      <Route className="w-3 h-3 text-white/50" />
+                      <span className="text-white/60">Distances</span>
+                      {/* Toggle switch */}
+                      <div className={`relative w-7 h-4 rounded-full transition-colors ${showDistances ? 'bg-emerald-500' : 'bg-white/20'}`}>
+                        <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${showDistances ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                      </div>
                     </button>
                   </div>
                 )}
               </div>
-
-              {/* Narrative subtitle (memoized) - shows travel style and visa info */}
-              {narrativeSubtitle && (
-                <p className="text-xs text-white/40 mt-1 leading-relaxed">
-                  {narrativeSubtitle}
-                </p>
-              )}
             </div>
 
             {/* Inline warning for missing cost data */}
@@ -1564,12 +1637,17 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                 />
               </div>
             )}
+            </div>
           </section>
 
           {/* Right column: Decision panels + Map preview */}
-          <aside className="lg:col-span-5 space-y-4">
-            {/* Sticky container for panels with subtle background to prevent void */}
-            <div className="lg:sticky lg:top-[140px] bg-slate-800/20 rounded-2xl p-3 -m-3">
+          <aside className="lg:col-span-5">
+            {/* Sticky container for panels with subtle background - matches left rail */}
+            {/* z-50 ensures it stays ABOVE CertaintyBar (z-40) so dropdowns don't get clipped */}
+            <div
+              ref={decisionStackRef}
+              className="lg:sticky lg:top-[140px] z-50 bg-slate-800/20 rounded-2xl p-3 space-y-4"
+            >
               {/* Panels first - show skeleton during initial generation */}
               {isGenerating && !costs ? (
                 <RightRailSkeleton />
@@ -1582,15 +1660,23 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
                   onChatOpen={handleChatOpen}
                   onShowDetails={() => setCertaintyDrawerOpen(true)}
                   onFixBlockers={() => {
-                    // Scroll to action items section
-                    const el = document.querySelector('[data-section="action-items"]');
-                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    // Emit event to open Fix Blockers modal (handled by FixBlockersController)
+                    openFixBlockersEvent.emit({ source: "other", reason: "unknown" });
                   }}
+                  onViewMap={handleMapExpandToggle}
                   hasLocalChanges={false}
                   hasUndoableChange={false}
                   onUndo={() => {}}
                   isDemo={isDemo}
                   blockerDelta={blockerDeltaUI}
+                  onVersionRestore={() => {
+                    // Refetch trip data after version restore
+                    queryClient.invalidateQueries({ queryKey: ["api.trips.get.path", tripId] });
+                  }}
+                  onVersionExport={(versionId) => {
+                    // Open export page with version param
+                    window.open(`/trips/${tripId}/export?version=${versionId}`, '_blank');
+                  }}
                 />
               )}
 

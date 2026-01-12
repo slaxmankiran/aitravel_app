@@ -246,13 +246,30 @@ export function FixBlockersController({
             </div>
           )}
 
-          {/* No options */}
+          {/* No options - show helpful message based on timing */}
           {!isLoading && !error && options.length === 0 && (
-            <div className="text-center py-8 text-white/50">
-              <p>No automatic fixes available.</p>
-              <p className="text-xs mt-1">
-                Try editing your trip dates manually.
-              </p>
+            <div className="text-center py-8">
+              {timingDetails?.hasEnoughTime ? (
+                <>
+                  <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                    <Check className="w-6 h-6 text-emerald-400" />
+                  </div>
+                  <p className="text-white font-medium">No urgent blockers!</p>
+                  <p className="text-sm text-white/60 mt-1">
+                    You have enough time for visa processing.
+                  </p>
+                  <p className="text-xs text-white/40 mt-2">
+                    {timingDetails.recommendation}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-white/50">No automatic fixes available.</p>
+                  <p className="text-xs text-white/40 mt-1">
+                    Try editing your trip dates manually.
+                  </p>
+                </>
+              )}
             </div>
           )}
 

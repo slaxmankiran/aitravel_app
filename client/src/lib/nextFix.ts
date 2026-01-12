@@ -192,8 +192,8 @@ function checkBufferDaysRule(
       },
       ctaLabel: "Extend trip",
       action: {
-        type: "OPEN_EDITOR",
-        payload: { editor: "dates" },
+        type: "APPLY_PATCH",
+        payload: { patch: { bufferDays: suggestedDays } },
       },
       confidence: determineConfidence(visaRisk, currentBuffer, null, certaintyDelta.delta),
     };
@@ -210,10 +210,10 @@ function checkBufferDaysRule(
         bufferDays: suggestedDays,
         certaintyPoints: suggestedDays * 2,
       },
-      ctaLabel: "Adjust dates",
+      ctaLabel: "Extend trip",
       action: {
-        type: "OPEN_EDITOR",
-        payload: { editor: "dates" },
+        type: "APPLY_PATCH",
+        payload: { patch: { bufferDays: suggestedDays } },
       },
       confidence: "medium",
     };
@@ -357,18 +357,19 @@ function checkCertaintyDropRule(
 
   // Check if buffer days reduced
   if (certaintyDelta.bufferDelta < 0) {
+    const daysToRestore = Math.abs(certaintyDelta.bufferDelta);
     return {
       id: "ADD_BUFFER_DAYS",
       title: "Restore buffer days",
       reason: `Certainty dropped ${absDelta}% partly due to fewer buffer days.`,
       impact: {
         certaintyPoints: absDelta,
-        bufferDays: Math.abs(certaintyDelta.bufferDelta),
+        bufferDays: daysToRestore,
       },
-      ctaLabel: "Adjust dates",
+      ctaLabel: "Extend trip",
       action: {
-        type: "OPEN_EDITOR",
-        payload: { editor: "dates" },
+        type: "APPLY_PATCH",
+        payload: { patch: { bufferDays: daysToRestore } },
       },
       confidence: baseConfidence === "high" ? "high" : "medium",
     };

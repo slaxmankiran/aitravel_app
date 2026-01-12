@@ -495,8 +495,26 @@ export default function FeasibilityResults() {
     },
     onSuccess: () => {
       setIsGenerating(true);
-      // Redirect to returnTo (if from edit mode) or V1 results page
-      const destination = returnTo ? decodeURIComponent(returnTo) : `/trips/${id}/results-v1`;
+      // Redirect logic:
+      // - If returnTo contains results page path, go there (with updated flag)
+      // - If returnTo is just /trips (My Trips list), go to new trip's results page
+      // - Otherwise go to the V1 results page
+      let destination = `/trips/${id}/results-v1`;
+
+      if (returnTo) {
+        const decodedReturnTo = decodeURIComponent(returnTo);
+        if (decodedReturnTo.includes('/results')) {
+          // returnTo already points to results page with updated flag
+          destination = decodedReturnTo;
+        } else if (decodedReturnTo === '/trips' || decodedReturnTo === '/trips/') {
+          // Came from My Trips edit - go to new trip's results with updated flag
+          destination = `/trips/${id}/results-v1?updated=1`;
+        } else {
+          // Some other returnTo - use it as-is
+          destination = decodedReturnTo;
+        }
+      }
+
       setLocation(destination);
     },
   });
@@ -991,16 +1009,16 @@ export default function FeasibilityResults() {
                         {generateItinerary.isPending ? (
                           <>
                             <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                            Generating...
+                            {returnTo ? "Re-Generating..." : "Generating..."}
                           </>
                         ) : riskAcknowledged ? (
                           <>
-                            Generate Itinerary
+                            {returnTo ? "Re-Generate Itinerary" : "Generate Itinerary"}
                             <ArrowRight className="w-5 h-5 ml-2" />
                           </>
                         ) : (
                           <>
-                            Generate Acknowledging Risks
+                            {returnTo ? "Re-Generate Acknowledging Risks" : "Generate Acknowledging Risks"}
                             <ArrowRight className="w-5 h-5 ml-2" />
                           </>
                         )}
@@ -1023,7 +1041,7 @@ export default function FeasibilityResults() {
                       </div>
                     </div>
 
-                    {/* Primary CTA - Generate Itinerary */}
+                    {/* Primary CTA - Generate Itinerary (or Re-Generate in edit mode) */}
                     <Button
                       size="lg"
                       onClick={() => generateItinerary.mutate({})}
@@ -1033,11 +1051,11 @@ export default function FeasibilityResults() {
                       {generateItinerary.isPending ? (
                         <>
                           <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                          Generating...
+                          {returnTo ? "Re-Generating..." : "Generating..."}
                         </>
                       ) : (
                         <>
-                          Generate Itinerary
+                          {returnTo ? "Re-Generate Itinerary" : "Generate Itinerary"}
                           <ArrowRight className="w-5 h-5 ml-2" />
                         </>
                       )}

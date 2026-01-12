@@ -1,0 +1,512 @@
+/**
+ * travelData.ts
+ *
+ * Shared travel data constants used across the application.
+ * Single source of truth for destinations, countries, and currencies.
+ */
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+export interface Country {
+  code: string;
+  name: string;
+  flag: string;
+}
+
+export interface City {
+  city: string;
+  country: string;
+  code: string;
+}
+
+export interface Currency {
+  code: string;
+  name: string;
+  symbol: string;
+  flag: string;
+}
+
+// ============================================================================
+// POPULAR DESTINATIONS (Quick picks with emojis)
+// ============================================================================
+
+export const POPULAR_DESTINATIONS = [
+  { city: "Tokyo", country: "Japan", emoji: "🗼", code: "JP" },
+  { city: "Paris", country: "France", emoji: "🗼", code: "FR" },
+  { city: "Bali", country: "Indonesia", emoji: "🏝️", code: "ID" },
+  { city: "Rome", country: "Italy", emoji: "🏛️", code: "IT" },
+  { city: "Bangkok", country: "Thailand", emoji: "🛕", code: "TH" },
+  { city: "Dubai", country: "UAE", emoji: "🏙️", code: "AE" },
+  { city: "Barcelona", country: "Spain", emoji: "⛪", code: "ES" },
+  { city: "London", country: "UK", emoji: "🎡", code: "GB" },
+  { city: "New York", country: "USA", emoji: "🗽", code: "US" },
+  { city: "Singapore", country: "Singapore", emoji: "🦁", code: "SG" },
+  { city: "Sydney", country: "Australia", emoji: "🦘", code: "AU" },
+  { city: "Amsterdam", country: "Netherlands", emoji: "🌷", code: "NL" },
+];
+
+// ============================================================================
+// MAJOR CITIES (175+ world cities for autocomplete)
+// ============================================================================
+
+export const MAJOR_CITIES: City[] = [
+  { city: "Tokyo", country: "Japan", code: "JP" },
+  { city: "Delhi", country: "India", code: "IN" },
+  { city: "Shanghai", country: "China", code: "CN" },
+  { city: "São Paulo", country: "Brazil", code: "BR" },
+  { city: "Mexico City", country: "Mexico", code: "MX" },
+  { city: "Cairo", country: "Egypt", code: "EG" },
+  { city: "Mumbai", country: "India", code: "IN" },
+  { city: "Beijing", country: "China", code: "CN" },
+  { city: "Dhaka", country: "Bangladesh", code: "BD" },
+  { city: "Osaka", country: "Japan", code: "JP" },
+  { city: "New York", country: "USA", code: "US" },
+  { city: "Karachi", country: "Pakistan", code: "PK" },
+  { city: "Buenos Aires", country: "Argentina", code: "AR" },
+  { city: "Istanbul", country: "Turkey", code: "TR" },
+  { city: "Kolkata", country: "India", code: "IN" },
+  { city: "Manila", country: "Philippines", code: "PH" },
+  { city: "Lagos", country: "Nigeria", code: "NG" },
+  { city: "Rio de Janeiro", country: "Brazil", code: "BR" },
+  { city: "Tianjin", country: "China", code: "CN" },
+  { city: "Kinshasa", country: "DR Congo", code: "CD" },
+  { city: "Guangzhou", country: "China", code: "CN" },
+  { city: "Los Angeles", country: "USA", code: "US" },
+  { city: "Moscow", country: "Russia", code: "RU" },
+  { city: "Shenzhen", country: "China", code: "CN" },
+  { city: "Lahore", country: "Pakistan", code: "PK" },
+  { city: "Bangalore", country: "India", code: "IN" },
+  { city: "Paris", country: "France", code: "FR" },
+  { city: "Bogotá", country: "Colombia", code: "CO" },
+  { city: "Jakarta", country: "Indonesia", code: "ID" },
+  { city: "Chennai", country: "India", code: "IN" },
+  { city: "Lima", country: "Peru", code: "PE" },
+  { city: "Bangkok", country: "Thailand", code: "TH" },
+  { city: "Seoul", country: "South Korea", code: "KR" },
+  { city: "Nagoya", country: "Japan", code: "JP" },
+  { city: "Hyderabad", country: "India", code: "IN" },
+  { city: "London", country: "UK", code: "GB" },
+  { city: "Tehran", country: "Iran", code: "IR" },
+  { city: "Chicago", country: "USA", code: "US" },
+  { city: "Chengdu", country: "China", code: "CN" },
+  { city: "Nanjing", country: "China", code: "CN" },
+  { city: "Wuhan", country: "China", code: "CN" },
+  { city: "Ho Chi Minh City", country: "Vietnam", code: "VN" },
+  { city: "Luanda", country: "Angola", code: "AO" },
+  { city: "Ahmedabad", country: "India", code: "IN" },
+  { city: "Kuala Lumpur", country: "Malaysia", code: "MY" },
+  { city: "Xi'an", country: "China", code: "CN" },
+  { city: "Hong Kong", country: "China", code: "HK" },
+  { city: "Dongguan", country: "China", code: "CN" },
+  { city: "Hangzhou", country: "China", code: "CN" },
+  { city: "Foshan", country: "China", code: "CN" },
+  { city: "Shenyang", country: "China", code: "CN" },
+  { city: "Riyadh", country: "Saudi Arabia", code: "SA" },
+  { city: "Baghdad", country: "Iraq", code: "IQ" },
+  { city: "Santiago", country: "Chile", code: "CL" },
+  { city: "Surat", country: "India", code: "IN" },
+  { city: "Madrid", country: "Spain", code: "ES" },
+  { city: "Suzhou", country: "China", code: "CN" },
+  { city: "Pune", country: "India", code: "IN" },
+  { city: "Harbin", country: "China", code: "CN" },
+  { city: "Houston", country: "USA", code: "US" },
+  { city: "Dallas", country: "USA", code: "US" },
+  { city: "Toronto", country: "Canada", code: "CA" },
+  { city: "Dar es Salaam", country: "Tanzania", code: "TZ" },
+  { city: "Miami", country: "USA", code: "US" },
+  { city: "Belo Horizonte", country: "Brazil", code: "BR" },
+  { city: "Singapore", country: "Singapore", code: "SG" },
+  { city: "Philadelphia", country: "USA", code: "US" },
+  { city: "Atlanta", country: "USA", code: "US" },
+  { city: "Fukuoka", country: "Japan", code: "JP" },
+  { city: "Khartoum", country: "Sudan", code: "SD" },
+  { city: "Barcelona", country: "Spain", code: "ES" },
+  { city: "Johannesburg", country: "South Africa", code: "ZA" },
+  { city: "Saint Petersburg", country: "Russia", code: "RU" },
+  { city: "Qingdao", country: "China", code: "CN" },
+  { city: "Dalian", country: "China", code: "CN" },
+  { city: "Washington DC", country: "USA", code: "US" },
+  { city: "Yangon", country: "Myanmar", code: "MM" },
+  { city: "Alexandria", country: "Egypt", code: "EG" },
+  { city: "Jinan", country: "China", code: "CN" },
+  { city: "Guadalajara", country: "Mexico", code: "MX" },
+  { city: "Boston", country: "USA", code: "US" },
+  { city: "Phoenix", country: "USA", code: "US" },
+  { city: "San Francisco", country: "USA", code: "US" },
+  { city: "Seattle", country: "USA", code: "US" },
+  { city: "San Diego", country: "USA", code: "US" },
+  { city: "Denver", country: "USA", code: "US" },
+  { city: "Las Vegas", country: "USA", code: "US" },
+  { city: "Detroit", country: "USA", code: "US" },
+  { city: "Berlin", country: "Germany", code: "DE" },
+  { city: "Rome", country: "Italy", code: "IT" },
+  { city: "Milan", country: "Italy", code: "IT" },
+  { city: "Naples", country: "Italy", code: "IT" },
+  { city: "Amsterdam", country: "Netherlands", code: "NL" },
+  { city: "Vienna", country: "Austria", code: "AT" },
+  { city: "Prague", country: "Czech Republic", code: "CZ" },
+  { city: "Budapest", country: "Hungary", code: "HU" },
+  { city: "Warsaw", country: "Poland", code: "PL" },
+  { city: "Brussels", country: "Belgium", code: "BE" },
+  { city: "Munich", country: "Germany", code: "DE" },
+  { city: "Frankfurt", country: "Germany", code: "DE" },
+  { city: "Hamburg", country: "Germany", code: "DE" },
+  { city: "Zurich", country: "Switzerland", code: "CH" },
+  { city: "Geneva", country: "Switzerland", code: "CH" },
+  { city: "Copenhagen", country: "Denmark", code: "DK" },
+  { city: "Stockholm", country: "Sweden", code: "SE" },
+  { city: "Oslo", country: "Norway", code: "NO" },
+  { city: "Helsinki", country: "Finland", code: "FI" },
+  { city: "Dublin", country: "Ireland", code: "IE" },
+  { city: "Lisbon", country: "Portugal", code: "PT" },
+  { city: "Athens", country: "Greece", code: "GR" },
+  { city: "Dubai", country: "UAE", code: "AE" },
+  { city: "Abu Dhabi", country: "UAE", code: "AE" },
+  { city: "Doha", country: "Qatar", code: "QA" },
+  { city: "Tel Aviv", country: "Israel", code: "IL" },
+  { city: "Jerusalem", country: "Israel", code: "IL" },
+  { city: "Amman", country: "Jordan", code: "JO" },
+  { city: "Beirut", country: "Lebanon", code: "LB" },
+  { city: "Kuwait City", country: "Kuwait", code: "KW" },
+  { city: "Muscat", country: "Oman", code: "OM" },
+  { city: "Cape Town", country: "South Africa", code: "ZA" },
+  { city: "Durban", country: "South Africa", code: "ZA" },
+  { city: "Nairobi", country: "Kenya", code: "KE" },
+  { city: "Addis Ababa", country: "Ethiopia", code: "ET" },
+  { city: "Casablanca", country: "Morocco", code: "MA" },
+  { city: "Marrakech", country: "Morocco", code: "MA" },
+  { city: "Tunis", country: "Tunisia", code: "TN" },
+  { city: "Algiers", country: "Algeria", code: "DZ" },
+  { city: "Sydney", country: "Australia", code: "AU" },
+  { city: "Melbourne", country: "Australia", code: "AU" },
+  { city: "Brisbane", country: "Australia", code: "AU" },
+  { city: "Perth", country: "Australia", code: "AU" },
+  { city: "Auckland", country: "New Zealand", code: "NZ" },
+  { city: "Wellington", country: "New Zealand", code: "NZ" },
+  { city: "Vancouver", country: "Canada", code: "CA" },
+  { city: "Montreal", country: "Canada", code: "CA" },
+  { city: "Calgary", country: "Canada", code: "CA" },
+  { city: "Ottawa", country: "Canada", code: "CA" },
+  { city: "Havana", country: "Cuba", code: "CU" },
+  { city: "Panama City", country: "Panama", code: "PA" },
+  { city: "San Juan", country: "Puerto Rico", code: "PR" },
+  { city: "Cancun", country: "Mexico", code: "MX" },
+  { city: "Cartagena", country: "Colombia", code: "CO" },
+  { city: "Medellín", country: "Colombia", code: "CO" },
+  { city: "Quito", country: "Ecuador", code: "EC" },
+  { city: "Cusco", country: "Peru", code: "PE" },
+  { city: "Montevideo", country: "Uruguay", code: "UY" },
+  { city: "Kyoto", country: "Japan", code: "JP" },
+  { city: "Hanoi", country: "Vietnam", code: "VN" },
+  { city: "Phuket", country: "Thailand", code: "TH" },
+  { city: "Chiang Mai", country: "Thailand", code: "TH" },
+  { city: "Bali", country: "Indonesia", code: "ID" },
+  { city: "Phnom Penh", country: "Cambodia", code: "KH" },
+  { city: "Siem Reap", country: "Cambodia", code: "KH" },
+  { city: "Kathmandu", country: "Nepal", code: "NP" },
+  { city: "Colombo", country: "Sri Lanka", code: "LK" },
+  { city: "Goa", country: "India", code: "IN" },
+  { city: "Jaipur", country: "India", code: "IN" },
+  { city: "Agra", country: "India", code: "IN" },
+  { city: "Varanasi", country: "India", code: "IN" },
+  { city: "Udaipur", country: "India", code: "IN" },
+  { city: "Nice", country: "France", code: "FR" },
+  { city: "Lyon", country: "France", code: "FR" },
+  { city: "Marseille", country: "France", code: "FR" },
+  { city: "Bordeaux", country: "France", code: "FR" },
+  { city: "Florence", country: "Italy", code: "IT" },
+  { city: "Venice", country: "Italy", code: "IT" },
+  { city: "Santorini", country: "Greece", code: "GR" },
+  { city: "Mykonos", country: "Greece", code: "GR" },
+  { city: "Reykjavik", country: "Iceland", code: "IS" },
+  { city: "Edinburgh", country: "UK", code: "GB" },
+  { city: "Manchester", country: "UK", code: "GB" },
+  { city: "Liverpool", country: "UK", code: "GB" },
+  { city: "Birmingham", country: "UK", code: "GB" },
+  { city: "Glasgow", country: "UK", code: "GB" },
+  { city: "Maldives", country: "Maldives", code: "MV" },
+].sort((a, b) => a.city.localeCompare(b.city));
+
+// ============================================================================
+// COUNTRIES (195+ countries with flags)
+// ============================================================================
+
+export const COUNTRIES: Country[] = [
+  { code: "AF", name: "Afghanistan", flag: "🇦🇫" },
+  { code: "AL", name: "Albania", flag: "🇦🇱" },
+  { code: "DZ", name: "Algeria", flag: "🇩🇿" },
+  { code: "AD", name: "Andorra", flag: "🇦🇩" },
+  { code: "AO", name: "Angola", flag: "🇦🇴" },
+  { code: "AG", name: "Antigua and Barbuda", flag: "🇦🇬" },
+  { code: "AR", name: "Argentina", flag: "🇦🇷" },
+  { code: "AM", name: "Armenia", flag: "🇦🇲" },
+  { code: "AU", name: "Australia", flag: "🇦🇺" },
+  { code: "AT", name: "Austria", flag: "🇦🇹" },
+  { code: "AZ", name: "Azerbaijan", flag: "🇦🇿" },
+  { code: "BS", name: "Bahamas", flag: "🇧🇸" },
+  { code: "BH", name: "Bahrain", flag: "🇧🇭" },
+  { code: "BD", name: "Bangladesh", flag: "🇧🇩" },
+  { code: "BB", name: "Barbados", flag: "🇧🇧" },
+  { code: "BY", name: "Belarus", flag: "🇧🇾" },
+  { code: "BE", name: "Belgium", flag: "🇧🇪" },
+  { code: "BZ", name: "Belize", flag: "🇧🇿" },
+  { code: "BJ", name: "Benin", flag: "🇧🇯" },
+  { code: "BT", name: "Bhutan", flag: "🇧🇹" },
+  { code: "BO", name: "Bolivia", flag: "🇧🇴" },
+  { code: "BA", name: "Bosnia and Herzegovina", flag: "🇧🇦" },
+  { code: "BW", name: "Botswana", flag: "🇧🇼" },
+  { code: "BR", name: "Brazil", flag: "🇧🇷" },
+  { code: "BN", name: "Brunei", flag: "🇧🇳" },
+  { code: "BG", name: "Bulgaria", flag: "🇧🇬" },
+  { code: "BF", name: "Burkina Faso", flag: "🇧🇫" },
+  { code: "BI", name: "Burundi", flag: "🇧🇮" },
+  { code: "CV", name: "Cabo Verde", flag: "🇨🇻" },
+  { code: "KH", name: "Cambodia", flag: "🇰🇭" },
+  { code: "CM", name: "Cameroon", flag: "🇨🇲" },
+  { code: "CA", name: "Canada", flag: "🇨🇦" },
+  { code: "CF", name: "Central African Republic", flag: "🇨🇫" },
+  { code: "TD", name: "Chad", flag: "🇹🇩" },
+  { code: "CL", name: "Chile", flag: "🇨🇱" },
+  { code: "CN", name: "China", flag: "🇨🇳" },
+  { code: "CO", name: "Colombia", flag: "🇨🇴" },
+  { code: "KM", name: "Comoros", flag: "🇰🇲" },
+  { code: "CG", name: "Congo", flag: "🇨🇬" },
+  { code: "CR", name: "Costa Rica", flag: "🇨🇷" },
+  { code: "HR", name: "Croatia", flag: "🇭🇷" },
+  { code: "CU", name: "Cuba", flag: "🇨🇺" },
+  { code: "CY", name: "Cyprus", flag: "🇨🇾" },
+  { code: "CZ", name: "Czech Republic", flag: "🇨🇿" },
+  { code: "DK", name: "Denmark", flag: "🇩🇰" },
+  { code: "DJ", name: "Djibouti", flag: "🇩🇯" },
+  { code: "DM", name: "Dominica", flag: "🇩🇲" },
+  { code: "DO", name: "Dominican Republic", flag: "🇩🇴" },
+  { code: "EC", name: "Ecuador", flag: "🇪🇨" },
+  { code: "EG", name: "Egypt", flag: "🇪🇬" },
+  { code: "SV", name: "El Salvador", flag: "🇸🇻" },
+  { code: "GQ", name: "Equatorial Guinea", flag: "🇬🇶" },
+  { code: "ER", name: "Eritrea", flag: "🇪🇷" },
+  { code: "EE", name: "Estonia", flag: "🇪🇪" },
+  { code: "SZ", name: "Eswatini", flag: "🇸🇿" },
+  { code: "ET", name: "Ethiopia", flag: "🇪🇹" },
+  { code: "FJ", name: "Fiji", flag: "🇫🇯" },
+  { code: "FI", name: "Finland", flag: "🇫🇮" },
+  { code: "FR", name: "France", flag: "🇫🇷" },
+  { code: "GA", name: "Gabon", flag: "🇬🇦" },
+  { code: "GM", name: "Gambia", flag: "🇬🇲" },
+  { code: "GE", name: "Georgia", flag: "🇬🇪" },
+  { code: "DE", name: "Germany", flag: "🇩🇪" },
+  { code: "GH", name: "Ghana", flag: "🇬🇭" },
+  { code: "GR", name: "Greece", flag: "🇬🇷" },
+  { code: "GD", name: "Grenada", flag: "🇬🇩" },
+  { code: "GT", name: "Guatemala", flag: "🇬🇹" },
+  { code: "GN", name: "Guinea", flag: "🇬🇳" },
+  { code: "GW", name: "Guinea-Bissau", flag: "🇬🇼" },
+  { code: "GY", name: "Guyana", flag: "🇬🇾" },
+  { code: "HT", name: "Haiti", flag: "🇭🇹" },
+  { code: "HN", name: "Honduras", flag: "🇭🇳" },
+  { code: "HU", name: "Hungary", flag: "🇭🇺" },
+  { code: "IS", name: "Iceland", flag: "🇮🇸" },
+  { code: "IN", name: "India", flag: "🇮🇳" },
+  { code: "ID", name: "Indonesia", flag: "🇮🇩" },
+  { code: "IR", name: "Iran", flag: "🇮🇷" },
+  { code: "IQ", name: "Iraq", flag: "🇮🇶" },
+  { code: "IE", name: "Ireland", flag: "🇮🇪" },
+  { code: "IL", name: "Israel", flag: "🇮🇱" },
+  { code: "IT", name: "Italy", flag: "🇮🇹" },
+  { code: "JM", name: "Jamaica", flag: "🇯🇲" },
+  { code: "JP", name: "Japan", flag: "🇯🇵" },
+  { code: "JO", name: "Jordan", flag: "🇯🇴" },
+  { code: "KZ", name: "Kazakhstan", flag: "🇰🇿" },
+  { code: "KE", name: "Kenya", flag: "🇰🇪" },
+  { code: "KI", name: "Kiribati", flag: "🇰🇮" },
+  { code: "KP", name: "North Korea", flag: "🇰🇵" },
+  { code: "KR", name: "South Korea", flag: "🇰🇷" },
+  { code: "KW", name: "Kuwait", flag: "🇰🇼" },
+  { code: "KG", name: "Kyrgyzstan", flag: "🇰🇬" },
+  { code: "LA", name: "Laos", flag: "🇱🇦" },
+  { code: "LV", name: "Latvia", flag: "🇱🇻" },
+  { code: "LB", name: "Lebanon", flag: "🇱🇧" },
+  { code: "LS", name: "Lesotho", flag: "🇱🇸" },
+  { code: "LR", name: "Liberia", flag: "🇱🇷" },
+  { code: "LY", name: "Libya", flag: "🇱🇾" },
+  { code: "LI", name: "Liechtenstein", flag: "🇱🇮" },
+  { code: "LT", name: "Lithuania", flag: "🇱🇹" },
+  { code: "LU", name: "Luxembourg", flag: "🇱🇺" },
+  { code: "MG", name: "Madagascar", flag: "🇲🇬" },
+  { code: "MW", name: "Malawi", flag: "🇲🇼" },
+  { code: "MY", name: "Malaysia", flag: "🇲🇾" },
+  { code: "MV", name: "Maldives", flag: "🇲🇻" },
+  { code: "ML", name: "Mali", flag: "🇲🇱" },
+  { code: "MT", name: "Malta", flag: "🇲🇹" },
+  { code: "MH", name: "Marshall Islands", flag: "🇲🇭" },
+  { code: "MR", name: "Mauritania", flag: "🇲🇷" },
+  { code: "MU", name: "Mauritius", flag: "🇲🇺" },
+  { code: "MX", name: "Mexico", flag: "🇲🇽" },
+  { code: "FM", name: "Micronesia", flag: "🇫🇲" },
+  { code: "MD", name: "Moldova", flag: "🇲🇩" },
+  { code: "MC", name: "Monaco", flag: "🇲🇨" },
+  { code: "MN", name: "Mongolia", flag: "🇲🇳" },
+  { code: "ME", name: "Montenegro", flag: "🇲🇪" },
+  { code: "MA", name: "Morocco", flag: "🇲🇦" },
+  { code: "MZ", name: "Mozambique", flag: "🇲🇿" },
+  { code: "MM", name: "Myanmar", flag: "🇲🇲" },
+  { code: "NA", name: "Namibia", flag: "🇳🇦" },
+  { code: "NR", name: "Nauru", flag: "🇳🇷" },
+  { code: "NP", name: "Nepal", flag: "🇳🇵" },
+  { code: "NL", name: "Netherlands", flag: "🇳🇱" },
+  { code: "NZ", name: "New Zealand", flag: "🇳🇿" },
+  { code: "NI", name: "Nicaragua", flag: "🇳🇮" },
+  { code: "NE", name: "Niger", flag: "🇳🇪" },
+  { code: "NG", name: "Nigeria", flag: "🇳🇬" },
+  { code: "MK", name: "North Macedonia", flag: "🇲🇰" },
+  { code: "NO", name: "Norway", flag: "🇳🇴" },
+  { code: "OM", name: "Oman", flag: "🇴🇲" },
+  { code: "PK", name: "Pakistan", flag: "🇵🇰" },
+  { code: "PW", name: "Palau", flag: "🇵🇼" },
+  { code: "PS", name: "Palestine", flag: "🇵🇸" },
+  { code: "PA", name: "Panama", flag: "🇵🇦" },
+  { code: "PG", name: "Papua New Guinea", flag: "🇵🇬" },
+  { code: "PY", name: "Paraguay", flag: "🇵🇾" },
+  { code: "PE", name: "Peru", flag: "🇵🇪" },
+  { code: "PH", name: "Philippines", flag: "🇵🇭" },
+  { code: "PL", name: "Poland", flag: "🇵🇱" },
+  { code: "PT", name: "Portugal", flag: "🇵🇹" },
+  { code: "QA", name: "Qatar", flag: "🇶🇦" },
+  { code: "RO", name: "Romania", flag: "🇷🇴" },
+  { code: "RU", name: "Russia", flag: "🇷🇺" },
+  { code: "RW", name: "Rwanda", flag: "🇷🇼" },
+  { code: "KN", name: "Saint Kitts and Nevis", flag: "🇰🇳" },
+  { code: "LC", name: "Saint Lucia", flag: "🇱🇨" },
+  { code: "VC", name: "Saint Vincent and the Grenadines", flag: "🇻🇨" },
+  { code: "WS", name: "Samoa", flag: "🇼🇸" },
+  { code: "SM", name: "San Marino", flag: "🇸🇲" },
+  { code: "ST", name: "Sao Tome and Principe", flag: "🇸🇹" },
+  { code: "SA", name: "Saudi Arabia", flag: "🇸🇦" },
+  { code: "SN", name: "Senegal", flag: "🇸🇳" },
+  { code: "RS", name: "Serbia", flag: "🇷🇸" },
+  { code: "SC", name: "Seychelles", flag: "🇸🇨" },
+  { code: "SL", name: "Sierra Leone", flag: "🇸🇱" },
+  { code: "SG", name: "Singapore", flag: "🇸🇬" },
+  { code: "SK", name: "Slovakia", flag: "🇸🇰" },
+  { code: "SI", name: "Slovenia", flag: "🇸🇮" },
+  { code: "SB", name: "Solomon Islands", flag: "🇸🇧" },
+  { code: "SO", name: "Somalia", flag: "🇸🇴" },
+  { code: "ZA", name: "South Africa", flag: "🇿🇦" },
+  { code: "SS", name: "South Sudan", flag: "🇸🇸" },
+  { code: "ES", name: "Spain", flag: "🇪🇸" },
+  { code: "LK", name: "Sri Lanka", flag: "🇱🇰" },
+  { code: "SD", name: "Sudan", flag: "🇸🇩" },
+  { code: "SR", name: "Suriname", flag: "🇸🇷" },
+  { code: "SE", name: "Sweden", flag: "🇸🇪" },
+  { code: "CH", name: "Switzerland", flag: "🇨🇭" },
+  { code: "SY", name: "Syria", flag: "🇸🇾" },
+  { code: "TW", name: "Taiwan", flag: "🇹🇼" },
+  { code: "TJ", name: "Tajikistan", flag: "🇹🇯" },
+  { code: "TZ", name: "Tanzania", flag: "🇹🇿" },
+  { code: "TH", name: "Thailand", flag: "🇹🇭" },
+  { code: "TL", name: "Timor-Leste", flag: "🇹🇱" },
+  { code: "TG", name: "Togo", flag: "🇹🇬" },
+  { code: "TO", name: "Tonga", flag: "🇹🇴" },
+  { code: "TT", name: "Trinidad and Tobago", flag: "🇹🇹" },
+  { code: "TN", name: "Tunisia", flag: "🇹🇳" },
+  { code: "TR", name: "Turkey", flag: "🇹🇷" },
+  { code: "TM", name: "Turkmenistan", flag: "🇹🇲" },
+  { code: "TV", name: "Tuvalu", flag: "🇹🇻" },
+  { code: "UG", name: "Uganda", flag: "🇺🇬" },
+  { code: "UA", name: "Ukraine", flag: "🇺🇦" },
+  { code: "AE", name: "United Arab Emirates", flag: "🇦🇪" },
+  { code: "GB", name: "United Kingdom", flag: "🇬🇧" },
+  { code: "US", name: "United States", flag: "🇺🇸" },
+  { code: "UY", name: "Uruguay", flag: "🇺🇾" },
+  { code: "UZ", name: "Uzbekistan", flag: "🇺🇿" },
+  { code: "VU", name: "Vanuatu", flag: "🇻🇺" },
+  { code: "VA", name: "Vatican City", flag: "🇻🇦" },
+  { code: "VE", name: "Venezuela", flag: "🇻🇪" },
+  { code: "VN", name: "Vietnam", flag: "🇻🇳" },
+  { code: "YE", name: "Yemen", flag: "🇾🇪" },
+  { code: "ZM", name: "Zambia", flag: "🇿🇲" },
+  { code: "ZW", name: "Zimbabwe", flag: "🇿🇼" },
+];
+
+// ============================================================================
+// CURRENCIES
+// ============================================================================
+
+export const CURRENCIES: Currency[] = [
+  { code: "USD", name: "US Dollar", symbol: "$", flag: "🇺🇸" },
+  { code: "EUR", name: "Euro", symbol: "€", flag: "🇪🇺" },
+  { code: "GBP", name: "British Pound", symbol: "£", flag: "🇬🇧" },
+  { code: "JPY", name: "Japanese Yen", symbol: "¥", flag: "🇯🇵" },
+  { code: "CNY", name: "Chinese Yuan", symbol: "¥", flag: "🇨🇳" },
+  { code: "INR", name: "Indian Rupee", symbol: "₹", flag: "🇮🇳" },
+  { code: "AUD", name: "Australian Dollar", symbol: "A$", flag: "🇦🇺" },
+  { code: "CAD", name: "Canadian Dollar", symbol: "C$", flag: "🇨🇦" },
+  { code: "CHF", name: "Swiss Franc", symbol: "Fr", flag: "🇨🇭" },
+  { code: "KRW", name: "South Korean Won", symbol: "₩", flag: "🇰🇷" },
+  { code: "SGD", name: "Singapore Dollar", symbol: "S$", flag: "🇸🇬" },
+  { code: "HKD", name: "Hong Kong Dollar", symbol: "HK$", flag: "🇭🇰" },
+  { code: "NZD", name: "New Zealand Dollar", symbol: "NZ$", flag: "🇳🇿" },
+  { code: "SEK", name: "Swedish Krona", symbol: "kr", flag: "🇸🇪" },
+  { code: "NOK", name: "Norwegian Krone", symbol: "kr", flag: "🇳🇴" },
+  { code: "DKK", name: "Danish Krone", symbol: "kr", flag: "🇩🇰" },
+  { code: "MXN", name: "Mexican Peso", symbol: "$", flag: "🇲🇽" },
+  { code: "BRL", name: "Brazilian Real", symbol: "R$", flag: "🇧🇷" },
+  { code: "AED", name: "UAE Dirham", symbol: "د.إ", flag: "🇦🇪" },
+  { code: "SAR", name: "Saudi Riyal", symbol: "﷼", flag: "🇸🇦" },
+  { code: "THB", name: "Thai Baht", symbol: "฿", flag: "🇹🇭" },
+  { code: "MYR", name: "Malaysian Ringgit", symbol: "RM", flag: "🇲🇾" },
+  { code: "IDR", name: "Indonesian Rupiah", symbol: "Rp", flag: "🇮🇩" },
+  { code: "PHP", name: "Philippine Peso", symbol: "₱", flag: "🇵🇭" },
+  { code: "ZAR", name: "South African Rand", symbol: "R", flag: "🇿🇦" },
+  { code: "TRY", name: "Turkish Lira", symbol: "₺", flag: "🇹🇷" },
+  { code: "RUB", name: "Russian Ruble", symbol: "₽", flag: "🇷🇺" },
+  { code: "PLN", name: "Polish Zloty", symbol: "zł", flag: "🇵🇱" },
+  { code: "CZK", name: "Czech Koruna", symbol: "Kč", flag: "🇨🇿" },
+  { code: "HUF", name: "Hungarian Forint", symbol: "Ft", flag: "🇭🇺" },
+];
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Get country by code
+ */
+export function getCountryByCode(code: string): Country | undefined {
+  return COUNTRIES.find(c => c.code === code);
+}
+
+/**
+ * Get country by name (case-insensitive, partial match)
+ */
+export function findCountryByName(name: string): Country | undefined {
+  const lower = name.toLowerCase();
+  return COUNTRIES.find(c => c.name.toLowerCase() === lower) ||
+         COUNTRIES.find(c => c.name.toLowerCase().includes(lower));
+}
+
+/**
+ * Search cities by query (matches city name or country)
+ */
+export function searchCities(query: string): City[] {
+  if (!query || query.length < 2) return [];
+  const lower = query.toLowerCase();
+  return MAJOR_CITIES.filter(c =>
+    c.city.toLowerCase().includes(lower) ||
+    c.country.toLowerCase().includes(lower)
+  ).slice(0, 20);
+}
+
+/**
+ * Search countries by query (matches name or code)
+ */
+export function searchCountries(query: string): Country[] {
+  if (!query) return COUNTRIES;
+  const lower = query.toLowerCase();
+  return COUNTRIES.filter(c =>
+    c.name.toLowerCase().includes(lower) ||
+    c.code.toLowerCase() === lower
+  );
+}
