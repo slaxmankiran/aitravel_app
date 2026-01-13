@@ -7,10 +7,11 @@
  * Falls back to stylized placeholder if Mapbox token unavailable.
  */
 
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { Sun, Moon } from 'lucide-react';
 
 // ============================================================================
 // TYPES
@@ -31,6 +32,8 @@ interface MapBackgroundProps {
   hoveredActivityKey?: string | null;
   onMarkerClick?: (id: string) => void;
   className?: string;
+  /** Offset map center upward on mobile to account for bottom sheet */
+  mobileOffset?: boolean;
 }
 
 // ============================================================================
@@ -44,6 +47,14 @@ const TYPE_COLORS: Record<string, string> = {
   lodging: '#10b981',
 };
 
+// Map styles for dark/light toggle
+const MAP_STYLES = {
+  dark: 'mapbox://styles/mapbox/dark-v11',
+  light: 'mapbox://styles/mapbox/streets-v12',
+} as const;
+
+type MapTheme = keyof typeof MAP_STYLES;
+
 // Cinematic camera settings for bird's eye view
 const CAMERA_CONFIG = {
   defaultPitch: 60,        // 3D tilt angle (bird's eye)
@@ -55,15 +66,71 @@ const CAMERA_CONFIG = {
   terrainExaggeration: 1.5, // 3D terrain height multiplier
 };
 
+// Mobile camera settings - less aggressive, better for touch
+const CAMERA_CONFIG_MOBILE = {
+  defaultPitch: 45,        // Less tilt for mobile
+  hoverPitch: 50,
+  defaultBearing: 0,       // No rotation (easier orientation)
+  defaultZoom: 11,         // Zoomed out more to see context
+  hoverZoom: 13,
+  flyDuration: 1500,       // Faster transitions
+  terrainExaggeration: 1,  // Less exaggerated terrain
+};
+
+// Low-power mode settings (for prefers-reduced-motion or older devices)
+const CAMERA_CONFIG_REDUCED = {
+  defaultPitch: 45,        // Less aggressive tilt
+  hoverPitch: 45,          // Same as default (no animation)
+  defaultBearing: 0,       // No rotation
+  defaultZoom: 12,
+  hoverZoom: 13,           // Less zoom change
+  flyDuration: 500,        // Much faster transitions
+  terrainExaggeration: 0,  // Flat map (no 3D terrain)
+};
+
+// Detect reduced motion preference
+function usePrefersReducedMotion(): boolean {
+  const [prefersReducedMotion, setPrefersReducedMotion] = React.useState(false);
+
+  React.useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setPrefersReducedMotion(mediaQuery.matches);
+
+    const handler = (event: MediaQueryListEvent) => {
+      setPrefersReducedMotion(event.matches);
+    };
+
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
 // ============================================================================
 // COMPONENT
 // ============================================================================
+
+// Hook to detect mobile
+function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState(false);
+
+  React.useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  return isMobile;
+}
 
 function MapBackgroundComponent({
   activities,
   hoveredActivityKey,
   onMarkerClick,
   className = '',
+  mobileOffset = true,
 }: MapBackgroundProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
@@ -72,25 +139,64 @@ function MapBackgroundComponent({
   const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || null;
   const [isLoaded, setIsLoaded] = useState(false);
   const [isStyleLoaded, setIsStyleLoaded] = useState(false);
+  const [mapTheme, setMapTheme] = useState<MapTheme>('dark');
+  const isMobile = useIsMobile();
 
-  // Log token status once on mount
-  useEffect(() => {
-    if (mapboxToken) {
-      console.log('[MapBackground] Mapbox token loaded from environment');
-    } else {
-      console.log('[MapBackground] VITE_MAPBOX_TOKEN not set, using fallback');
+  // Toggle map theme between dark and light
+  const toggleMapTheme = useCallback(() => {
+    const newTheme = mapTheme === 'dark' ? 'light' : 'dark';
+    setMapTheme(newTheme);
+    setIsStyleLoaded(false); // Reset to trigger marker re-add
+
+    if (map.current) {
+      map.current.setStyle(MAP_STYLES[newTheme]);
+      console.log(`[MapBackground] Theme switched to ${newTheme}`);
+
+      // Re-add terrain and fog after style loads
+      map.current.once('style.load', () => {
+        setIsStyleLoaded(true);
+        console.log(`[MapBackground] ${newTheme} style loaded`);
+      });
     }
-  }, []);
+  }, [mapTheme]);
+
+  // Check for reduced motion preference (accessibility + low-power mode)
+  const prefersReducedMotion = usePrefersReducedMotion();
+
+  // Select camera config: reduced motion > mobile > desktop
+  const cameraConfig = prefersReducedMotion
+    ? CAMERA_CONFIG_REDUCED
+    : isMobile
+    ? CAMERA_CONFIG_MOBILE
+    : CAMERA_CONFIG;
 
   // Calculate center from activities
+  // On mobile, offset the center upward to account for the bottom sheet
   const center = useMemo(() => {
     if (activities.length === 0) return { lng: 100.5018, lat: 13.7563 }; // Default: Bangkok
 
     const avgLat = activities.reduce((sum, a) => sum + a.lat, 0) / activities.length;
     const avgLng = activities.reduce((sum, a) => sum + a.lng, 0) / activities.length;
 
-    return { lng: avgLng, lat: avgLat };
-  }, [activities]);
+    // On mobile, shift the center northward (higher lat) so content appears in upper half
+    // This accounts for the bottom sheet taking ~45% of screen height
+    const latOffset = (isMobile && mobileOffset) ? 0.015 : 0; // ~1.5km north offset
+
+    return { lng: avgLng, lat: avgLat + latOffset };
+  }, [activities, isMobile, mobileOffset]);
+
+  // Log token and motion status once on mount
+  useEffect(() => {
+    if (mapboxToken) {
+      console.log('[MapBackground] Mapbox token loaded from environment');
+    } else {
+      console.log('[MapBackground] VITE_MAPBOX_TOKEN not set, using fallback');
+    }
+    if (prefersReducedMotion) {
+      console.log('[MapBackground] Reduced motion mode enabled (low-power/accessibility)');
+    }
+    console.log('[MapBackground] Activities received:', activities.length, 'Center:', center);
+  }, [mapboxToken, prefersReducedMotion, activities.length, center]);
 
   // Initialize Mapbox GL map with 3D features
   useEffect(() => {
@@ -107,16 +213,16 @@ function MapBackgroundComponent({
 
     const mapInstance = new mapboxgl.Map({
       container: mapContainer.current,
-      // Use the new Mapbox Standard style for 3D buildings and terrain
-      style: 'mapbox://styles/mapbox/standard',
+      // Use theme-based style (toggleable between dark/light)
+      style: MAP_STYLES[mapTheme],
       center: [center.lng, center.lat],
-      zoom: CAMERA_CONFIG.defaultZoom,
-      pitch: CAMERA_CONFIG.defaultPitch,
-      bearing: CAMERA_CONFIG.defaultBearing,
-      antialias: true,
+      zoom: cameraConfig.defaultZoom,
+      pitch: cameraConfig.defaultPitch,
+      bearing: cameraConfig.defaultBearing,
+      antialias: !prefersReducedMotion, // Disable antialiasing in low-power mode
       interactive: true,
-      // Enable globe projection for immersive 3D earth view
-      projection: 'globe',
+      // Enable globe projection for immersive 3D earth view (only in full mode)
+      projection: prefersReducedMotion ? 'mercator' : 'globe',
     });
 
     // Disable scroll zoom to prevent conflicts with page scroll
@@ -125,39 +231,61 @@ function MapBackgroundComponent({
     mapInstance.on('load', () => {
       setIsLoaded(true);
       console.log('[MapBackground] Map loaded');
+
+      // Force resize after a short delay to fix blank canvas issue
+      setTimeout(() => {
+        mapInstance.resize();
+        console.log('[MapBackground] Map resized');
+      }, 500);
     });
 
     // Wait for style to fully load before adding terrain/atmosphere
     mapInstance.on('style.load', () => {
       setIsStyleLoaded(true);
-      console.log('[MapBackground] Style loaded, adding 3D features');
+      console.log('[MapBackground] Style loaded');
 
-      // Enable 3D terrain with exaggeration
-      mapInstance.setTerrain({
-        source: 'mapbox-dem',
-        exaggeration: CAMERA_CONFIG.terrainExaggeration,
-      });
+      // Only add 3D effects if not in reduced motion mode
+      if (!prefersReducedMotion) {
+        try {
+          // Add terrain source first (must exist before setTerrain)
+          if (!mapInstance.getSource('mapbox-dem')) {
+            mapInstance.addSource('mapbox-dem', {
+              type: 'raster-dem',
+              url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+              tileSize: 512,
+              maxzoom: 14,
+            });
+          }
 
-      // Add terrain source if not present
-      if (!mapInstance.getSource('mapbox-dem')) {
-        mapInstance.addSource('mapbox-dem', {
-          type: 'raster-dem',
-          url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
-          tileSize: 512,
-          maxzoom: 14,
-        });
+          // Wait a tick for source to be ready, then enable terrain
+          setTimeout(() => {
+            try {
+              mapInstance.setTerrain({
+                source: 'mapbox-dem',
+                exaggeration: cameraConfig.terrainExaggeration,
+              });
+              console.log('[MapBackground] 3D terrain enabled');
+            } catch (terrainError) {
+              console.warn('[MapBackground] Terrain setup failed:', terrainError);
+            }
+          }, 100);
+
+          // Configure atmosphere for cinematic sky effect - subtle version
+          mapInstance.setFog({
+            color: 'rgb(30, 40, 60)',           // Lighter fog color
+            'high-color': 'rgb(50, 60, 90)',    // Lighter upper atmosphere
+            'horizon-blend': 0.04,              // Less horizon blend
+            'space-color': 'rgb(15, 20, 35)',   // Lighter space color
+            'star-intensity': 0.08,             // Very subtle stars
+          });
+
+          console.log('[MapBackground] 3D atmosphere configured');
+        } catch (error) {
+          console.warn('[MapBackground] 3D effects setup failed:', error);
+        }
+      } else {
+        console.log('[MapBackground] Skipped 3D effects (reduced motion mode)');
       }
-
-      // Configure atmosphere for cinematic sky effect
-      mapInstance.setFog({
-        color: 'rgb(20, 30, 50)',           // Foggy blue-slate color
-        'high-color': 'rgb(40, 50, 80)',    // Upper atmosphere
-        'horizon-blend': 0.08,              // Horizon blend amount
-        'space-color': 'rgb(10, 15, 30)',   // Space/starry sky color
-        'star-intensity': 0.15,             // Subtle star visibility
-      });
-
-      console.log('[MapBackground] 3D terrain and atmosphere configured');
     });
 
     map.current = mapInstance;
@@ -285,20 +413,20 @@ function MapBackgroundComponent({
 
     const activity = activities.find(a => a.id === hoveredActivityKey);
     if (activity) {
-      // Add slight random variation to bearing for cinematic effect
-      const bearingVariation = Math.random() * 30 - 15;
+      // Add slight random variation to bearing for cinematic effect (only in full mode)
+      const bearingVariation = prefersReducedMotion ? 0 : (Math.random() * 30 - 15);
 
       map.current.flyTo({
         center: [activity.lng, activity.lat],
-        zoom: CAMERA_CONFIG.hoverZoom,
-        pitch: CAMERA_CONFIG.hoverPitch,
-        bearing: CAMERA_CONFIG.defaultBearing + bearingVariation,
-        duration: CAMERA_CONFIG.flyDuration,
+        zoom: cameraConfig.hoverZoom,
+        pitch: cameraConfig.hoverPitch,
+        bearing: cameraConfig.defaultBearing + bearingVariation,
+        duration: cameraConfig.flyDuration,
         essential: true,
-        curve: 1.5, // Smooth ease curve
+        curve: prefersReducedMotion ? 1 : 1.5, // Simpler curve in reduced motion
       });
     }
-  }, [hoveredActivityKey, activities, isLoaded]);
+  }, [hoveredActivityKey, activities, isLoaded, cameraConfig, prefersReducedMotion]);
 
   // Reset camera when hover clears
   useEffect(() => {
@@ -307,13 +435,13 @@ function MapBackgroundComponent({
     // Return to overview position
     map.current.flyTo({
       center: [center.lng, center.lat],
-      zoom: CAMERA_CONFIG.defaultZoom,
-      pitch: CAMERA_CONFIG.defaultPitch,
-      bearing: CAMERA_CONFIG.defaultBearing,
-      duration: 1500,
+      zoom: cameraConfig.defaultZoom,
+      pitch: cameraConfig.defaultPitch,
+      bearing: cameraConfig.defaultBearing,
+      duration: prefersReducedMotion ? 300 : 1500,
       essential: true,
     });
-  }, [hoveredActivityKey, center, isLoaded]);
+  }, [hoveredActivityKey, center, isLoaded, cameraConfig, prefersReducedMotion]);
 
   // ============================================================================
   // FALLBACK: No Mapbox token - show stylized placeholder
@@ -398,47 +526,52 @@ function MapBackgroundComponent({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 1.5 }}
-      className={`fixed inset-0 z-0 ${className}`}
+      className={`fixed inset-0 z-0 h-screen w-screen ${className}`}
     >
-      {/* Map container */}
+      {/* Map container - explicit full dimensions */}
       <div
         ref={mapContainer}
-        className="absolute inset-0"
-        style={{ background: '#0f172a' }}
+        className="absolute inset-0 h-full w-full"
+        style={{ background: '#0f172a', minHeight: '100vh', minWidth: '100vw' }}
       />
 
-      {/* Gradient overlays for UI readability */}
-      {/* Left fade - strong for itinerary panel */}
+      {/* Gradient overlays for UI readability - subtle version */}
+      {/* Left fade - for itinerary panel legibility */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'linear-gradient(to right, rgba(15, 23, 42, 0.92) 0%, rgba(15, 23, 42, 0.6) 30%, transparent 55%)',
+          background: 'linear-gradient(to right, rgba(15, 23, 42, 0.75) 0%, rgba(15, 23, 42, 0.25) 20%, transparent 40%)',
         }}
       />
 
-      {/* Top fade - for header */}
+      {/* Top fade - for header (very subtle) */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'linear-gradient(to bottom, rgba(15, 23, 42, 0.75) 0%, transparent 25%)',
+          background: 'linear-gradient(to bottom, rgba(15, 23, 42, 0.4) 0%, transparent 15%)',
         }}
       />
 
-      {/* Bottom fade - subtle */}
+      {/* Vignette effect - subtle */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'linear-gradient(to top, rgba(15, 23, 42, 0.5) 0%, transparent 20%)',
+          boxShadow: 'inset 0 0 150px rgba(0, 0, 0, 0.25)',
         }}
       />
 
-      {/* Vignette effect for cinematic depth */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          boxShadow: 'inset 0 0 250px rgba(0, 0, 0, 0.4)',
-        }}
-      />
+      {/* Theme toggle button - hide on mobile to avoid conflict with bottom sheet */}
+      <button
+        onClick={toggleMapTheme}
+        className="hidden md:block absolute bottom-24 right-4 z-10 p-3 rounded-full bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/20 transition-all duration-200 shadow-lg group"
+        title={mapTheme === 'dark' ? 'Switch to light map' : 'Switch to dark map'}
+      >
+        {mapTheme === 'dark' ? (
+          <Sun className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
+        ) : (
+          <Moon className="w-5 h-5 text-indigo-400 group-hover:scale-110 transition-transform" />
+        )}
+      </button>
     </motion.div>
   );
 }

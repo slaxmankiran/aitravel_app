@@ -1,15 +1,16 @@
 /**
  * FloatingItinerary Component
  *
- * Narrow left panel for itinerary with heavy glassmorphism.
- * Contains hero image + scrollable DayCardList.
+ * Responsive itinerary panel:
+ * - Desktop (md+): Narrow left side panel with glassmorphism
+ * - Mobile (<md): Bottom sheet drawer that can be expanded/collapsed
  *
- * Design: Max-width 400px, semi-transparent, rounded corners.
+ * Design: Premium glass styling, spring animations.
  */
 
-import React, { useState, useMemo } from 'react';
-import { motion } from 'framer-motion';
-import { ChevronDown, ChevronUp, MapPin, Ruler } from 'lucide-react';
+import React, { useState, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence, PanInfo, useMotionValue, useTransform } from 'framer-motion';
+import { ChevronDown, ChevronUp, MapPin, Ruler, GripHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DayCardList } from '@/components/results-v1/DayCardList';
 import { DestinationHero } from '@/components/results/DestinationHero';
@@ -30,6 +31,35 @@ interface FloatingItineraryProps {
 }
 
 // ============================================================================
+// MOBILE BOTTOM SHEET STATES
+// ============================================================================
+
+type SheetState = 'collapsed' | 'partial' | 'expanded';
+
+const SHEET_HEIGHTS = {
+  collapsed: 80,   // Just the handle + peek
+  partial: 45,     // 45% of viewport
+  expanded: 85,    // 85% of viewport
+} as const;
+
+// ============================================================================
+// HOOKS
+// ============================================================================
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+
+  React.useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  return isMobile;
+}
+
+// ============================================================================
 // COMPONENT
 // ============================================================================
 
@@ -45,6 +75,9 @@ function FloatingItineraryComponent({
 }: FloatingItineraryProps) {
   const [allExpanded, setAllExpanded] = useState(true);
   const [showDistances, setShowDistances] = useState(false);
+  const [sheetState, setSheetState] = useState<SheetState>('partial');
+
+  const isMobile = useIsMobile();
 
   // Cast the itinerary to the expected type (runtime data matches the structure)
   const itinerary = trip.itinerary as unknown as Itinerary | undefined;
@@ -58,13 +91,11 @@ function FloatingItineraryComponent({
 
     const citySet = new Set<string>();
     days.forEach(day => {
-      // Try to extract city from day title or first activity
       const title = day.title || '';
-      // Match patterns like "Bangkok - Temple Tour" or just use first word if it's a city
       const dashMatch = title.match(/^([^-–—]+)/);
       if (dashMatch) {
         const possibleCity = dashMatch[1].trim();
-        if (possibleCity.length < 20) { // Likely a city name
+        if (possibleCity.length < 20) {
           citySet.add(possibleCity);
         }
       }
@@ -76,14 +107,62 @@ function FloatingItineraryComponent({
     return `${cities.slice(0, -1).join(', ')} & ${cities[cities.length - 1]}`;
   }, [days]);
 
-  // Loading state
+  // Handle sheet drag
+  const handleDragEnd = useCallback((_: any, info: PanInfo) => {
+    const velocity = info.velocity.y;
+    const offset = info.offset.y;
+
+    // Determine next state based on drag direction and velocity
+    if (velocity < -500 || (velocity < 0 && offset < -50)) {
+      // Swiped up fast or dragged up
+      setSheetState(prev => prev === 'collapsed' ? 'partial' : 'expanded');
+    } else if (velocity > 500 || (velocity > 0 && offset > 50)) {
+      // Swiped down fast or dragged down
+      setSheetState(prev => prev === 'expanded' ? 'partial' : 'collapsed');
+    }
+  }, []);
+
+  // Toggle between states on tap
+  const cycleSheetState = useCallback(() => {
+    setSheetState(prev => {
+      if (prev === 'collapsed') return 'partial';
+      if (prev === 'partial') return 'expanded';
+      return 'partial';
+    });
+  }, []);
+
+  // Get current height percentage
+  const currentHeight = SHEET_HEIGHTS[sheetState];
+
+  // Loading state (works for both mobile and desktop)
   if (isGenerating && days.length === 0) {
+    if (isMobile) {
+      return (
+        <motion.aside
+          initial={{ y: 100 }}
+          animate={{ y: 0 }}
+          transition={springTransition}
+          className="fixed inset-x-0 bottom-0 z-30"
+          style={{ height: `${SHEET_HEIGHTS.partial}vh` }}
+        >
+          <div className="h-full bg-slate-900/90 backdrop-blur-2xl border-t border-white/[0.08] rounded-t-3xl shadow-[0_-8px_32px_rgba(0,0,0,0.5)]">
+            <div className="flex justify-center py-3">
+              <div className="w-12 h-1.5 bg-white/20 rounded-full" />
+            </div>
+            <div className="px-4 pb-4">
+              <ItinerarySkeleton />
+            </div>
+          </div>
+        </motion.aside>
+      );
+    }
+
     return (
       <motion.aside
         initial={{ x: -50, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={springTransition}
-        className={`fixed left-4 top-24 bottom-6 z-20 w-full max-w-[400px] ${className}`}
+        className={`hidden md:block fixed left-4 top-24 bottom-6 z-20 w-full max-w-[400px] ${className}`}
       >
         <div className="h-full bg-slate-900/60 backdrop-blur-2xl border border-white/[0.08] rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col">
           <div className="h-32 bg-slate-800/50 animate-pulse rounded-t-3xl" />
@@ -95,12 +174,130 @@ function FloatingItineraryComponent({
     );
   }
 
+  // ============================================================================
+  // MOBILE BOTTOM SHEET
+  // ============================================================================
+  if (isMobile) {
+    return (
+      <motion.aside
+        initial={{ y: 100 }}
+        animate={{
+          y: 0,
+          height: `${currentHeight}vh`,
+        }}
+        transition={springTransition}
+        drag="y"
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={0.2}
+        onDragEnd={handleDragEnd}
+        className="fixed inset-x-0 bottom-0 z-30 touch-none"
+      >
+        <div className="h-full bg-slate-900/95 backdrop-blur-2xl border-t border-x border-white/[0.08] rounded-t-3xl shadow-[0_-8px_32px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col">
+          {/* Drag Handle */}
+          <div
+            className="flex flex-col items-center py-2 cursor-grab active:cursor-grabbing shrink-0"
+            onClick={cycleSheetState}
+          >
+            <div className="w-12 h-1.5 bg-white/30 rounded-full mb-1" />
+            <GripHorizontal className="w-5 h-5 text-white/20" />
+          </div>
+
+          {/* Collapsed Preview - show only when collapsed */}
+          <AnimatePresence>
+            {sheetState === 'collapsed' && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="px-4 pb-3 shrink-0"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-emerald-400" />
+                    <span className="text-white font-medium">{destination.split(',')[0]}</span>
+                    <span className="text-white/50 text-sm">• {days.length} days</span>
+                  </div>
+                  <ChevronUp className="w-5 h-5 text-white/50" />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Full Content - show when partial or expanded */}
+          {sheetState !== 'collapsed' && (
+            <>
+              {/* Compact Header */}
+              <div className="px-4 pb-2 shrink-0 border-b border-white/[0.06]">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-emerald-400" />
+                    <span className="text-white font-medium">{destination.split(',')[0]}</span>
+                    <span className="text-white/50 text-sm">• {days.length} days</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => { e.stopPropagation(); setAllExpanded(prev => !prev); }}
+                      className="h-7 px-2 text-xs text-white/50 hover:text-white/80"
+                    >
+                      {allExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => { e.stopPropagation(); setShowDistances(!showDistances); }}
+                      className={`h-7 px-2 text-xs ${showDistances ? 'text-emerald-400' : 'text-white/50'}`}
+                    >
+                      <Ruler className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scrollable Itinerary */}
+              <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-3">
+                <DayCardList
+                  tripId={trip.id}
+                  itinerary={itinerary || { days: [] }}
+                  currency={currency}
+                  tripStartDate={trip.dates || undefined}
+                  activeDayIndex={activeDayIndex}
+                  activeActivityKey={activeActivityKey}
+                  allExpanded={allExpanded}
+                  showDistances={showDistances}
+                  destination={destination}
+                  onDayClick={onDayClick}
+                  onActivityClick={onActivityClick}
+                  onActivityHover={onActivityHover}
+                />
+              </div>
+
+              {/* Streaming indicator */}
+              {isGenerating && days.length > 0 && (
+                <div className="px-4 py-2 border-t border-white/[0.06] shrink-0">
+                  <div className="flex items-center gap-2 text-xs text-emerald-400">
+                    <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                    <span>Generating day {days.length + 1}...</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </motion.aside>
+    );
+  }
+
+  // ============================================================================
+  // DESKTOP SIDE PANEL
+  // ============================================================================
   return (
     <motion.aside
       initial={{ x: -50, opacity: 0 }}
       animate={{ x: 0, opacity: 1 }}
       transition={springTransition}
-      className={`fixed left-4 top-24 bottom-6 z-20 w-full max-w-[400px] ${className}`}
+      className={`hidden md:block fixed left-4 top-24 bottom-6 z-20 w-full max-w-[400px] ${className}`}
     >
       <div className="h-full bg-slate-900/60 backdrop-blur-2xl border border-white/[0.08] rounded-3xl shadow-[0_8px_32px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col">
         {/* Compact Hero */}

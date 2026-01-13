@@ -61,8 +61,7 @@ type ShareableTrip = Pick<
   | "id"
   | "destination"
   | "origin"
-  | "startDate"
-  | "endDate"
+  | "dates"
   | "groupSize"
   | "adults"
   | "children"
@@ -83,12 +82,18 @@ type ShareableTrip = Pick<
 // HELPERS
 // ============================================================================
 
-function formatDateRange(start: string | null, end: string | null): string {
-  if (!start || !end) return "";
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
-  return `${startDate.toLocaleDateString("en-US", opts)} - ${endDate.toLocaleDateString("en-US", opts)}, ${endDate.getFullYear()}`;
+function formatDateRange(dates: string | null): string {
+  if (!dates) return "";
+  // Parse "2026-02-15 to 2026-02-22" or "February 2026, 5 days" format
+  const rangeMatch = dates.match(/(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})/);
+  if (rangeMatch) {
+    const startDate = new Date(rangeMatch[1]);
+    const endDate = new Date(rangeMatch[2]);
+    const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+    return `${startDate.toLocaleDateString("en-US", opts)} - ${endDate.toLocaleDateString("en-US", opts)}, ${endDate.getFullYear()}`;
+  }
+  // Return as-is for other formats
+  return dates;
 }
 
 function getTravelersLabel(trip: ShareableTrip): string {
@@ -117,12 +122,11 @@ function toTripResponse(trip: ShareableTrip): TripResponse {
     // Fill in required fields that aren't in ShareableTrip
     userId: null,
     voyageUid: null,
-    dates: trip.startDate && trip.endDate ? `${trip.startDate} to ${trip.endDate}` : null,
     userNotes: null,
     createdFrom: null,
     updatedAt: null,
     checklistProgress: null,
-  } as TripResponse;
+  } as unknown as TripResponse;
 }
 
 // ============================================================================
@@ -342,10 +346,8 @@ export default function TripShareView() {
     if (!trip) return null;
     const input = buildVerdictInput({
       feasibilityReport: trip.feasibilityReport as any,
-      itinerary: trip.itinerary as any,
-      budget: trip.budget,
-      travelStyle: trip.travelStyle,
-      startDate: trip.startDate,
+      budget: trip.budget ?? undefined,
+      dates: trip.dates ?? undefined,
     });
     return computeVerdict(input);
   }, [trip]);
@@ -368,7 +370,7 @@ export default function TripShareView() {
         if (act.coordinates?.lat && act.coordinates?.lng) {
           locs.push({
             id: `${dayIdx + 1}-${actIdx + 1}`,
-            name: act.name,
+            name: act.name || "Activity",
             lat: act.coordinates.lat,
             lng: act.coordinates.lng,
             type: act.type || "attraction",
@@ -450,12 +452,12 @@ export default function TripShareView() {
                 </span>
               </>
             )}
-            {trip.startDate && trip.endDate && (
+            {trip.dates && (
               <>
                 <span>·</span>
                 <span className="flex items-center gap-1.5">
                   <Calendar className="w-4 h-4" />
-                  {formatDateRange(trip.startDate, trip.endDate)}
+                  {formatDateRange(trip.dates)}
                 </span>
               </>
             )}
@@ -476,12 +478,12 @@ export default function TripShareView() {
                 tripId={tripId}
                 itinerary={itinerary}
                 currency={trip.currency || "USD"}
-                tripStartDate={trip.startDate || undefined}
+                tripStartDate={trip.dates || undefined}
                 activeDayIndex={activeDayIndex}
                 activeActivityKey={highlightedLocation}
                 allExpanded={allDaysExpanded}
                 showDistances={false}
-                destination={trip.destination || undefined}
+                destination={trip.destination}
                 onDayClick={handleDayClick}
                 onActivityClick={handleActivityClick}
                 onActivityHover={handleActivityHover}

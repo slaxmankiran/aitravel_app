@@ -261,6 +261,8 @@ router.post('/:id/use', async (req: Request, res: Response) => {
         safety: { status: 'safe', reason: 'Popular destination' },
       },
       summary: 'Trip created from community template. Review and customize as needed.',
+      schemaVersion: 2,
+      generatedAt: new Date().toISOString(),
     });
 
     console.log(`[Templates] Template ${templateId} used to create trip ${trip.id}`);

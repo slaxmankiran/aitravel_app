@@ -1,5 +1,6 @@
 import React from "react";
-import { Switch, Route, Redirect, useParams } from "wouter";
+import { Switch, Route, Redirect, useParams, useLocation } from "wouter";
+import { AnimatePresence } from "framer-motion";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -7,6 +8,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AuthModal } from "@/components/AuthModal";
 import { MobileNav } from "@/components/MobileNav";
+import {
+  PageTransition,
+  SlideUpTransition,
+  ZoomTransition,
+  FadeScaleTransition,
+} from "@/components/transitions";
 import Home from "@/pages/Home";
 import CreateTrip from "@/pages/CreateTrip";
 import ChatTrip from "@/pages/ChatTrip";
@@ -84,27 +91,132 @@ function DemoTrip() {
   );
 }
 
-function Router() {
+/**
+ * AnimatedRouter - Routes with page transitions
+ *
+ * Transition types by route:
+ * - Home, Explore, Saved, Inspiration: fadeScale (default)
+ * - Create, Chat: slideUp (elevated feel)
+ * - Trip Results: zoomIn (cinematic, immersive)
+ * - Exports: fade (utility pages)
+ */
+function AnimatedRouter() {
+  const [location] = useLocation();
+
+  // Extract base path for route key (strip query params)
+  const routeKey = location.split('?')[0];
+
   return (
-    <Switch>
-      <Route path="/" component={Home} />
-      <Route path="/demo" component={DemoTrip} />
-      <Route path="/create" component={CreateTrip} />
-      <Route path="/chat" component={ChatTripV2} />
-      <Route path="/share/:tripId" component={TripShareView} />
-      <Route path="/chat-legacy" component={ChatTrip} />
-      <Route path="/trips/:id/export/compare" component={TripCompareExport} />
-      <Route path="/trips/:id/export" component={TripExport} />
-      <Route path="/trips/:id/feasibility" component={FeasibilityResults} />
-      {/* @ts-expect-error - TripResultsV1 has optional props that are unused in this route */}
-      <Route path="/trips/:id/results-v1" component={TripResultsV1} />
-      <Route path="/trips/:id" component={TripRedirect} />
-      <Route path="/trips" component={MyTrips} />
-      <Route path="/explore" component={Explore} />
-      <Route path="/saved" component={Saved} />
-      <Route path="/inspiration" component={Inspiration} />
-      <Route component={NotFound} />
-    </Switch>
+    <AnimatePresence mode="wait">
+      <Switch location={location} key={routeKey}>
+        {/* Home - Apple-like fade + scale */}
+        <Route path="/">
+          <FadeScaleTransition>
+            <Home />
+          </FadeScaleTransition>
+        </Route>
+
+        {/* Demo - Cinematic zoom */}
+        <Route path="/demo">
+          <ZoomTransition>
+            <DemoTrip />
+          </ZoomTransition>
+        </Route>
+
+        {/* Create Flow - Slide up (elevated modal feel) */}
+        <Route path="/create">
+          <SlideUpTransition>
+            <CreateTrip />
+          </SlideUpTransition>
+        </Route>
+
+        {/* Chat - Slide up */}
+        <Route path="/chat">
+          <SlideUpTransition>
+            <ChatTripV2 />
+          </SlideUpTransition>
+        </Route>
+
+        {/* Share View - Cinematic zoom */}
+        <Route path="/share/:tripId">
+          <ZoomTransition>
+            <TripShareView />
+          </ZoomTransition>
+        </Route>
+
+        {/* Legacy Chat */}
+        <Route path="/chat-legacy">
+          <SlideUpTransition>
+            <ChatTrip />
+          </SlideUpTransition>
+        </Route>
+
+        {/* Export Pages - Simple fade (utility) */}
+        <Route path="/trips/:id/export/compare">
+          <PageTransition type="fade">
+            <TripCompareExport />
+          </PageTransition>
+        </Route>
+
+        <Route path="/trips/:id/export">
+          <PageTransition type="fade">
+            <TripExport />
+          </PageTransition>
+        </Route>
+
+        {/* Feasibility Results - Slide up */}
+        <Route path="/trips/:id/feasibility">
+          <SlideUpTransition>
+            <FeasibilityResults />
+          </SlideUpTransition>
+        </Route>
+
+        {/* Trip Results - Cinematic zoom (immersive) */}
+        <Route path="/trips/:id/results-v1">
+          <ZoomTransition>
+            <TripResultsV1 />
+          </ZoomTransition>
+        </Route>
+
+        {/* Trip Redirect */}
+        <Route path="/trips/:id">
+          <TripRedirect />
+        </Route>
+
+        {/* My Trips - Fade + scale */}
+        <Route path="/trips">
+          <FadeScaleTransition>
+            <MyTrips />
+          </FadeScaleTransition>
+        </Route>
+
+        {/* Discovery Pages - Fade + scale */}
+        <Route path="/explore">
+          <FadeScaleTransition>
+            <Explore />
+          </FadeScaleTransition>
+        </Route>
+
+        <Route path="/saved">
+          <FadeScaleTransition>
+            <Saved />
+          </FadeScaleTransition>
+        </Route>
+
+        <Route path="/inspiration">
+          <FadeScaleTransition>
+            <Inspiration />
+          </FadeScaleTransition>
+        </Route>
+
+        {/* 404 - Simple fade */}
+        <Route>
+          <PageTransition type="fade">
+            <NotFound />
+          </PageTransition>
+        </Route>
+      </Switch>
+    </AnimatePresence>
   );
 }
 
@@ -116,7 +228,7 @@ function App() {
           <Toaster />
           <AuthModal />
           <MobileNav />
-          <Router />
+          <AnimatedRouter />
         </TooltipProvider>
       </AuthProvider>
     </QueryClientProvider>

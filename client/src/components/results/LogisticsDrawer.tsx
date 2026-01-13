@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { DecisionStack } from './DecisionStack';
-import { ModifyChips } from './ModifyChips';
+import { AICoPilotConsole } from './AICoPilotConsole';
 import { RightDrawer } from './RightDrawer';
 import { ActionItems } from './ActionItems';
 import { VersionsPanel } from './VersionsPanel';
@@ -126,8 +126,8 @@ function LogisticsDrawerComponent({
     setChatPrefill('');
   };
 
-  // Chip-to-chat flow
-  const handleChipClick = (prompt: string) => {
+  // Co-Pilot submit handler
+  const handleCoPilotSubmit = (prompt: string) => {
     setChatPrefill(prompt);
     setActiveSection('chat');
     onChatOpen?.();
@@ -135,7 +135,7 @@ function LogisticsDrawerComponent({
 
   return (
     <>
-      {/* Floating Trigger Button */}
+      {/* Floating Trigger Button - positioned above bottom sheet on mobile */}
       <motion.button
         initial={{ y: 50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -143,13 +143,12 @@ function LogisticsDrawerComponent({
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
         onClick={() => setIsOpen(true)}
-        className={`fixed bottom-6 right-6 z-30 ${triggerColor} text-white rounded-full px-5 py-3 shadow-lg flex items-center gap-2 transition-colors ${className}`}
+        className={`fixed bottom-[48vh] md:bottom-6 right-4 md:right-6 z-40 ${triggerColor} text-white rounded-full px-4 md:px-5 py-2.5 md:py-3 shadow-lg flex items-center gap-2 transition-colors ${className}`}
       >
-        <DollarSign className="w-5 h-5" />
-        <span className="font-semibold">
+        <span className="font-semibold text-sm md:text-base">
           {currencySymbol}{totalCost.toLocaleString()}
         </span>
-        <ChevronUp className="w-4 h-4 ml-1" />
+        <ChevronUp className="w-4 h-4" />
       </motion.button>
 
       {/* Sheet Drawer */}
@@ -192,13 +191,12 @@ function LogisticsDrawerComponent({
                 hideQuickLinks
               />
 
-              {/* Quick Action Chips */}
+              {/* AI Co-Pilot Console */}
               {!isDemo && (
                 <div className="bg-white/[0.03] rounded-xl p-4">
-                  <h3 className="text-sm font-medium text-white mb-3">Quick Modify</h3>
-                  <ModifyChips
-                    onChipClick={handleChipClick}
-                    onCustomClick={() => openSection('chat')}
+                  <AICoPilotConsole
+                    onSubmit={handleCoPilotSubmit}
+                    disabled={false}
                   />
                 </div>
               )}

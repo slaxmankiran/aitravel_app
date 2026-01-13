@@ -12,8 +12,7 @@ import { storage } from "./storage";
  */
 function generateShareOGTags(trip: {
   destination: string;
-  startDate?: string | null;
-  endDate?: string | null;
+  dates?: string | null;
   groupSize?: number | null;
   travelStyle?: string | null;
 }): string {
@@ -59,8 +58,7 @@ export function serveStatic(app: Express) {
           let html = fs.readFileSync(indexPath, "utf-8");
           const ogTags = generateShareOGTags({
             destination: trip.destination,
-            startDate: trip.startDate,
-            endDate: trip.endDate,
+            dates: trip.dates,
             groupSize: trip.groupSize,
             travelStyle: trip.travelStyle,
           });

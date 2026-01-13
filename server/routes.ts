@@ -75,6 +75,19 @@ import {
 import * as TripService from "./services/tripService";
 import * as TransportService from "./services/transportService";
 import * as VisaService from "./services/visaService";
+import {
+  getCachedFeasibility,
+  cacheFeasibility,
+  getCacheStats,
+} from "./services/feasibilityCache";
+import {
+  shouldTriggerSpeculative,
+  startSpeculativeJob,
+  hasSpeculativeJob,
+  getSpeculativeJob,
+  getMaxSpeculativeDays,
+  getSpeculativeStats,
+} from "./services/speculativeExecution";
 
 // ============ FEASIBILITY ANALYTICS ============
 // Decision-quality metrics for validation
@@ -1735,6 +1748,42 @@ async function processFeasibilityOnly(tripId: number, input: any) {
   updateProgress(tripId, PROGRESS_STEPS.STARTING, "Checking if your trip is possible...");
 
   try {
+    // ============ CACHE CHECK - Instant return if cached ============
+    const cachedReport = getCachedFeasibility(input.passport, input.destination);
+    if (cachedReport) {
+      console.log(`[Stage1] CACHE HIT for ${input.passport} → ${input.destination} (${Date.now() - startTime}ms)`);
+
+      // Update the report with fresh timestamps
+      const now = new Date();
+      cachedReport.generatedAt = now.toISOString();
+      cachedReport.expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      await storage.updateTripFeasibility(tripId, cachedReport.overall, cachedReport);
+
+      // Track analytics
+      trackFeasibilityVerdict(cachedReport.overall, cachedReport.score, input.passport, input.destination);
+
+      // Fetch destination image (non-blocking)
+      fetchAndStoreDestinationImage(tripId, input.destination).catch(err => {
+        console.error(`[Stage1] Failed to fetch destination image:`, err);
+      });
+
+      // ============ SPECULATIVE EXECUTION ============
+      // If high score, start generating itinerary immediately in background
+      if (shouldTriggerSpeculative(cachedReport.overall, cachedReport.score)) {
+        console.log(`[Stage1] Triggering SPECULATIVE execution for trip ${tripId} (score: ${cachedReport.score})`);
+        startSpeculativeJob(tripId);
+        // Fire and forget - don't await
+        generateItineraryForTrip(tripId).catch(err => {
+          console.error(`[Speculative] Error for trip ${tripId}:`, err);
+        });
+      }
+
+      updateProgress(tripId, { step: 2, message: "Feasibility check complete (cached)" }, "Ready for your decision");
+      clearProgress(tripId);
+      return; // EARLY RETURN - cache hit!
+    }
+
     // Validate trip duration
     const dates = parseDateRange(input.dates);
     if (dates) {
@@ -1982,7 +2031,11 @@ Return JSON:
     }
 
     await storage.updateTripFeasibility(tripId, report.overall, report);
-    console.log(`[Stage1] Feasibility: ${report.overall} (score: ${report.score}) in ${Date.now() - startTime}ms`);
+    const elapsedMs = Date.now() - startTime;
+    console.log(`[Stage1] Feasibility: ${report.overall} (score: ${report.score}) in ${elapsedMs}ms`);
+
+    // ============ CACHE WRITE - Store for future instant hits ============
+    cacheFeasibility(input.passport, input.destination, report);
 
     // Track analytics
     trackFeasibilityVerdict(report.overall, report.score, input.passport, input.destination);
@@ -1991,6 +2044,18 @@ Return JSON:
     fetchAndStoreDestinationImage(tripId, input.destination).catch(err => {
       console.error(`[Stage1] Failed to fetch destination image:`, err);
     });
+
+    // ============ SPECULATIVE EXECUTION ============
+    // If high score, start generating itinerary immediately in background
+    // This is the "magic trick" - by the time user clicks "Plan Trip", first days are ready!
+    if (shouldTriggerSpeculative(report.overall, report.score)) {
+      console.log(`[Stage1] Triggering SPECULATIVE execution for trip ${tripId} (score: ${report.score})`);
+      startSpeculativeJob(tripId);
+      // Fire and forget - don't await, let it run in background
+      generateItineraryForTrip(tripId).catch(err => {
+        console.error(`[Speculative] Error for trip ${tripId}:`, err);
+      });
+    }
 
     // Stage 1 complete - feasibility is ready
     updateProgress(tripId, { step: 2, message: "Feasibility check complete" }, "Ready for your decision");
@@ -2862,9 +2927,9 @@ Return JSON: {"attractions": [{"name": "Place name", "lat": 0.0, "lng": 0.0, "ty
           };
 
           // ============================================================================
-          // CHUNKED PARALLEL GENERATION - For long trips (8+ days)
-          // Instead of one 12000-token call taking 60+ seconds,
-          // we make 3-4 parallel calls of ~2000 tokens each, taking ~15-20 seconds total
+          // STREAMING CHUNKED GENERATION - For long trips (8+ days)
+          // Fire all chunk requests in parallel, persist days as each completes.
+          // No more waiting for all chunks - days stream to DB immediately!
           // ============================================================================
           const generateChunkedItinerary = async (): Promise<any> => {
             const CHUNK_SIZE = 4; // Days per batch
@@ -2873,7 +2938,13 @@ Return JSON: {"attractions": [{"name": "Place name", "lat": 0.0, "lng": 0.0, "ty
             console.log(`[Chunked] Generating ${numDays} days in ${numChunks} parallel batches of ${CHUNK_SIZE} days`);
             updateProgress(tripId, { step: 4, message: "Creating itinerary" }, `Generating ${numChunks} sections in parallel...`);
 
-            // Create chunk promises
+            // Track completed chunks and all days
+            const completedChunks = new Map<number, any[]>(); // chunkIndex -> days
+            let chunksCompleted = 0;
+            let firstDayTime: number | null = null;
+            const startParallel = Date.now();
+
+            // Create chunk promises with individual completion handling
             const chunkPromises = Array.from({ length: numChunks }, async (_, chunkIndex) => {
               const startDay = chunkIndex * CHUNK_SIZE + 1;
               const endDay = Math.min((chunkIndex + 1) * CHUNK_SIZE, numDays);
@@ -2940,33 +3011,73 @@ ${budgetTier === 'budget' ? 'Focus on FREE attractions, street food, public tran
                 });
 
                 const chunkMs = Date.now() - chunkStart;
-                console.log(`[Chunked] Batch ${chunkIndex + 1}/${numChunks} (days ${startDay}-${endDay}) completed in ${chunkMs}ms`);
-
                 const content = response.choices[0].message.content || "{}";
-                return safeJsonParse(content, { days: [] });
+                const parsed = safeJsonParse(content, { days: [] });
+
+                // === STREAMING COMPLETION: Handle this chunk immediately ===
+                chunksCompleted++;
+                const chunkDaysResult = parsed.days || [];
+                completedChunks.set(chunkIndex, chunkDaysResult);
+
+                // Track time to first day (when chunk 0 completes)
+                if (chunkIndex === 0 && !firstDayTime) {
+                  firstDayTime = Date.now() - startParallel;
+                  console.log(`[Chunked] 🚀 First days available in ${firstDayTime}ms (Days 1-${Math.min(CHUNK_SIZE, numDays)})`);
+                }
+
+                console.log(`[Chunked] Batch ${chunkIndex + 1}/${numChunks} (days ${startDay}-${endDay}) completed in ${chunkMs}ms [${chunksCompleted}/${numChunks} done]`);
+
+                // Persist partial itinerary immediately (merge completed chunks in order)
+                const partialDays: any[] = [];
+                for (let i = 0; i < numChunks; i++) {
+                  if (completedChunks.has(i)) {
+                    partialDays.push(...completedChunks.get(i)!);
+                  } else {
+                    break; // Stop at first gap - can only persist contiguous days
+                  }
+                }
+
+                if (partialDays.length > 0) {
+                  // Sort to ensure order (defensive)
+                  partialDays.sort((a, b) => a.day - b.day);
+
+                  // Persist partial itinerary to DB
+                  try {
+                    await storage.updateTripItinerary(tripId, { days: partialDays });
+                    console.log(`[Chunked] 💾 Persisted ${partialDays.length}/${numDays} days to DB`);
+
+                    // Update progress with days count
+                    updateProgress(tripId, { step: 4, message: "Creating itinerary" },
+                      `${partialDays.length}/${numDays} days ready (${chunksCompleted}/${numChunks} batches)`);
+                  } catch (persistErr) {
+                    console.error(`[Chunked] Failed to persist partial itinerary:`, persistErr);
+                  }
+                }
+
+                return parsed;
               } catch (error) {
                 console.error(`[Chunked] Batch ${chunkIndex + 1} failed:`, error);
+                chunksCompleted++;
+                completedChunks.set(chunkIndex, []); // Mark as completed but empty
                 return { days: [] };
               }
             });
 
-            // Run ALL chunks in parallel
-            const startParallel = Date.now();
-            const chunkResults = await Promise.all(chunkPromises);
+            // Wait for all chunks (they're already streaming their results above)
+            await Promise.all(chunkPromises);
             const parallelMs = Date.now() - startParallel;
 
-            // Merge all days
+            // Final merge of all days
             const allDays: any[] = [];
-            for (const chunk of chunkResults) {
-              if (chunk.days?.length > 0) {
-                allDays.push(...chunk.days);
-              }
+            for (let i = 0; i < numChunks; i++) {
+              const chunkDays = completedChunks.get(i) || [];
+              allDays.push(...chunkDays);
             }
 
             // Sort by day number to ensure order
             allDays.sort((a, b) => a.day - b.day);
 
-            console.log(`[Chunked] All ${numChunks} batches completed in ${parallelMs}ms (${allDays.length} days total)`);
+            console.log(`[Chunked] ✅ All ${numChunks} batches completed in ${parallelMs}ms (${allDays.length} days, first batch in ${firstDayTime || parallelMs}ms)`);
 
             return { days: allDays };
           };
@@ -4496,6 +4607,29 @@ export async function registerRoutes(
     } catch (error) {
       console.error('[API] Rate limit metrics error:', error);
       res.status(500).json({ error: 'Failed to get rate limit metrics' });
+    }
+  });
+
+  // ============ PERFORMANCE CACHE STATS ENDPOINT ============
+  // View feasibility cache and speculative execution stats (admin-only)
+  app.get('/api/analytics/performance', requireAdminToken, async (_req, res) => {
+    try {
+      const cacheStats = getCacheStats();
+      const speculativeStats = getSpeculativeStats();
+
+      res.json({
+        timestamp: new Date().toISOString(),
+        feasibilityCache: cacheStats,
+        speculativeExecution: speculativeStats,
+        targets: {
+          feasibilityResponseTime: "< 2s",
+          itineraryFirstDay: "< 5s",
+          cacheHitRateGoal: "> 50%",
+        }
+      });
+    } catch (error) {
+      console.error('[API] Performance metrics error:', error);
+      res.status(500).json({ error: 'Failed to get performance metrics' });
     }
   });
 

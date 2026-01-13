@@ -165,6 +165,9 @@ function DayCardComponent({
             // Show transport for all except the very first activity of the day
             const isVeryFirstActivity = idx === 0 && !lastActivityFromPreviousSlot;
 
+            // Check if this is the last activity in the slot (for timeline rendering)
+            const isLastInSlot = idx === activities.length - 1;
+
             return (
               <ActivityRow
                 key={activityKey}
@@ -178,6 +181,7 @@ function DayCardComponent({
                 prevActivity={prevActivity}
                 showDistance={showDistances}
                 destination={destination}
+                isLastInSlot={isLastInSlot}
                 onClick={() => onActivityClick(activityKey)}
                 onMouseEnter={() => onActivityHover(activityKey)}
                 onMouseLeave={() => onActivityHover(null)}

@@ -2,7 +2,7 @@
  * ActivityRow.tsx
  *
  * Single activity row within a DayCard.
- * Shows time, name, location, cost, and transport icon.
+ * Shows timeline dot + connecting line (Mindtrip style).
  *
  * Performance: Memoized component for scroll/hover performance.
  */
@@ -41,7 +41,7 @@ function getTransportIcon(iconName: string) {
     case "train": return Train;
     case "bus": return Bus;
     case "car": return Car;
-    case "plane": return Navigation; // Using Navigation as plane icon
+    case "plane": return Navigation;
     default: return Car;
   }
 }
@@ -95,11 +95,11 @@ interface ActivityRowProps {
   isActive: boolean;
   isHovered: boolean;
   showTransport: boolean;
-  distanceFromPrevious?: number | null; // Distance in km from previous activity
-  prevActivity?: Activity | null; // Previous activity for context
+  distanceFromPrevious?: number | null;
+  prevActivity?: Activity | null;
   showDistance?: boolean;
-  /** Destination for activity image context */
   destination?: string;
+  isLastInSlot?: boolean; // Whether this is the last activity in time slot
   onClick: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
@@ -116,6 +116,7 @@ function ActivityRowComponent({
   prevActivity,
   showDistance = false,
   destination,
+  isLastInSlot = false,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -139,37 +140,50 @@ function ActivityRowComponent({
   const TransportIcon = getTransportIcon(smartTransport.icon);
   const transportColor = getTransportColor(smartTransport.icon);
 
-  // Show transport/distance when:
-  // 1. showTransport is true (not first activity in slot)
-  // 2. showDistance toggle is enabled
-  // 3. We have distance or explicit transport mode
+  // Show transport/distance when enabled
   const shouldShowTransport = showTransport && showDistance && (distanceFromPrevious !== null || activity.transportMode);
 
   return (
-    <div className="relative">
-      {/* Transport indicator + Distance - Smart mode */}
-      {shouldShowTransport && (
-        <div className="flex items-center gap-2 ml-[3.75rem] mb-1">
-          <div className="w-px h-3 bg-white/10" />
-          <TransportIcon className={cn("w-3.5 h-3.5", transportColor)} />
-          <span className="text-[11px] text-white/40 capitalize">
-            {smartTransport.mode}
-          </span>
-          {/* Distance and time badge */}
-          {distanceFromPrevious !== null && distanceFromPrevious !== undefined && (
-            <span className="text-[10px] bg-white/10 text-white/60 px-1.5 py-0.5 rounded-full">
-              {formatDistance(distanceFromPrevious)}
-              {smartTransport.time && ` • ${smartTransport.time}`}
-            </span>
+    <div className="relative flex">
+      {/* Timeline - Left side with dot and connecting line */}
+      <div className="relative flex flex-col items-center w-10 flex-shrink-0">
+        {/* Timeline dot */}
+        <div
+          className={cn(
+            "w-3 h-3 rounded-full border-2 transition-all z-10",
+            isActive
+              ? "bg-primary border-primary shadow-[0_0_8px_rgba(99,102,241,0.6)]"
+              : isHovered
+                ? "bg-white/30 border-white/50"
+                : "bg-white/10 border-white/20"
           )}
-        </div>
-      )}
+        />
 
-      {/* Activity row */}
+        {/* Connecting line - extends below dot to next activity */}
+        {!isLastInSlot && (
+          <div className="absolute top-3 w-[2px] h-[calc(100%+0.25rem)] bg-gradient-to-b from-white/20 to-white/10" />
+        )}
+
+        {/* Transport icon overlays the connecting line */}
+        {shouldShowTransport && (
+          <div className="absolute top-6 flex flex-col items-center gap-1 z-20">
+            <div className="bg-slate-900/90 backdrop-blur-sm rounded-full p-1.5 border border-white/10">
+              <TransportIcon className={cn("w-3 h-3", transportColor)} />
+            </div>
+            {distanceFromPrevious !== null && distanceFromPrevious !== undefined && (
+              <span className="text-[9px] bg-slate-900/90 backdrop-blur-sm text-white/50 px-1.5 py-0.5 rounded-full border border-white/10 whitespace-nowrap">
+                {formatDistance(distanceFromPrevious)}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Activity content */}
       <div
         data-activity-key={activityKey}
         className={cn(
-          "group relative flex items-start gap-3 px-3 py-2.5 rounded-xl cursor-pointer",
+          "group relative flex-1 flex items-start gap-3 px-3 py-2.5 ml-2 rounded-xl cursor-pointer",
           "transition-all duration-150",
           "bg-white/[0.02] hover:bg-white/[0.06]",
           "border border-transparent",
@@ -181,15 +195,6 @@ function ActivityRowComponent({
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
       >
-        {/* Active left accent */}
-        <div
-          className={cn(
-            "absolute left-0 top-2 bottom-2 w-[2px] rounded-full transition-opacity",
-            isActive ? "bg-primary opacity-100" : "opacity-0"
-          )}
-          aria-hidden="true"
-        />
-
         {/* Time */}
         <div className="w-14 flex-shrink-0 pt-0.5">
           <span className="text-sm font-medium text-white/60">
@@ -242,7 +247,7 @@ function ActivityRowComponent({
               )}
             </div>
 
-            {/* Cost badge - no icon, just text */}
+            {/* Cost badge */}
             {cost !== null && (
               <div
                 className={cn(

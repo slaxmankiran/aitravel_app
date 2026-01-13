@@ -145,52 +145,52 @@ function FloatingPillHeaderComponent({
       initial={{ y: -50, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={springTransition}
-      className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 ${className}`}
+      className={`fixed top-4 left-2 right-2 md:left-1/2 md:right-auto md:-translate-x-1/2 z-50 ${className}`}
     >
       {/* Main pill container */}
-      <div className="bg-slate-900/70 backdrop-blur-2xl rounded-full border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)] px-3 py-2">
-        <div className="flex items-center gap-3">
+      <div className="bg-slate-900/70 backdrop-blur-2xl rounded-full border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)] px-2 sm:px-3 py-2">
+        <div className="flex items-center gap-1.5 sm:gap-3">
           {/* Logo */}
           <Link href="/">
             <motion.div
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center text-white font-bold text-sm cursor-pointer shadow-lg"
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center text-white font-bold text-xs sm:text-sm cursor-pointer shadow-lg shrink-0"
             >
               V
             </motion.div>
           </Link>
 
           {/* Destination & Meta */}
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-white font-medium truncate max-w-[120px] sm:max-w-[180px]">
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
+            <span className="text-white font-medium truncate text-sm sm:text-base max-w-[100px] xs:max-w-[140px] sm:max-w-[180px]">
               {destination}
             </span>
-            <span className="hidden sm:inline text-white/30">•</span>
-            <span className="hidden sm:inline text-white/50 text-sm whitespace-nowrap">
+            <span className="hidden xs:inline text-white/30">•</span>
+            <span className="hidden xs:inline text-white/50 text-xs sm:text-sm whitespace-nowrap truncate max-w-[80px] sm:max-w-none">
               {dateRange}
             </span>
           </div>
 
-          {/* Divider */}
-          <div className="w-px h-6 bg-white/10" />
+          {/* Divider - hide on smallest screens */}
+          <div className="hidden xs:block w-px h-5 sm:h-6 bg-white/10" />
 
           {/* Certainty Score Pill */}
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => setShowQuickInfo(!showQuickInfo)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${certaintyColors.bg} border ${certaintyColors.border} cursor-pointer transition-colors`}
+            className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-full ${certaintyColors.bg} border ${certaintyColors.border} cursor-pointer transition-colors shrink-0`}
           >
-            <span className={`text-sm font-semibold ${certaintyColors.text}`}>
+            <span className={`text-xs sm:text-sm font-semibold ${certaintyColors.text}`}>
               {certaintyScore}%
             </span>
-            <ChevronDown className={`w-3.5 h-3.5 ${certaintyColors.text} transition-transform ${showQuickInfo ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`w-3 h-3 sm:w-3.5 sm:h-3.5 ${certaintyColors.text} transition-transform ${showQuickInfo ? 'rotate-180' : ''}`} />
           </motion.button>
 
-          {/* Visa Badge (compact) */}
+          {/* Visa Badge (compact) - hide on mobile */}
           {visaDetails && (
-            <div className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-full bg-white/5 border border-white/10">
+            <div className="hidden lg:flex items-center gap-1.5 px-2 py-1 rounded-full bg-white/5 border border-white/10">
               <Plane className={`w-3.5 h-3.5 ${getVisaColor(visaDetails.type)}`} />
               <span className={`text-xs font-medium ${getVisaColor(visaDetails.type)}`}>
                 {getVisaLabel(visaDetails.type)}
@@ -198,20 +198,20 @@ function FloatingPillHeaderComponent({
             </div>
           )}
 
-          {/* Divider */}
+          {/* Divider - hide on mobile */}
           <div className="hidden sm:block w-px h-6 bg-white/10" />
 
-          {/* Actions */}
-          <div className="flex items-center gap-0.5">
+          {/* Actions - compact on mobile */}
+          <div className="flex items-center gap-0 sm:gap-0.5 shrink-0">
             {/* Edit - prominent if not demo */}
             {!isDemo && (
               <Link href={editUrl}>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 px-2 text-white/70 hover:text-white hover:bg-white/10 rounded-full"
+                  className="h-7 sm:h-8 px-1.5 sm:px-2 text-white/70 hover:text-white hover:bg-white/10 rounded-full"
                 >
-                  <Pencil className="w-3.5 h-3.5" />
+                  <Pencil className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                   <span className="hidden lg:inline ml-1.5 text-xs">Edit</span>
                 </Button>
               </Link>
@@ -221,18 +221,19 @@ function FloatingPillHeaderComponent({
               variant="ghost"
               size="sm"
               onClick={handleShare}
-              className="h-8 px-2 text-white/50 hover:text-white/80 hover:bg-white/5 rounded-full"
+              className="h-7 sm:h-8 px-1.5 sm:px-2 text-white/50 hover:text-white/80 hover:bg-white/5 rounded-full"
             >
-              <Share2 className="w-3.5 h-3.5" />
+              <Share2 className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
             </Button>
 
+            {/* Hide export on very small screens */}
             <Button
               variant="ghost"
               size="sm"
               onClick={handleExport}
-              className="h-8 px-2 text-white/50 hover:text-white/80 hover:bg-white/5 rounded-full"
+              className="hidden xs:flex h-7 sm:h-8 px-1.5 sm:px-2 text-white/50 hover:text-white/80 hover:bg-white/5 rounded-full"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
             </Button>
           </div>
         </div>

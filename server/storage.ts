@@ -1,5 +1,5 @@
 import { users, trips, type User, type InsertUser, type Trip, type InsertTrip, type FeasibilityReport } from "@shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { eq, desc, isNull, and } from "drizzle-orm";
 
 export interface IStorage {
@@ -28,7 +28,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await db.select().from(users).where(eq(users.username, username));
+    // Note: Users table doesn't have username column, using email as fallback
+    const [user] = await db.select().from(users).where(eq(users.email, username));
     return user;
   }
 
@@ -96,19 +97,33 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {
-    const [updatedTrip] = await db
-      .update(trips)
-      .set({
-        feasibilityStatus: status,
-        feasibilityReport: report,
-        feasibilityError: error || null,
-      })
-      .where(eq(trips.id, id))
-      .returning();
-    return updatedTrip;
+    console.log(`[Storage] updateTripFeasibility: id=${id}, status=${status}`);
+
+    try {
+      const [result] = await db
+        .update(trips)
+        .set({
+          feasibilityStatus: status,
+          feasibilityReport: report,
+          feasibilityError: error || null,
+        })
+        .where(eq(trips.id, id))
+        .returning();
+
+      if (!result) {
+        console.error(`[Storage] ERROR: Trip ${id} not found after update`);
+        throw new Error(`Trip ${id} not found after update`);
+      }
+      console.log(`[Storage] Update successful: ${result.feasibilityStatus}`);
+      return result;
+    } catch (err) {
+      console.error(`[Storage] updateTripFeasibility FAILED:`, err);
+      throw err;
+    }
   }
 
   async setTripFeasibilityPending(id: number): Promise<Trip> {
+    console.log(`[Storage] setTripFeasibilityPending: id=${id}`);
     const [updatedTrip] = await db
       .update(trips)
       .set({
@@ -143,7 +158,8 @@ export class InMemoryStorage implements IStorage {
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return this.users.find(u => u.username === username);
+    // Note: Users table doesn't have username column, using email as fallback
+    return this.users.find(u => u.email === username);
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {

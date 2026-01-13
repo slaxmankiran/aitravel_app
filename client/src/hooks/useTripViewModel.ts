@@ -212,6 +212,11 @@ function transformCosts(itinerary: any, trip: TripResponse): CostViewModel | nul
     budgetStatus = 'near';
   }
 
+  // Determine if user set a realistic budget (at least $100/person)
+  const minBudgetPerPerson = 100;
+  const travelers = trip.groupSize || 1;
+  const hasBudgetSet = userBudget > 0 && (userBudget / travelers) >= minBudgetPerPerson;
+
   return {
     flights: breakdown.flights || 0,
     accommodation: breakdown.accommodation || 0,
@@ -222,13 +227,14 @@ function transformCosts(itinerary: any, trip: TripResponse): CostViewModel | nul
     insurance: breakdown.insurance || 0,
     miscellaneous: breakdown.miscellaneous || breakdown.misc || 0,
     grandTotal,
-    perPerson: breakdown.perPerson || (grandTotal / (trip.groupSize || 1)),
+    perPerson: breakdown.perPerson || (grandTotal / travelers),
     currency: trip.currency || 'USD',
     // Budget delta fields
     userBudget,
     overByAmount,
     overByPercent,
     budgetStatus,
+    hasBudgetSet,
   };
 }
 

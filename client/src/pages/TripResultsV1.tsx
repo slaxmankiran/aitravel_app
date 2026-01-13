@@ -16,12 +16,16 @@
 import { useParams, useSearch } from "wouter";
 import { useTrip } from "@/hooks/use-trips";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from "react";
 import { motion } from "framer-motion";
 import { Loader2, Calendar, Users, Sparkles, Flag } from "lucide-react";
 
 // Layout components - Cinematic Layout
-import { MapBackground } from "@/components/results/MapBackground";
+// Lazy load MapBackground for faster initial page load (heavy 3D component)
+const MapBackground = lazy(() =>
+  import("@/components/results/MapBackground").then(mod => ({ default: mod.MapBackground }))
+);
+import { MapPlaceholder } from "@/components/results/MapPlaceholder";
 import { FloatingPillHeader } from "@/components/results/FloatingPillHeader";
 import { FloatingItinerary } from "@/components/results/FloatingItinerary";
 import { LogisticsDrawer } from "@/components/results/LogisticsDrawer";
@@ -671,6 +675,15 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
     const calculated = baseMs + (tripDurationDays * perDayMs);
     return Math.min(Math.max(calculated, 90000), 300000);
   }, [tripDurationDays]);
+
+  // Set dark background on body for this page (map shows through)
+  useEffect(() => {
+    const originalBg = document.body.style.backgroundColor;
+    document.body.style.backgroundColor = '#0f172a'; // slate-900
+    return () => {
+      document.body.style.backgroundColor = originalBg;
+    };
+  }, []);
 
   // Safe merge from server into working state
   useEffect(() => {
@@ -1579,16 +1592,18 @@ export default function TripResultsV1({ tripIdOverride, tripDataOverride, isDemo
   // CINEMATIC LAYOUT
   // ============================================================================
   return (
-    <div className="min-h-screen bg-slate-900 overflow-hidden">
+    <div className="min-h-screen relative overflow-hidden bg-transparent">
         {/* Demo banner */}
         {isDemo && <DemoBanner />}
 
-        {/* Map as full-screen background */}
-        <MapBackground
-          activities={activityCoordinates}
-          hoveredActivityKey={highlightedLocation}
-          onMarkerClick={handleMapMarkerClick}
-        />
+        {/* Map as full-screen background - lazy loaded for faster initial paint */}
+        <Suspense fallback={<MapPlaceholder />}>
+          <MapBackground
+            activities={activityCoordinates}
+            hoveredActivityKey={highlightedLocation}
+            onMarkerClick={handleMapMarkerClick}
+          />
+        </Suspense>
 
         {/* Floating Pill Header */}
         <FloatingPillHeader

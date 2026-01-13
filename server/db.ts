@@ -19,6 +19,7 @@ let _db: any = undefined;
 
 if (process.env.DATABASE_URL) {
   // Production / explicit DB URL (Postgres)
+  console.log(`[DB] Using PostgreSQL: ${process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@')}`);
   _pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
@@ -28,6 +29,7 @@ if (process.env.DATABASE_URL) {
   // Development fallback: use a local SQLite file `dev.db` by default.
   // You can override the file path with SQLITE_DB_PATH env var.
   const sqlitePath = process.env.SQLITE_DB_PATH || "./dev.db";
+  console.log(`[DB] Using SQLite: ${sqlitePath}`);
   const sqlite = new Database(sqlitePath);
   _db = sqliteDrizzle(sqlite, { schema });
 }

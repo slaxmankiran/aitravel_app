@@ -458,7 +458,7 @@ export function deduplicateItinerary(itinerary: any): { itinerary: any; removedC
 
       // Check for similar names (one contains the other)
       let isDuplicate = false;
-      for (const [existingName] of seen) {
+      for (const [existingName] of Array.from(seen.entries())) {
         if (existingName.includes(name) || name.includes(existingName)) {
           // Additional check: if times are similar, it's likely a duplicate
           const existingIdx = seen.get(existingName)!;
