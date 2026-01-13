@@ -104,7 +104,13 @@ const STATIC_DESTINATION_IMAGES: Record<string, string> = {
   'bangalore': 'https://images.unsplash.com/photo-1596176530529-78163a4f7af2?w=1600&h=900&fit=crop',
   'mumbai': 'https://images.unsplash.com/photo-1529253355930-ddbe423a2ac7?w=1600&h=900&fit=crop',
   'delhi': 'https://images.unsplash.com/photo-1587474260584-136574528ed5?w=1600&h=900&fit=crop',
+  'new delhi': 'https://images.unsplash.com/photo-1587474260584-136574528ed5?w=1600&h=900&fit=crop',
   'jaipur': 'https://images.unsplash.com/photo-1477587458883-47145ed94245?w=1600&h=900&fit=crop',
+  'hyderabad': 'https://images.unsplash.com/photo-1741545979534-02f59c742730?w=1600&h=900&fit=crop', // Charminar
+  'chennai': 'https://images.unsplash.com/photo-1582510003544-4d00b7f74220?w=1600&h=900&fit=crop', // Marina Beach
+  'kolkata': 'https://images.unsplash.com/photo-1558431382-27e303142255?w=1600&h=900&fit=crop', // Victoria Memorial
+  'ahmedabad': 'https://images.unsplash.com/photo-1595658658481-d53d3f999875?w=1600&h=900&fit=crop',
+  'pune': 'https://images.unsplash.com/photo-1567157577867-05ccb1388e66?w=1600&h=900&fit=crop',
   'india': 'https://images.unsplash.com/photo-1524492412937-b28074a5d7da?w=1600&h=900&fit=crop', // Taj Mahal for generic India
   'goa': 'https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?w=1600&h=900&fit=crop',
   // Africa & Middle East
@@ -246,39 +252,34 @@ function saveToCache(key: string, url: string): void {
 // ============================================================================
 
 /**
- * Build Unsplash Source URL for a destination.
- * Uses larger dimensions for hero images.
- */
-function buildUnsplashUrl(destination: string): string {
-  // Extract city/country name, remove common suffixes
-  const cleanDest = destination
-    .replace(/,\s*(australia|usa|uk|france|japan|italy|spain|germany|thailand|indonesia|india)/i, '')
-    .trim();
-
-  const query = encodeURIComponent(`${cleanDest} travel landmark`);
-  return `https://source.unsplash.com/1600x900/?${query}`;
-}
-
-/**
  * Find a static image URL for a destination.
- * Checks city name, then destination type fallback.
+ * Only returns static image if we have a SPECIFIC match for the city.
+ * Falls through to API for unknown cities (even if country is known).
  */
 function findStaticImage(destination: string): string | null {
   const lower = destination.toLowerCase();
 
-  // Try exact city match first
-  for (const [key, url] of Object.entries(STATIC_DESTINATION_IMAGES)) {
-    if (lower.includes(key)) {
+  // Extract city name (before comma) for specific matching
+  const parts = destination.split(',');
+  const cityName = parts[0].trim().toLowerCase();
+
+  // First, try to find an exact match for the city name
+  if (STATIC_DESTINATION_IMAGES[cityName]) {
+    return STATIC_DESTINATION_IMAGES[cityName];
+  }
+
+  // Try variations (with spaces for multi-word cities like "San Francisco")
+  const entries = Object.entries(STATIC_DESTINATION_IMAGES);
+  for (const [key, url] of entries) {
+    // Only match if the key is found in the city portion (before comma)
+    // This prevents "India" matching for "Hyderabad, India"
+    if (cityName.includes(key) || key.includes(cityName)) {
       return url;
     }
   }
 
-  // Fallback to destination type
-  const destType = getDestinationType(destination);
-  if (destType !== 'default' && STATIC_DESTINATION_IMAGES[destType]) {
-    return STATIC_DESTINATION_IMAGES[destType];
-  }
-
+  // Don't fall back to country matches - let API fetch specific city images
+  // This ensures "Hyderabad, India" gets a Hyderabad image, not Taj Mahal
   return null;
 }
 
@@ -321,7 +322,7 @@ export function getDestinationImageUrl(destination: string): {
 
 /**
  * Fetch and cache destination image asynchronously.
- * Uses static images first, falls back to Unsplash API.
+ * Uses static images first, falls back to server API with Unsplash.
  *
  * @returns Promise resolving to the image URL or null
  */
@@ -332,30 +333,28 @@ export async function fetchDestinationImage(destination: string): Promise<string
   const cached = getFromCache(cacheKey);
   if (cached) return cached;
 
-  // Try static images first (most reliable)
+  // Try static images first (most reliable, no API call needed)
   const staticUrl = findStaticImage(destination);
   if (staticUrl) {
     saveToCache(cacheKey, staticUrl);
     return staticUrl;
   }
 
-  // Fallback to Unsplash Source API (may be deprecated)
+  // Fetch from server API (uses Unsplash API with AI-suggested search terms)
   try {
-    const unsplashUrl = buildUnsplashUrl(destination);
+    const response = await fetch(
+      `/api/destination-image?destination=${encodeURIComponent(destination)}`
+    );
 
-    // Use HEAD request to get the final redirected URL
-    const response = await fetch(unsplashUrl, {
-      method: 'HEAD',
-      redirect: 'follow',
-    });
-
-    if (response.ok && response.url && !response.url.includes('source.unsplash.com')) {
-      // Got a real image URL
-      saveToCache(cacheKey, response.url);
-      return response.url;
+    if (response.ok) {
+      const data = await response.json();
+      if (data.imageUrl) {
+        saveToCache(cacheKey, data.imageUrl);
+        return data.imageUrl;
+      }
     }
   } catch (error) {
-    console.debug('[DestinationImages] Fetch failed:', destination, error);
+    console.debug('[DestinationImages] API fetch failed:', destination, error);
   }
 
   return null;
@@ -367,4 +366,38 @@ export async function fetchDestinationImage(destination: string): Promise<string
 export function getDestinationFallbackGradient(destination: string): string {
   const destType = getDestinationType(destination);
   return FALLBACK_GRADIENTS[destType];
+}
+
+/**
+ * Clear cached image for a specific destination.
+ * Useful when images need to be refreshed after static list updates.
+ */
+export function clearDestinationCache(destination: string): void {
+  const cacheKey = getCacheKey(destination);
+  memoryCache.delete(cacheKey);
+  try {
+    localStorage.removeItem(cacheKey);
+  } catch {
+    // localStorage unavailable
+  }
+}
+
+/**
+ * Clear all destination image caches.
+ * Call this after updating the static image list.
+ */
+export function clearAllDestinationCaches(): void {
+  memoryCache.clear();
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(CACHE_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+  } catch {
+    // localStorage unavailable
+  }
 }
