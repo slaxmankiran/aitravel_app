@@ -54,22 +54,38 @@ const TYPE_LABELS: Record<ActivityType, string> = {
   lodging: "Lodging",
 };
 
-const MAP_STYLES: Record<MapStyle, { url: string; label: string; icon: typeof Map }> = {
+// Fallback tile URLs (free, no API key needed)
+const FALLBACK_TILES: Record<MapStyle, { url: string; attribution: string }> = {
   street: {
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    label: "Street",
-    icon: Map,
+    attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a> contributors',
   },
   satellite: {
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    label: "Satellite",
-    icon: Satellite,
+    attribution: '&copy; <a href="https://www.esri.com">Esri</a>',
   },
   terrain: {
     url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
-    label: "Terrain",
-    icon: Map,
+    attribution: '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
   },
+};
+
+// Mapbox tile URLs (requires token)
+function getMapboxTileUrl(style: MapStyle, token: string): string {
+  const mapboxStyles: Record<MapStyle, string> = {
+    street: "mapbox/streets-v12",
+    satellite: "mapbox/satellite-streets-v12",
+    terrain: "mapbox/outdoors-v12",
+  };
+  return `https://api.mapbox.com/styles/v1/${mapboxStyles[style]}/tiles/256/{z}/{x}/{y}@2x?access_token=${token}`;
+}
+
+const MAPBOX_ATTRIBUTION = '&copy; <a href="https://www.mapbox.com/">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>';
+
+const MAP_STYLE_META: Record<MapStyle, { label: string; icon: typeof Map }> = {
+  street: { label: "Street", icon: Map },
+  satellite: { label: "Satellite", icon: Satellite },
+  terrain: { label: "Terrain", icon: Map },
 };
 
 // Calculate distance between two coordinates in km
@@ -135,6 +151,36 @@ function ItineraryMapComponent({ trip, highlightedLocation, activeDayIndex, onLo
   const [mapStyle, setMapStyle] = useState<MapStyle>("street");
   const [showDistances, setShowDistances] = useState(true);
   const [currentLocationIndex, setCurrentLocationIndex] = useState(0);
+  const [mapboxToken, setMapboxToken] = useState<string | null>(null);
+  const [directionsRoute, setDirectionsRoute] = useState<{
+    coordinates: [number, number][]; // [lng, lat] pairs from Mapbox
+  } | null>(null);
+
+  // Fetch Mapbox token on mount
+  useEffect(() => {
+    fetch('/api/mapbox/token')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.token) {
+          setMapboxToken(data.token);
+          console.log('[Map] Mapbox tiles enabled');
+        }
+      })
+      .catch(() => {
+        console.log('[Map] Using fallback tiles (Mapbox unavailable)');
+      });
+  }, []);
+
+  // Helper to get tile URL and attribution based on token availability
+  const getTileConfig = useCallback((style: MapStyle) => {
+    if (mapboxToken) {
+      return {
+        url: getMapboxTileUrl(style, mapboxToken),
+        attribution: MAPBOX_ATTRIBUTION,
+      };
+    }
+    return FALLBACK_TILES[style];
+  }, [mapboxToken]);
 
   const itinerary = trip.itinerary as unknown as { days: DayPlan[] };
 
@@ -329,16 +375,34 @@ function ItineraryMapComponent({ trip, highlightedLocation, activeDayIndex, onLo
       positions.push(loc.position);
     });
 
-    // Draw polyline with gradient effect
+    // Draw polyline - use Mapbox directions if available, otherwise straight lines
     if (positions.length > 1) {
-      polylineRef.current = L.polyline(positions, {
-        color: "#6366f1",
-        weight: 3,
-        opacity: 0.7,
-        dashArray: "8, 8",
-        lineCap: "round",
-        lineJoin: "round",
-      }).addTo(map);
+      let polylinePositions: [number, number][];
+
+      if (directionsRoute?.coordinates && directionsRoute.coordinates.length > 0) {
+        // Use Mapbox walking directions (convert [lng, lat] to [lat, lng] for Leaflet)
+        polylinePositions = directionsRoute.coordinates.map(
+          (coord: [number, number]) => [coord[1], coord[0]] as [number, number]
+        );
+        // Solid line for actual walking route
+        polylineRef.current = L.polyline(polylinePositions, {
+          color: "#6366f1",
+          weight: 4,
+          opacity: 0.8,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(map);
+      } else {
+        // Fallback to straight dashed lines
+        polylineRef.current = L.polyline(positions, {
+          color: "#6366f1",
+          weight: 3,
+          opacity: 0.7,
+          dashArray: "8, 8",
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(map);
+      }
     }
 
     // Fit bounds if we have positions
@@ -346,7 +410,7 @@ function ItineraryMapComponent({ trip, highlightedLocation, activeDayIndex, onLo
       const bounds = L.latLngBounds(positions);
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
     }
-  }, [filteredLocations, highlightedLocation, showDistances, onLocationSelect]);
+  }, [filteredLocations, highlightedLocation, showDistances, onLocationSelect, directionsRoute]);
 
   // Highlight specific location when prop changes
   useEffect(() => {
@@ -409,9 +473,10 @@ function ItineraryMapComponent({ trip, highlightedLocation, activeDayIndex, onLo
       // Add zoom control to top-right
       L.control.zoom({ position: 'topright' }).addTo(map);
 
-      // Add tile layer
-      tileLayerRef.current = L.tileLayer(MAP_STYLES[mapStyle].url, {
-        attribution: '&copy; OpenStreetMap contributors',
+      // Add tile layer (Mapbox if available, fallback otherwise)
+      const tileConfig = getTileConfig(mapStyle);
+      tileLayerRef.current = L.tileLayer(tileConfig.url, {
+        attribution: tileConfig.attribution,
         maxZoom: 19,
         crossOrigin: 'anonymous',
       }).addTo(map);
@@ -447,12 +512,50 @@ function ItineraryMapComponent({ trip, highlightedLocation, activeDayIndex, onLo
   useEffect(() => {
     if (mapInstanceRef.current && leafletRef.current && tileLayerRef.current) {
       mapInstanceRef.current.removeLayer(tileLayerRef.current);
-      tileLayerRef.current = leafletRef.current.tileLayer(MAP_STYLES[mapStyle].url, {
-        attribution: '&copy; OpenStreetMap contributors',
+      const tileConfig = getTileConfig(mapStyle);
+      tileLayerRef.current = leafletRef.current.tileLayer(tileConfig.url, {
+        attribution: tileConfig.attribution,
         maxZoom: 19,
       }).addTo(mapInstanceRef.current);
     }
-  }, [mapStyle]);
+  }, [mapStyle, mapboxToken, getTileConfig]);
+
+  // Fetch walking directions for filtered locations
+  useEffect(() => {
+    if (!mapboxToken || filteredLocations.length < 2) {
+      setDirectionsRoute(null);
+      return;
+    }
+
+    const waypoints = filteredLocations.map(loc => ({
+      lat: loc.position[0],
+      lng: loc.position[1],
+    }));
+
+    // Debounce directions fetch
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch('/api/mapbox/directions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ waypoints, mode: 'walking' }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.route?.geometry?.coordinates) {
+            setDirectionsRoute({ coordinates: data.route.geometry.coordinates });
+            console.log('[Map] Walking directions loaded:', data.route.distanceFormatted);
+          }
+        }
+      } catch (err) {
+        console.log('[Map] Directions fetch failed, using straight lines');
+        setDirectionsRoute(null);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [filteredLocations, mapboxToken]);
 
   // Zoom to specific day
   const zoomToDay = (day: number) => {

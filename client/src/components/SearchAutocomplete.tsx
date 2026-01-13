@@ -10,6 +10,7 @@ interface Destination {
   type: 'city' | 'country' | 'region';
   popularity: number;
   image?: string;
+  coordinates?: { lat: number; lng: number };
 }
 
 // Comprehensive destination database
@@ -123,34 +124,67 @@ export function SearchAutocomplete({
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Debounced search
-  const searchDestinations = useCallback((searchQuery: string) => {
+  // Search destinations - tries Mapbox first, falls back to static list
+  const searchDestinations = useCallback(async (searchQuery: string) => {
     if (!searchQuery.trim()) {
+      setResults([]);
+      return;
+    }
+
+    if (searchQuery.length < 2) {
       setResults([]);
       return;
     }
 
     setIsLoading(true);
 
-    // Simulate API delay for realistic feel
-    setTimeout(() => {
-      const query = searchQuery.toLowerCase();
-      const filtered = DESTINATIONS.filter(dest =>
-        dest.name.toLowerCase().includes(query) ||
-        dest.country.toLowerCase().includes(query)
-      ).sort((a, b) => {
-        // Prioritize exact matches
-        const aExact = a.name.toLowerCase().startsWith(query) ? 1 : 0;
-        const bExact = b.name.toLowerCase().startsWith(query) ? 1 : 0;
-        if (aExact !== bExact) return bExact - aExact;
-        // Then sort by popularity
-        return b.popularity - a.popularity;
-      }).slice(0, 8);
+    try {
+      // Try Mapbox geocoding first
+      const response = await fetch(
+        `/api/mapbox/geocode?q=${encodeURIComponent(searchQuery)}&types=place,locality,region&limit=8`
+      );
 
-      setResults(filtered);
-      setIsLoading(false);
-      setHighlightedIndex(-1);
-    }, 150);
+      if (response.ok) {
+        const data = await response.json();
+
+        if (data.features && data.features.length > 0) {
+          // Transform Mapbox results to match our Destination interface
+          const mapboxResults: Destination[] = data.features.map((feature: any, index: number) => ({
+            id: feature.id || `mapbox-${index}`,
+            name: feature.name,
+            country: feature.country || feature.fullAddress?.split(', ').pop() || '',
+            type: feature.placeType === 'locality' ? 'city' : feature.placeType === 'region' ? 'region' : 'city',
+            popularity: 80 - index * 5, // Mapbox already returns results by relevance
+            coordinates: feature.coordinates, // Keep coordinates for potential future use
+          }));
+
+          setResults(mapboxResults);
+          setIsLoading(false);
+          setHighlightedIndex(-1);
+          return;
+        }
+      }
+    } catch (error) {
+      console.log('[Search] Mapbox geocoding failed, using fallback');
+    }
+
+    // Fallback to static list
+    const query = searchQuery.toLowerCase();
+    const filtered = DESTINATIONS.filter(dest =>
+      dest.name.toLowerCase().includes(query) ||
+      dest.country.toLowerCase().includes(query)
+    ).sort((a, b) => {
+      // Prioritize exact matches
+      const aExact = a.name.toLowerCase().startsWith(query) ? 1 : 0;
+      const bExact = b.name.toLowerCase().startsWith(query) ? 1 : 0;
+      if (aExact !== bExact) return bExact - aExact;
+      // Then sort by popularity
+      return b.popularity - a.popularity;
+    }).slice(0, 8);
+
+    setResults(filtered);
+    setIsLoading(false);
+    setHighlightedIndex(-1);
   }, []);
 
   // Handle input change

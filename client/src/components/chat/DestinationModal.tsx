@@ -5,11 +5,17 @@
  * Clean modal with destination input and optional key details.
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, MapPin, Search, Sparkles, Plus } from "lucide-react";
+import { X, MapPin, Search, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { POPULAR_DESTINATIONS, MAJOR_CITIES, searchCities } from "@/lib/travelData";
+import { POPULAR_DESTINATIONS, searchCities } from "@/lib/travelData";
+
+interface MapboxCity {
+  city: string;
+  country: string;
+  code?: string;
+}
 
 interface DestinationModalProps {
   isOpen: boolean;
@@ -35,7 +41,69 @@ export function DestinationModal({
   );
   const [keyDetails, setKeyDetails] = useState(initialData?.keyDetails || "");
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [mapboxResults, setMapboxResults] = useState<MapboxCity[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Search with Mapbox geocoding (debounced)
+  const searchWithMapbox = useCallback(async (query: string) => {
+    if (query.length < 2) {
+      setMapboxResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+
+    try {
+      const response = await fetch(
+        `/api/mapbox/geocode?q=${encodeURIComponent(query)}&types=place,locality,region&limit=8`
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+
+        if (data.features && data.features.length > 0) {
+          const results: MapboxCity[] = data.features.map((feature: any) => ({
+            city: feature.name,
+            country: feature.country || feature.fullAddress?.split(', ').pop() || '',
+            code: feature.countryCode,
+          }));
+          setMapboxResults(results);
+          setIsSearching(false);
+          return;
+        }
+      }
+    } catch (error) {
+      console.log('[DestinationModal] Mapbox geocoding failed, using fallback');
+    }
+
+    // Clear mapbox results, will fall back to static search
+    setMapboxResults([]);
+    setIsSearching(false);
+  }, []);
+
+  // Debounced search effect
+  useEffect(() => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    if (searchValue.length >= 2) {
+      searchTimeoutRef.current = setTimeout(() => {
+        searchWithMapbox(searchValue);
+      }, 200);
+    } else {
+      setMapboxResults([]);
+    }
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [searchValue, searchWithMapbox]);
 
   // Reset when modal opens
   useEffect(() => {
@@ -45,6 +113,7 @@ export function DestinationModal({
         setKeyDetails(initialData.keyDetails || "");
       }
       setSearchValue("");
+      setMapboxResults([]);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [isOpen, initialData]);
@@ -55,8 +124,10 @@ export function DestinationModal({
     onClose();
   };
 
-  // Use searchCities from shared travelData for comprehensive autocomplete
-  const filteredCities = searchCities(searchValue).slice(0, 8);
+  // Use Mapbox results if available, otherwise fall back to static search
+  const filteredCities = mapboxResults.length > 0
+    ? mapboxResults
+    : searchCities(searchValue).slice(0, 8);
 
   // Single destination selection - replaces existing
   const selectDestination = (city: string, country: string) => {
@@ -132,7 +203,11 @@ export function DestinationModal({
                     Destination
                   </label>
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    {isSearching ? (
+                      <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 animate-spin" />
+                    ) : (
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    )}
                     <input
                       ref={inputRef}
                       type="text"
