@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { getVoyageHeaders } from "@/lib/voyageUid";
+import { useDestinationImage, getDestinationGradient } from "@/hooks/useDestinationImage";
 
 // Trip summary from /api/my-trips
 interface TripSummary {
@@ -436,125 +437,6 @@ export default function MyTrips() {
   );
 }
 
-// Static destination images - direct URLs that work reliably
-const TRIP_CARD_IMAGES: Record<string, string> = {
-  // Australia & Oceania
-  'hobart': 'https://images.unsplash.com/photo-1555424221-250de2a343ad?w=1200&h=800&fit=crop',
-  'sydney': 'https://images.unsplash.com/photo-1506973035872-a4ec16b8e8d9?w=1200&h=800&fit=crop',
-  'melbourne': 'https://images.unsplash.com/photo-1514395462725-fb4566210144?w=1200&h=800&fit=crop',
-  // Southeast Asia
-  'ho chi minh': 'https://images.unsplash.com/photo-1583417319070-4a69db38a482?w=1200&h=800&fit=crop',
-  'vietnam': 'https://images.unsplash.com/photo-1528127269322-539801943592?w=1200&h=800&fit=crop',
-  'hanoi': 'https://images.unsplash.com/photo-1509030450996-dd1a26dda07a?w=1200&h=800&fit=crop',
-  'bangkok': 'https://images.unsplash.com/photo-1508009603885-50cf7c579365?w=1200&h=800&fit=crop',
-  'thailand': 'https://images.unsplash.com/photo-1552465011-b4e21bf6e79a?w=1200&h=800&fit=crop',
-  'phuket': 'https://images.unsplash.com/photo-1589394815804-964ed0be2eb5?w=1200&h=800&fit=crop',
-  'singapore': 'https://images.unsplash.com/photo-1525625293386-3f8f99389edd?w=1200&h=800&fit=crop',
-  'bali': 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=1200&h=800&fit=crop',
-  // Philippines - Manila skyline and landmarks (daytime images)
-  'manila': 'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?w=1200&h=800&fit=crop',
-  'philippines': 'https://images.unsplash.com/photo-1518548419970-58e3b4079ab2?w=1200&h=800&fit=crop',
-  'cebu': 'https://images.unsplash.com/photo-1505881502353-a1986add3762?w=1200&h=800&fit=crop',
-  'boracay': 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200&h=800&fit=crop',
-  'palawan': 'https://images.unsplash.com/photo-1501179691627-eeaa65ea017c?w=1200&h=800&fit=crop',
-  'el nido': 'https://images.unsplash.com/photo-1501179691627-eeaa65ea017c?w=1200&h=800&fit=crop',
-  'kuala lumpur': 'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?w=1200&h=800&fit=crop',
-  'malaysia': 'https://images.unsplash.com/photo-1596422846543-75c6fc197f07?w=1200&h=800&fit=crop',
-  // China
-  'beijing': 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=1200&h=800&fit=crop',
-  'china': 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=1200&h=800&fit=crop',
-  'shanghai': 'https://images.unsplash.com/photo-1538428494232-9c0d8a3ab403?w=1200&h=800&fit=crop',
-  'hong kong': 'https://images.unsplash.com/photo-1536599018102-9f803c140fc1?w=1200&h=800&fit=crop',
-  // Japan
-  'tokyo': 'https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=1200&h=800&fit=crop',
-  'japan': 'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?w=1200&h=800&fit=crop',
-  'kyoto': 'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?w=1200&h=800&fit=crop',
-  // Europe
-  'paris': 'https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=1200&h=800&fit=crop',
-  'london': 'https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=1200&h=800&fit=crop',
-  'rome': 'https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=1200&h=800&fit=crop',
-  'athens': 'https://images.unsplash.com/photo-1555993539-1732b0258235?w=1200&h=800&fit=crop',
-  'greece': 'https://images.unsplash.com/photo-1555993539-1732b0258235?w=1200&h=800&fit=crop',
-  'santorini': 'https://images.unsplash.com/photo-1570077188670-e3a8d69ac5ff?w=1200&h=800&fit=crop',
-  'barcelona': 'https://images.unsplash.com/photo-1583422409516-2895a77efded?w=1200&h=800&fit=crop',
-  'spain': 'https://images.unsplash.com/photo-1583422409516-2895a77efded?w=1200&h=800&fit=crop',
-  'amsterdam': 'https://images.unsplash.com/photo-1534351590666-13e3e96b5017?w=1200&h=800&fit=crop',
-  'venice': 'https://images.unsplash.com/photo-1523906834658-6e24ef2386f9?w=1200&h=800&fit=crop',
-  'italy': 'https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=1200&h=800&fit=crop',
-  'prague': 'https://images.unsplash.com/photo-1541849546-216549ae216d?w=1200&h=800&fit=crop',
-  'vienna': 'https://images.unsplash.com/photo-1516550893923-42d28e5677af?w=1200&h=800&fit=crop',
-  'berlin': 'https://images.unsplash.com/photo-1560969184-10fe8719e047?w=1200&h=800&fit=crop',
-  'switzerland': 'https://images.unsplash.com/photo-1530122037265-a5f1f91d3b99?w=1200&h=800&fit=crop',
-  'zurich': 'https://images.unsplash.com/photo-1515488764276-beab7607c1e6?w=1200&h=800&fit=crop',
-  // Maldives & Indian Ocean
-  'maldives': 'https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=1200&h=800&fit=crop',
-  'male': 'https://images.unsplash.com/photo-1514282401047-d79a71a590e8?w=1200&h=800&fit=crop',
-  'mauritius': 'https://images.unsplash.com/photo-1518509562904-e7ef99cdcc86?w=1200&h=800&fit=crop',
-  'seychelles': 'https://images.unsplash.com/photo-1589979481223-deb893043163?w=1200&h=800&fit=crop',
-  // Americas
-  'new york': 'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?w=1200&h=800&fit=crop',
-  // Middle East
-  'dubai': 'https://images.unsplash.com/photo-1512453979798-5ea266f8880c?w=1200&h=800&fit=crop',
-  // India
-  'bengaluru': 'https://images.unsplash.com/photo-1596176530529-78163a4f7af2?w=1200&h=800&fit=crop', // Bangalore Palace
-  'bangalore': 'https://images.unsplash.com/photo-1596176530529-78163a4f7af2?w=1200&h=800&fit=crop',
-  'mumbai': 'https://images.unsplash.com/photo-1529253355930-ddbe423a2ac7?w=1200&h=800&fit=crop',
-  'delhi': 'https://images.unsplash.com/photo-1587474260584-136574528ed5?w=1200&h=800&fit=crop',
-  'india': 'https://images.unsplash.com/photo-1524492412937-b28074a5d7da?w=1200&h=800&fit=crop', // Taj Mahal for generic India
-  // Africa
-  'casablanca': 'https://images.unsplash.com/photo-1569383746724-6f1b882b8f46?w=1200&h=800&fit=crop', // Hassan II Mosque
-  'morocco': 'https://images.unsplash.com/photo-1489749798305-4fea3ae63d43?w=1200&h=800&fit=crop', // Marrakech
-  'marrakech': 'https://images.unsplash.com/photo-1489749798305-4fea3ae63d43?w=1200&h=800&fit=crop',
-  // Korea
-  'seoul': 'https://images.unsplash.com/photo-1538485399081-7191377e8241?w=1200&h=800&fit=crop',
-};
-
-// Fallback gradients by destination type
-const TRIP_CARD_GRADIENTS: Record<string, string> = {
-  beach: 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 50%, #0369a1 100%)',
-  mountain: 'linear-gradient(135deg, #64748b 0%, #475569 50%, #334155 100%)',
-  city: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 50%, #4338ca 100%)',
-  default: 'linear-gradient(135deg, #1e293b 0%, #0f172a 50%, #020617 100%)',
-};
-
-// Get destination image URL - prioritizes stored image, then static dictionary
-function getDestinationImage(destination: string, storedImageUrl?: string | null): string {
-  // Priority 1: Use stored image from database (AI-fetched during trip creation)
-  if (storedImageUrl) {
-    return storedImageUrl;
-  }
-
-  // Priority 2: Try to match static dictionary
-  const lower = destination.toLowerCase();
-  for (const [key, url] of Object.entries(TRIP_CARD_IMAGES)) {
-    if (lower.includes(key)) {
-      return url;
-    }
-  }
-
-  return ''; // No match - will use gradient fallback
-}
-
-// Get fallback gradient for destination
-function getDestinationGradient(destination: string): string {
-  const lower = destination.toLowerCase();
-
-  // Beach destinations
-  if (['beach', 'island', 'maldives', 'bali', 'phuket', 'cancun', 'miami', 'fiji'].some(k => lower.includes(k))) {
-    return TRIP_CARD_GRADIENTS.beach;
-  }
-  // Mountain destinations
-  if (['mountain', 'alps', 'himalaya', 'swiss', 'nepal'].some(k => lower.includes(k))) {
-    return TRIP_CARD_GRADIENTS.mountain;
-  }
-  // City destinations (most common)
-  if (['city', 'tokyo', 'london', 'paris', 'sydney', 'singapore', 'dubai', 'hong kong', 'beijing', 'shanghai', 'ho chi minh', 'bangkok', 'hobart'].some(k => lower.includes(k))) {
-    return TRIP_CARD_GRADIENTS.city;
-  }
-
-  return TRIP_CARD_GRADIENTS.default;
-}
-
 // Parse dates string - handles multiple formats:
 // 1. "May 15, 2026 - May 31, 2026" (form flow)
 // 2. "6/1/2026 - 6/5/2026" (chat specific dates)
@@ -669,8 +551,8 @@ function TripCard({ trip, index, onDelete }: { trip: TripSummary; index: number;
   const [, navigate] = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Priority: stored AI image → static dictionary → gradient fallback
-  const imageUrl = getDestinationImage(trip.destination, trip.destinationImageUrl);
+  // Dynamic image fetching with caching
+  const { imageUrl } = useDestinationImage(trip.destination, trip.destinationImageUrl);
   const gradientFallback = getDestinationGradient(trip.destination);
   const { startDate, endDate, duration } = parseDatesString(trip.dates);
   const certainty = getCertaintyBadge(trip.certaintyLabel, trip.certaintyScore);
@@ -934,8 +816,8 @@ function TripListItem({ trip, index, onDelete }: { trip: TripSummary; index: num
   const [, navigate] = useLocation();
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Priority: stored AI image → static dictionary → gradient fallback
-  const imageUrl = getDestinationImage(trip.destination, trip.destinationImageUrl);
+  // Dynamic image fetching with caching
+  const { imageUrl } = useDestinationImage(trip.destination, trip.destinationImageUrl);
   const gradientFallback = getDestinationGradient(trip.destination);
   const { startDate, endDate, duration } = parseDatesString(trip.dates);
   const certainty = getCertaintyBadge(trip.certaintyLabel, trip.certaintyScore);

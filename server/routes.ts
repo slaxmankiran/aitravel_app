@@ -35,6 +35,7 @@ import fixOptionsRouter from "./routes/fixOptions";
 import appliedPlansRouter from "./routes/appliedPlans";
 import versionsRouter from "./routes/versions";
 import { knowledgeRouter } from "./routes/knowledge";
+import { mapboxRouter } from "./routes/mapbox";
 import { VisaFacts, computeVisaConfidence } from "@shared/knowledgeSchema";
 import { db } from "./db";
 import { knowledgeDocuments } from "@shared/knowledgeSchema";
@@ -5243,6 +5244,7 @@ export async function registerRoutes(
   app.use("/api", appliedPlansRouter);
   app.use("/api", versionsRouter);
   app.use("/api/knowledge", knowledgeRouter);
+  app.use("/api/mapbox", mapboxRouter);
 
   // Trip creation - rate limited to 5/min per IP (expensive operation)
   app.post(api.trips.create.path, tripCreationRateLimiter, async (req, res) => {
