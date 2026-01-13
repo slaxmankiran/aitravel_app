@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
+import type { Server } from "http";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
@@ -15,8 +15,6 @@ import {
   getCoordinates as aiGetCoordinates,
   getAttractions as aiGetAttractions,
   getTransportOptions as aiGetTransportOptions,
-  getCostEstimates as aiGetCostEstimates,
-  getDestinationIntelligence,
   getDestinationImage as aiGetDestinationImage,
   getDestinationCategory as aiGetDestinationCategory,
 } from "./services/aiAgent";
@@ -36,13 +34,14 @@ import appliedPlansRouter from "./routes/appliedPlans";
 import versionsRouter from "./routes/versions";
 import { knowledgeRouter } from "./routes/knowledge";
 import { mapboxRouter } from "./routes/mapbox";
+import scrapeRouter from "./routes/scrape";
 import { VisaFacts, computeVisaConfidence } from "@shared/knowledgeSchema";
 import { db } from "./db";
 import { knowledgeDocuments } from "@shared/knowledgeSchema";
 import { generateEmbedding } from "./services/embeddings";
 import { sql, desc, and, or, eq } from "drizzle-orm";
 import { cosineDistance } from "drizzle-orm";
-import { buildVisaEvidenceBundle, buildEstimatedEvidenceBundle, formatEvidenceBundleForPrompt } from "./services/evidenceBundle";
+import { buildVisaEvidenceBundle, formatEvidenceBundleForPrompt } from "./services/evidenceBundle";
 import {
   streamItineraryGeneration,
   resumeItineraryStream,
@@ -65,17 +64,17 @@ import {
   releaseItineraryLock,
   createLockContext,
   cleanupLockContext,
-  getItineraryLockStatus,
   type LockContext
 } from "./services/itineraryLock";
 import {
   sseProtection,
-  aiRateLimiter,
   tripCreationRateLimiter,
-  generalRateLimiter,
   getRateLimitMetrics,
   requireAdminToken,
 } from "./middleware/rateLimiter";
+import * as TripService from "./services/tripService";
+import * as TransportService from "./services/transportService";
+import * as VisaService from "./services/visaService";
 
 // ============ FEASIBILITY ANALYTICS ============
 // Decision-quality metrics for validation
@@ -322,347 +321,9 @@ function getAnalyticsSummary() {
   };
 }
 
-// ============ VISA LOOKUP CACHE ============
-// In-memory LRU cache with 24-hour TTL
-// Key: `visaFacts:${passport}:${destination}`, Value: { data: VisaFacts | null, timestamp: number }
-const VISA_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const VISA_CACHE_MAX_SIZE = 500; // Max entries
-
-interface VisaCacheEntry {
-  data: VisaFacts | null;
-  timestamp: number;
-}
-
-const visaFactsCache = new Map<string, VisaCacheEntry>();
-
-function getVisaCacheKey(passport: string, destination: string): string {
-  return `visaFacts:${passport.toUpperCase()}:${destination.toUpperCase()}`;
-}
-
-function getCachedVisaFacts(passport: string, destination: string): VisaFacts | null | undefined {
-  const key = getVisaCacheKey(passport, destination);
-  const entry = visaFactsCache.get(key);
-
-  if (!entry) return undefined; // Not in cache
-
-  // Check TTL
-  if (Date.now() - entry.timestamp > VISA_CACHE_TTL_MS) {
-    visaFactsCache.delete(key);
-    return undefined; // Expired
-  }
-
-  console.log(`[Cache] HIT for ${passport} → ${destination}`);
-  return entry.data;
-}
-
-function setCachedVisaFacts(passport: string, destination: string, data: VisaFacts | null): void {
-  const key = getVisaCacheKey(passport, destination);
-
-  // LRU eviction: if at max size, delete oldest entry
-  if (visaFactsCache.size >= VISA_CACHE_MAX_SIZE) {
-    const oldestKey = visaFactsCache.keys().next().value;
-    if (oldestKey) visaFactsCache.delete(oldestKey);
-  }
-
-  visaFactsCache.set(key, { data, timestamp: Date.now() });
-  console.log(`[Cache] SET for ${passport} → ${destination} (size: ${visaFactsCache.size})`);
-}
-
-// ============ RAG-BASED VISA LOOKUP ============
-// Fetches cited visa information from the knowledge base (with caching)
-async function getVisaFactsFromKnowledge(passport: string, destination: string): Promise<VisaFacts | null> {
-  // Check cache first
-  const cached = getCachedVisaFacts(passport, destination);
-  if (cached !== undefined) {
-    return cached; // Return cached result (including null for "no data found")
-  }
-
-  try {
-    // Generate embedding for the visa query
-    const question = `visa requirements for ${passport} passport holders traveling to ${destination}`;
-    const embeddingResult = await generateEmbedding(question);
-    const queryEmbedding = embeddingResult.embedding;
-
-    // Build optimized visa query
-    const similarity = sql<number>`1 - (${cosineDistance(knowledgeDocuments.embedding, queryEmbedding)})`;
-
-    const results = await db
-      .select({
-        id: knowledgeDocuments.id,
-        sourceId: knowledgeDocuments.sourceId,
-        sourceType: knowledgeDocuments.sourceType,
-        title: knowledgeDocuments.title,
-        content: knowledgeDocuments.content,
-        sourceUrl: knowledgeDocuments.sourceUrl,
-        sourceName: knowledgeDocuments.sourceName,
-        lastVerified: knowledgeDocuments.lastVerified,
-        similarity,
-      })
-      .from(knowledgeDocuments)
-      .where(
-        and(
-          or(
-            eq(knowledgeDocuments.sourceType, "visa"),
-            eq(knowledgeDocuments.sourceType, "entry_requirements")
-          ),
-          or(
-            // Exact match on country pair
-            and(
-              eq(knowledgeDocuments.fromCountry, passport.toUpperCase()),
-              eq(knowledgeDocuments.toCountry, destination.toUpperCase())
-            ),
-            // General destination info
-            and(
-              sql`${knowledgeDocuments.fromCountry} IS NULL`,
-              eq(knowledgeDocuments.toCountry, destination.toUpperCase())
-            )
-          )
-        )
-      )
-      .orderBy(desc(similarity))
-      .limit(5);
-
-    // Filter by minimum similarity
-    const relevantResults = results.filter((r: typeof results[number]) => r.similarity >= 0.5);
-
-    if (relevantResults.length === 0) {
-      console.log(`[RAG] No visa data found for ${passport} → ${destination}`);
-      setCachedVisaFacts(passport, destination, null); // Cache "not found" to avoid repeated lookups
-      return null;
-    }
-
-    // Build citations
-    const citations = relevantResults.map((r: typeof results[number]) => ({
-      title: r.title,
-      url: r.sourceUrl,
-      sourceName: r.sourceName || "Travel Database",
-      trustLevel: determineTrustLevel(r.sourceName) as "high" | "medium" | "low",
-      updatedAt: r.lastVerified?.toISOString().slice(0, 10),
-    }));
-
-    // Combine content for parsing
-    const combinedContent = relevantResults.map((r: typeof results[number]) => r.content).join("\n\n");
-
-    // Parse visa status and details
-    const visaStatus = parseVisaStatusFromContent(combinedContent);
-    const feesText = extractFeesFromContent(combinedContent);
-    const requiredDocs = extractRequiredDocsFromContent(combinedContent);
-    const maxStayDays = extractMaxStayDays(combinedContent);
-    const processingDays = extractProcessingDays(combinedContent);
-
-    // Build summary
-    let summary = "";
-    if (visaStatus === "visa_free") {
-      summary = `${passport} passport holders can visit ${destination} visa-free`;
-      if (maxStayDays) summary += ` for up to ${maxStayDays} days`;
-      summary += ".";
-    } else if (visaStatus === "visa_on_arrival") {
-      summary = `${passport} passport holders can obtain a Visa on Arrival for ${destination}`;
-      if (maxStayDays) summary += ` for stays up to ${maxStayDays} days`;
-      if (feesText) summary += `. Fee: ${feesText}`;
-      summary += ".";
-    } else if (visaStatus === "evisa") {
-      summary = `${passport} passport holders can apply for an e-Visa to visit ${destination}`;
-      if (processingDays.max) summary += `. Processing: ${processingDays.min || 1}-${processingDays.max} days`;
-      summary += ".";
-    } else if (visaStatus === "embassy_visa") {
-      summary = `${passport} passport holders require a visa to visit ${destination}`;
-      if (processingDays.max) summary += `. Processing time: ${processingDays.min || 5}-${processingDays.max} days`;
-      summary += ".";
-    } else {
-      summary = `Visa requirements for ${passport} passport holders visiting ${destination}. Please check official sources.`;
-    }
-
-    const confidence = computeVisaConfidence(citations);
-
-    // ============ SAFETY CHECKS ============
-    // Count high-trust sources (official embassy/immigration)
-    const highTrustCount = citations.filter((c: { trustLevel: string }) => c.trustLevel === 'high').length;
-
-    // Log warnings for low confidence
-    if (confidence === 'low') {
-      console.warn(`[RAG-SAFETY] ⚠️ LOW CONFIDENCE visa lookup: ${passport} → ${destination}`);
-      console.warn(`[RAG-SAFETY]   - Citations: ${citations.length} (${highTrustCount} high-trust)`);
-      console.warn(`[RAG-SAFETY]   - Status: ${visaStatus}`);
-      console.warn(`[RAG-SAFETY]   - Action: User should verify with official sources`);
-    }
-
-    // Log when no high-trust sources found
-    if (highTrustCount === 0 && citations.length > 0) {
-      console.warn(`[RAG-SAFETY] ⚠️ No official sources for ${passport} → ${destination}`);
-    }
-
-    // Generate warning message for low confidence
-    let warningMessage: string | undefined;
-    if (confidence === 'low') {
-      warningMessage = 'Limited verified data available. Please confirm with official embassy sources before making travel plans.';
-    } else if (highTrustCount === 0) {
-      warningMessage = 'No official embassy sources found. Consider verifying requirements.';
-    }
-
-    console.log(`[RAG] Visa lookup: ${passport} → ${destination}: ${visaStatus} (${confidence} confidence, ${citations.length} citations, ${highTrustCount} official)`);
-
-    const result: VisaFacts = {
-      summary,
-      visaStatus,
-      maxStayDays,
-      processingDaysMin: processingDays.min,
-      processingDaysMax: processingDays.max,
-      feesText,
-      requiredDocs: requiredDocs.length > 0 ? requiredDocs : undefined,
-      citations,
-      confidence,
-      passport,
-      destination,
-      hasCitations: true,
-      warning: warningMessage,
-    };
-
-    // Cache successful result
-    setCachedVisaFacts(passport, destination, result);
-
-    return result;
-  } catch (error) {
-    console.error(`[RAG] Error fetching visa data:`, error);
-    // Don't cache errors - allow retry
-    return null;
-  }
-}
-
-// Helper: Determine trust level from source name
-function determineTrustLevel(sourceName: string | null): string {
-  if (!sourceName) return "low";
-  const lower = sourceName.toLowerCase();
-  if (lower.includes("embassy") || lower.includes("consulate") || lower.includes("immigration") || lower.includes("gov")) {
-    return "high";
-  }
-  if (lower.includes("travel database") || lower.includes("visa guide") || lower.includes("lonely planet")) {
-    return "medium";
-  }
-  return "low";
-}
-
-// Helper: Parse visa status from content
-function parseVisaStatusFromContent(content: string): VisaFacts["visaStatus"] {
-  const lower = content.toLowerCase();
-
-  if ((lower.includes("visa-free") || lower.includes("visa free")) && !lower.includes("not visa-free")) {
-    return "visa_free";
-  }
-  if (lower.includes("no visa required") || lower.includes("visa not required")) {
-    return "visa_free";
-  }
-
-  const explicitNoVoa = lower.includes("no visa on arrival") || lower.includes("no voa available");
-  const explicitNoEvisa = lower.includes("no e-visa") || lower.includes("or e-visa available");
-
-  if (explicitNoVoa && explicitNoEvisa) {
-    return "embassy_visa";
-  }
-
-  const hasVoaInfo = lower.includes("visa on arrival") || lower.includes("voa");
-  const voaPositive = lower.includes("can obtain a visa on arrival") || lower.includes("voa available") ||
-    (hasVoaInfo && !explicitNoVoa && (lower.includes("voa allows") || lower.includes("voa costs")));
-
-  if (voaPositive && !explicitNoVoa) {
-    return "visa_on_arrival";
-  }
-
-  const evisaPositive = lower.includes("e-visa available") || lower.includes("apply for an e-visa") || lower.includes("e-visa:");
-
-  if (evisaPositive && !explicitNoEvisa) {
-    return "evisa";
-  }
-
-  if (lower.includes("require a visa") || lower.includes("visa required") || lower.includes("tourist visa") || lower.includes("embassy")) {
-    return "embassy_visa";
-  }
-
-  return "unknown";
-}
-
-// Helper: Extract fees from content
-function extractFeesFromContent(content: string): string | undefined {
-  const patterns = [/fee[s]?\s*(?:is|are|of)?\s*(?:approximately\s*)?(\$\d+[\d,]*(?:\s*USD)?)/i, /(\$\d+[\d,]*(?:\s*USD)?)\s*(?:fee|cost)/i];
-  for (const pattern of patterns) {
-    const match = content.match(pattern);
-    if (match && match[1]) return match[1];
-  }
-  if (content.toLowerCase().includes("free of charge") || content.toLowerCase().includes("no fee")) return "Free";
-  return undefined;
-}
-
-// Helper: Extract required documents
-function extractRequiredDocsFromContent(content: string): string[] {
-  const docs: string[] = [];
-  const lower = content.toLowerCase();
-  if (lower.includes("passport") && lower.includes("valid")) docs.push("Valid passport (6+ months validity)");
-  if (lower.includes("proof of onward") || lower.includes("return ticket")) docs.push("Proof of onward/return travel");
-  if (lower.includes("proof of accommodation") || lower.includes("hotel booking")) docs.push("Proof of accommodation");
-  if (lower.includes("passport photo")) docs.push("Passport-size photos");
-  if (lower.includes("bank statement") || lower.includes("proof of funds")) docs.push("Proof of sufficient funds");
-  return docs;
-}
-
-// Helper: Extract max stay days
-function extractMaxStayDays(content: string): number | undefined {
-  const patterns = [/stay[s]?\s*(?:up\s*to\s*)?(\d+)\s*days/i, /(\d+)\s*days?\s*(?:maximum\s*)?stay/i, /valid\s*(?:for\s*)?(\d+)\s*days/i];
-  for (const pattern of patterns) {
-    const match = content.match(pattern);
-    if (match && match[1]) return parseInt(match[1], 10);
-  }
-  return undefined;
-}
-
-// Helper: Extract processing days
-function extractProcessingDays(content: string): { min?: number; max?: number } {
-  const maxMatch = content.match(/processing[^.]*?\d+\s*to\s*(\d+)\s*days/i) || content.match(/(\d+)\s*days?\s*maximum/i);
-  const minMatch = content.match(/processing[^.]*?(\d+)\s*to\s*\d+\s*days/i) || content.match(/(\d+)\s*days?\s*minimum/i);
-  return {
-    min: minMatch ? parseInt(minMatch[1], 10) : undefined,
-    max: maxMatch ? parseInt(maxMatch[1], 10) : undefined,
-  };
-}
-
-// Convert VisaFacts to VisaDetails for storing in FeasibilityReport
-function convertVisaFactsToVisaDetails(visaFacts: VisaFacts): VisaDetails {
-  // Map visa status
-  const typeMap: Record<VisaFacts["visaStatus"], VisaDetails["type"]> = {
-    visa_free: "visa_free",
-    visa_on_arrival: "visa_on_arrival",
-    evisa: "e_visa",
-    embassy_visa: "embassy_visa",
-    unknown: "embassy_visa", // Conservative fallback
-  };
-
-  // Parse fee amount from feesText
-  let govFee = 0;
-  if (visaFacts.feesText) {
-    const feeMatch = visaFacts.feesText.match(/\$(\d+)/);
-    if (feeMatch) govFee = parseInt(feeMatch[1], 10);
-  }
-
-  return {
-    required: visaFacts.visaStatus !== "visa_free",
-    type: typeMap[visaFacts.visaStatus],
-    processingDays: {
-      minimum: visaFacts.processingDaysMin || (visaFacts.visaStatus === "visa_on_arrival" ? 0 : 3),
-      maximum: visaFacts.processingDaysMax || (visaFacts.visaStatus === "visa_on_arrival" ? 0 : 7),
-    },
-    cost: {
-      government: govFee,
-      totalPerPerson: govFee,
-      currency: "USD",
-      accuracy: "curated",
-    },
-    documentsRequired: visaFacts.requiredDocs || [],
-    applicationMethod: visaFacts.visaStatus === "visa_on_arrival" ? "on_arrival" :
-                       visaFacts.visaStatus === "evisa" ? "online" : "embassy",
-    sources: visaFacts.citations.map((c) => ({ title: c.title, url: c.url || "" })),
-    confidenceLevel: visaFacts.confidence,
-    lastVerified: visaFacts.citations[0]?.updatedAt,
-  };
-}
+// Visa functions moved to server/services/visaService.ts
+// Import: import * as VisaService from "./services/visaService";
+// Usage: VisaService.getVisaFactsFromKnowledge(), VisaService.convertVisaFactsToVisaDetails()
 
 // ============ PROGRESS TRACKING SYSTEM ============
 // In-memory store for tracking trip processing progress
@@ -940,345 +601,8 @@ const AFFILIATE_CONFIG = {
   },
 };
 
-/**
- * Calculate visa timing urgency based on trip date and processing requirements
- */
-function calculateVisaTiming(
-  tripStartDate: string,
-  visaProcessingDays: { minimum: number; maximum: number },
-  today: Date = new Date()
-): VisaTiming {
-  const tripDate = new Date(tripStartDate);
-  const diffTime = tripDate.getTime() - today.getTime();
-  const daysUntilTrip = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-  // Calculate business days (rough: multiply by 5/7)
-  const businessDaysUntilTrip = Math.floor(daysUntilTrip * 5 / 7);
-
-  // Add buffer for submission + pickup
-  const bufferDays = 3;
-  const totalDaysNeeded = visaProcessingDays.maximum + bufferDays;
-
-  const hasEnoughTime = daysUntilTrip >= totalDaysNeeded;
-
-  let urgency: 'ok' | 'tight' | 'risky' | 'impossible';
-  let recommendation: string;
-
-  if (daysUntilTrip >= totalDaysNeeded + 7) {
-    urgency = 'ok';
-    recommendation = 'You have plenty of time. Apply within the next week.';
-  } else if (daysUntilTrip >= totalDaysNeeded) {
-    urgency = 'tight';
-    recommendation = 'Time is tight. Apply TODAY!';
-  } else if (daysUntilTrip >= visaProcessingDays.minimum) {
-    urgency = 'risky';
-    recommendation = 'Very risky! Consider expedited processing or postponing.';
-  } else {
-    urgency = 'impossible';
-    recommendation = 'Not enough time. Postpone your trip or choose visa-free destination.';
-  }
-
-  return {
-    daysUntilTrip,
-    businessDaysUntilTrip,
-    processingDaysNeeded: totalDaysNeeded,
-    hasEnoughTime,
-    urgency,
-    recommendation
-  };
-}
-
-/**
- * Calculate weighted certainty score based on all factors
- * Weights: Accessibility (25), Visa (30), Safety (25), Budget (20) = 100 total
- *
- * Confidence-based scoring rules:
- * - high: normal visa points
- * - medium: reduce visa points by 25%
- * - low: reduce visa points by 60%, force verdict at most POSSIBLE
- */
-function calculateCertaintyScore(
-  accessibility: { status: string; reason: string },
-  visa: { status: string; reason: string; type?: string; timingOk?: boolean },
-  safety: { status: string; reason: string },
-  budget: { status: string; reason: string },
-  visaConfidence: 'high' | 'medium' | 'low' = 'high'
-): CertaintyScore {
-  const blockers: string[] = [];
-  const warnings: string[] = [];
-
-  // Accessibility: 0-25 points
-  let accessibilityScore: number;
-  let accessibilityStatus: 'ok' | 'warning' | 'blocker';
-
-  if (accessibility.status === 'accessible') {
-    accessibilityScore = 25;
-    accessibilityStatus = 'ok';
-  } else if (accessibility.status === 'restricted') {
-    accessibilityScore = 15;
-    accessibilityStatus = 'warning';
-    warnings.push(`Limited accessibility: ${accessibility.reason}`);
-  } else {
-    accessibilityScore = 5;
-    accessibilityStatus = 'blocker';
-    blockers.push(`Destination not accessible: ${accessibility.reason}`);
-  }
-
-  // Visa: 0-30 points (weighted higher - biggest travel hurdle)
-  let visaScore: number;
-  let visaStatus: 'ok' | 'warning' | 'blocker';
-  const visaType = visa.type || visa.status;
-  const timingOk = visa.timingOk !== false; // Default to true if not specified
-
-  if (visaType === 'visa_free' || visa.status === 'ok') {
-    visaScore = 30;
-    visaStatus = 'ok';
-  } else if (visaType === 'visa_on_arrival') {
-    visaScore = 27;
-    visaStatus = 'ok';
-  } else if (visaType === 'e_visa') {
-    visaScore = 24;
-    visaStatus = 'warning';
-    warnings.push('E-visa required - apply online before travel');
-  } else if (visaType === 'embassy_visa' || visa.status === 'issue') {
-    visaScore = 18;
-    visaStatus = 'warning';
-    warnings.push(`Visa required: ${visa.reason}`);
-  } else {
-    visaScore = 0;
-    visaStatus = 'blocker';
-    blockers.push(`Visa not available: ${visa.reason}`);
-  }
-
-  // Reduce visa score if timing is bad
-  if (!timingOk) {
-    visaScore = Math.min(visaScore, 5);
-    visaStatus = 'blocker';
-    blockers.push('Not enough time for visa processing');
-  }
-
-  // Apply confidence-based scoring cap
-  // - high: normal visa points (no change)
-  // - medium: reduce by 25%
-  // - low: reduce by 60%, cap at 10/30 max
-  if (visaConfidence === 'medium') {
-    visaScore = Math.round(visaScore * 0.75);
-    if (visaStatus === 'ok') {
-      visaStatus = 'warning';
-      warnings.push('Visa information from limited sources - verify with official embassy');
-    }
-  } else if (visaConfidence === 'low') {
-    visaScore = Math.min(Math.round(visaScore * 0.4), 10); // Cap at 10/30 max
-    visaStatus = 'warning';
-    warnings.push('Visa information requires verification - check official sources before booking');
-  }
-
-  // Safety: 0-25 points
-  let safetyScore: number;
-  let safetyStatus: 'ok' | 'warning' | 'blocker';
-
-  if (safety.status === 'safe') {
-    safetyScore = 25;
-    safetyStatus = 'ok';
-  } else if (safety.status === 'caution') {
-    safetyScore = 15;
-    safetyStatus = 'warning';
-    warnings.push(`Exercise caution: ${safety.reason}`);
-  } else {
-    safetyScore = 5;
-    safetyStatus = 'blocker';
-    blockers.push(`Safety concern: ${safety.reason}`);
-  }
-
-  // Budget: 0-20 points
-  let budgetScore: number;
-  let budgetStatus: 'ok' | 'warning' | 'blocker';
-
-  if (budget.status === 'ok' || budget.status === 'under') {
-    budgetScore = 20;
-    budgetStatus = 'ok';
-  } else if (budget.status === 'tight') {
-    budgetScore = 12;
-    budgetStatus = 'warning';
-    warnings.push(`Budget is tight: ${budget.reason}`);
-  } else {
-    budgetScore = 5;
-    budgetStatus = 'blocker';
-    blockers.push(`Budget insufficient: ${budget.reason}`);
-  }
-
-  const totalScore = accessibilityScore + visaScore + safetyScore + budgetScore;
-
-  // Determine verdict and summary
-  let verdict: 'GO' | 'POSSIBLE' | 'DIFFICULT' | 'NO';
-  let summary: string;
-
-  if (totalScore >= 80) {
-    verdict = 'GO';
-    summary = "You're all set! Book with confidence.";
-  } else if (totalScore >= 60) {
-    verdict = 'POSSIBLE';
-    summary = 'You can go! Address the warnings below.';
-  } else if (totalScore >= 40) {
-    verdict = 'DIFFICULT';
-    summary = 'Significant hurdles. Review blockers carefully.';
-  } else {
-    verdict = 'NO';
-    summary = 'This trip is not recommended. See alternatives.';
-  }
-
-  // Cap verdict at POSSIBLE for low confidence corridors
-  // We can't confidently say GO when visa data isn't verified
-  if (visaConfidence === 'low' && verdict === 'GO') {
-    verdict = 'POSSIBLE';
-    summary = 'Trip looks feasible, but verify visa requirements with official sources before booking.';
-  }
-
-  return {
-    score: totalScore,
-    verdict,
-    summary,
-    breakdown: {
-      accessibility: { score: accessibilityScore, status: accessibilityStatus, reason: accessibility.reason },
-      visa: { score: visaScore, status: visaStatus, reason: visa.reason, timingOk },
-      safety: { score: safetyScore, status: safetyStatus, reason: safety.reason },
-      budget: { score: budgetScore, status: budgetStatus, reason: budget.reason }
-    },
-    blockers,
-    warnings
-  };
-}
-
-/**
- * Calculate entry costs (visa + insurance) for the trip
- */
-function calculateEntryCosts(
-  visaRequired: boolean,
-  visaCostPerPerson: number,
-  travelers: { adults: number; children: number; infants: number },
-  tripDurationDays: number,
-  currency: string,
-  currencySymbol: string
-): EntryCosts {
-  // Visa costs (usually adults and children need visas, infants sometimes free)
-  const travelersNeedingVisa = visaRequired
-    ? travelers.adults + travelers.children
-    : 0;
-
-  const totalVisaCost = visaCostPerPerson * travelersNeedingVisa;
-
-  // Insurance estimate based on currency/region
-  // Rough estimate: ~$1.5-2 per person per day
-  const allTravelers = travelers.adults + travelers.children + travelers.infants;
-
-  // Adjust insurance rate by currency (approximate local rates)
-  const insuranceRates: Record<string, number> = {
-    'USD': 2.00, 'EUR': 1.80, 'GBP': 1.60, 'INR': 150, 'JPY': 250,
-    'AUD': 2.50, 'CAD': 2.20, 'SGD': 2.50, 'AED': 7.50, 'THB': 60,
-  };
-  const dailyRate = insuranceRates[currency] || 2.00;
-  const insuranceCost = Math.round(dailyRate * allTravelers * tripDurationDays);
-
-  return {
-    visa: {
-      required: visaRequired,
-      costPerPerson: visaCostPerPerson,
-      totalCost: totalVisaCost,
-      note: visaRequired
-        ? `${currencySymbol}${visaCostPerPerson.toLocaleString()} × ${travelersNeedingVisa} travelers`
-        : 'No visa required',
-      affiliateLink: visaRequired ? AFFILIATE_CONFIG.visa.ivisa : undefined,
-    },
-    insurance: {
-      required: false, // Most destinations don't require it
-      recommended: true,
-      estimatedCost: insuranceCost,
-      note: `${tripDurationDays} days coverage for ${allTravelers} travelers`,
-      affiliateLink: AFFILIATE_CONFIG.insurance.safetywing,
-    },
-    total: totalVisaCost + insuranceCost
-  };
-}
-
-/**
- * Generate action items checklist based on trip requirements
- */
-function generateActionItems(
-  visaDetails: { required: boolean; type?: string; processingDays?: { minimum: number; maximum: number }; cost?: number },
-  entryCosts: EntryCosts,
-  tripCosts: { flights?: number; accommodation?: number },
-  currencySymbol: string,
-  destination: string
-): ActionItem[] {
-  const items: ActionItem[] = [];
-  let id = 1;
-
-  // Visa action item (high priority if required)
-  if (visaDetails.required) {
-    const processingTime = visaDetails.processingDays
-      ? `${visaDetails.processingDays.minimum}-${visaDetails.processingDays.maximum} days processing`
-      : 'Processing time varies';
-
-    items.push({
-      id: `action-${id++}`,
-      title: 'Apply for visa',
-      description: `${visaDetails.type === 'e_visa' ? 'Apply online' : 'Visit embassy/VFS'} for ${destination}`,
-      priority: 'high',
-      dueInfo: processingTime,
-      estimatedCost: entryCosts.visa.costPerPerson > 0
-        ? `${currencySymbol}${entryCosts.visa.costPerPerson.toLocaleString()}/person`
-        : undefined,
-      affiliateLink: AFFILIATE_CONFIG.visa.ivisa,
-      affiliateLabel: 'Apply with iVisa',
-      completed: false,
-    });
-  }
-
-  // Insurance action item
-  items.push({
-    id: `action-${id++}`,
-    title: 'Get travel insurance',
-    description: 'Protect your trip with comprehensive coverage',
-    priority: visaDetails.required ? 'medium' : 'high',
-    dueInfo: 'Before departure',
-    estimatedCost: entryCosts.insurance.estimatedCost > 0
-      ? `~${currencySymbol}${entryCosts.insurance.estimatedCost.toLocaleString()}`
-      : undefined,
-    affiliateLink: AFFILIATE_CONFIG.insurance.safetywing,
-    affiliateLabel: 'Get SafetyWing',
-    completed: false,
-  });
-
-  // Flights action item
-  items.push({
-    id: `action-${id++}`,
-    title: 'Book flights',
-    description: 'Compare prices and book your flights',
-    priority: 'high',
-    estimatedCost: tripCosts.flights
-      ? `~${currencySymbol}${tripCosts.flights.toLocaleString()}`
-      : 'Compare prices',
-    affiliateLink: AFFILIATE_CONFIG.flights.skyscanner,
-    affiliateLabel: 'Compare on Skyscanner',
-    completed: false,
-  });
-
-  // Accommodation action item
-  items.push({
-    id: `action-${id++}`,
-    title: 'Book accommodation',
-    description: 'Reserve your hotels or vacation rentals',
-    priority: 'medium',
-    estimatedCost: tripCosts.accommodation
-      ? `~${currencySymbol}${tripCosts.accommodation.toLocaleString()}`
-      : 'See options',
-    affiliateLink: AFFILIATE_CONFIG.hotels.booking,
-    affiliateLabel: 'Browse on Booking.com',
-    completed: false,
-  });
-
-  return items;
-}
+// NOTE: calculateVisaTiming, calculateCertaintyScore, calculateEntryCosts, generateActionItems
+// have been removed - these functions were unused and duplicated client-side logic.
 
 // Initialize AI client
 let openai: OpenAI | null = null;
@@ -1359,823 +683,15 @@ async function getExchangeRates(): Promise<Record<string, number>> {
   return FALLBACK_RATES;
 }
 
-// Convert USD to target currency (async version)
-async function convertFromUSDAsync(amountUSD: number, targetCurrency: string): Promise<number> {
-  const rates = await getExchangeRates();
-  const rate = rates[targetCurrency] || FALLBACK_RATES[targetCurrency] || 1;
-  return Math.round(amountUSD * rate);
-}
-
 // Sync version using cached rates (for use in loops)
 function convertFromUSD(amountUSD: number, targetCurrency: string, rates: Record<string, number>): number {
   const rate = rates[targetCurrency] || FALLBACK_RATES[targetCurrency] || 1;
   return Math.round(amountUSD * rate);
 }
 
-// Convert from local currency to USD
-function convertToUSD(amount: number, sourceCurrency: string, rates: Record<string, number>): number {
-  if (sourceCurrency === 'USD') return amount;
-  const rate = rates[sourceCurrency] || FALLBACK_RATES[sourceCurrency] || 1;
-  return Math.round(amount / rate);
-}
-
-// ============ SMART TRANSPORT SYSTEM ============
-// Industry-standard transport recommendations based on regions, countries, and travel patterns
-
-// Country to Region mapping (covers all countries worldwide)
-const COUNTRY_REGIONS: Record<string, string> = {
-  // South Asia
-  'india': 'south_asia', 'pakistan': 'south_asia', 'bangladesh': 'south_asia', 'sri lanka': 'south_asia',
-  'nepal': 'south_asia', 'bhutan': 'south_asia', 'maldives': 'south_asia', 'afghanistan': 'south_asia',
-  // Southeast Asia
-  'thailand': 'southeast_asia', 'vietnam': 'southeast_asia', 'indonesia': 'southeast_asia', 'malaysia': 'southeast_asia',
-  'philippines': 'southeast_asia', 'singapore': 'southeast_asia', 'myanmar': 'southeast_asia', 'cambodia': 'southeast_asia',
-  'laos': 'southeast_asia', 'brunei': 'southeast_asia', 'timor-leste': 'southeast_asia',
-  // East Asia
-  'japan': 'east_asia', 'china': 'east_asia', 'south korea': 'east_asia', 'korea': 'east_asia',
-  'taiwan': 'east_asia', 'hong kong': 'east_asia', 'macau': 'east_asia', 'mongolia': 'east_asia',
-  // Middle East
-  'uae': 'middle_east', 'united arab emirates': 'middle_east', 'saudi arabia': 'middle_east', 'qatar': 'middle_east',
-  'kuwait': 'middle_east', 'bahrain': 'middle_east', 'oman': 'middle_east', 'israel': 'middle_east',
-  'jordan': 'middle_east', 'lebanon': 'middle_east', 'turkey': 'middle_east', 'iran': 'middle_east', 'iraq': 'middle_east',
-  // Western Europe
-  'uk': 'western_europe', 'united kingdom': 'western_europe', 'england': 'western_europe', 'scotland': 'western_europe',
-  'france': 'western_europe', 'germany': 'western_europe', 'italy': 'western_europe', 'spain': 'western_europe',
-  'portugal': 'western_europe', 'netherlands': 'western_europe', 'belgium': 'western_europe', 'switzerland': 'western_europe',
-  'austria': 'western_europe', 'ireland': 'western_europe', 'luxembourg': 'western_europe', 'monaco': 'western_europe',
-  // Northern Europe
-  'sweden': 'northern_europe', 'norway': 'northern_europe', 'denmark': 'northern_europe', 'finland': 'northern_europe',
-  'iceland': 'northern_europe', 'estonia': 'northern_europe', 'latvia': 'northern_europe', 'lithuania': 'northern_europe',
-  // Eastern Europe
-  'poland': 'eastern_europe', 'czech republic': 'eastern_europe', 'czechia': 'eastern_europe', 'hungary': 'eastern_europe',
-  'romania': 'eastern_europe', 'bulgaria': 'eastern_europe', 'ukraine': 'eastern_europe', 'russia': 'eastern_europe',
-  'greece': 'eastern_europe', 'croatia': 'eastern_europe', 'slovenia': 'eastern_europe', 'slovakia': 'eastern_europe',
-  'serbia': 'eastern_europe', 'bosnia': 'eastern_europe', 'albania': 'eastern_europe', 'macedonia': 'eastern_europe',
-  // North America
-  'usa': 'north_america', 'united states': 'north_america', 'america': 'north_america',
-  'canada': 'north_america', 'mexico': 'north_america',
-  // Central America & Caribbean
-  'costa rica': 'central_america', 'panama': 'central_america', 'guatemala': 'central_america', 'belize': 'central_america',
-  'cuba': 'caribbean', 'jamaica': 'caribbean', 'bahamas': 'caribbean', 'dominican republic': 'caribbean',
-  'puerto rico': 'caribbean', 'barbados': 'caribbean', 'trinidad': 'caribbean',
-  // South America
-  'brazil': 'south_america', 'argentina': 'south_america', 'chile': 'south_america', 'peru': 'south_america',
-  'colombia': 'south_america', 'ecuador': 'south_america', 'bolivia': 'south_america', 'venezuela': 'south_america',
-  'uruguay': 'south_america', 'paraguay': 'south_america',
-  // Oceania
-  'australia': 'oceania', 'new zealand': 'oceania', 'fiji': 'oceania', 'papua new guinea': 'oceania',
-  // Africa
-  'south africa': 'africa', 'egypt': 'africa', 'morocco': 'africa', 'kenya': 'africa', 'tanzania': 'africa',
-  'nigeria': 'africa', 'ghana': 'africa', 'ethiopia': 'africa', 'tunisia': 'africa', 'mauritius': 'africa',
-  'seychelles': 'africa', 'zimbabwe': 'africa', 'botswana': 'africa', 'namibia': 'africa',
-};
-
-// Regional transport characteristics (industry standard)
-interface RegionalTransport {
-  intraCityOptions: string[];
-  intraCityNote: string;
-  hasGoodRailNetwork: boolean;
-  hasBudgetBuses: boolean;
-  avgDomesticFlightCostUSD: number;
-  trainCostPerKmUSD: number;
-  busCostPerKmUSD: number;
-  rideshareAvailable: boolean;
-  rideshareApps: string[];
-}
-
-const REGIONAL_TRANSPORT: Record<string, RegionalTransport> = {
-  'south_asia': {
-    intraCityOptions: ['Metro/Subway', 'Auto-rickshaw/Tuk-tuk', 'Ola/Uber', 'Local bus', 'Local train', 'Cycle rickshaw'],
-    intraCityNote: 'Auto-rickshaws are iconic and cheap. Ola/Uber widely available. Metro in major cities. Always negotiate or use meters.',
-    hasGoodRailNetwork: true,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 80,
-    trainCostPerKmUSD: 0.02,
-    busCostPerKmUSD: 0.01,
-    rideshareAvailable: true,
-    rideshareApps: ['Ola', 'Uber', 'Rapido']
-  },
-  'southeast_asia': {
-    intraCityOptions: ['Grab/Gojek', 'BTS/MRT Metro', 'Tuk-tuk/Tricycle', 'Motorbike taxi', 'Songthaew/Jeepney', 'Local bus'],
-    intraCityNote: 'Grab app works across SE Asia. Motorbike taxis are fast and cheap. Negotiate prices for tuk-tuks. BTS/MRT excellent in Bangkok, Singapore, KL.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 60,
-    trainCostPerKmUSD: 0.03,
-    busCostPerKmUSD: 0.015,
-    rideshareAvailable: true,
-    rideshareApps: ['Grab', 'Gojek', 'Bolt']
-  },
-  'east_asia': {
-    intraCityOptions: ['Metro/Subway', 'JR/Local trains', 'Bus', 'Taxi', 'DiDi/Kakao'],
-    intraCityNote: 'World-class metro systems. Get IC cards (Suica, Octopus, T-money). JR Pass for Japan. Trains are punctual and clean.',
-    hasGoodRailNetwork: true,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 120,
-    trainCostPerKmUSD: 0.15,
-    busCostPerKmUSD: 0.05,
-    rideshareAvailable: true,
-    rideshareApps: ['DiDi', 'Kakao T', 'Japan Taxi']
-  },
-  'middle_east': {
-    intraCityOptions: ['Metro', 'Taxi', 'Uber/Careem', 'Bus', 'Water taxi'],
-    intraCityNote: 'Modern metro in Dubai, Doha, Riyadh. Careem and Uber widely used. Taxis are metered and AC. Water taxis in coastal cities.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 100,
-    trainCostPerKmUSD: 0.08,
-    busCostPerKmUSD: 0.03,
-    rideshareAvailable: true,
-    rideshareApps: ['Careem', 'Uber', 'Bolt']
-  },
-  'western_europe': {
-    intraCityOptions: ['Metro/Underground', 'Tram', 'Bus', 'Uber/Bolt', 'Bike rental', 'E-scooter'],
-    intraCityNote: 'Excellent public transport. Get day passes for unlimited travel. Bike-friendly cities. High-speed trains between cities (TGV, Eurostar, ICE).',
-    hasGoodRailNetwork: true,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 80,
-    trainCostPerKmUSD: 0.12,
-    busCostPerKmUSD: 0.06,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'Bolt', 'FREE NOW']
-  },
-  'northern_europe': {
-    intraCityOptions: ['Metro/T-bana', 'Tram', 'Bus', 'Ferry', 'Bike rental', 'Taxi'],
-    intraCityNote: 'Efficient public transport but expensive. Consider city passes. Ferries common in Scandinavia. Cycling infrastructure is excellent.',
-    hasGoodRailNetwork: true,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 100,
-    trainCostPerKmUSD: 0.15,
-    busCostPerKmUSD: 0.08,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'Bolt', 'Yango']
-  },
-  'eastern_europe': {
-    intraCityOptions: ['Metro', 'Tram', 'Bus', 'Taxi', 'Bolt/Uber', 'Marshrutka'],
-    intraCityNote: 'Affordable public transport. Metro in major cities. Marshrutkas (shared minibuses) common. Bolt often cheaper than Uber.',
-    hasGoodRailNetwork: true,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 60,
-    trainCostPerKmUSD: 0.05,
-    busCostPerKmUSD: 0.02,
-    rideshareAvailable: true,
-    rideshareApps: ['Bolt', 'Uber', 'Yandex']
-  },
-  'north_america': {
-    intraCityOptions: ['Uber/Lyft', 'Subway/Metro', 'Bus', 'Taxi', 'Rental car', 'E-scooter'],
-    intraCityNote: 'Rideshare is dominant. Public transit varies by city (excellent in NYC, limited elsewhere). Rental car often needed outside major cities.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 150,
-    trainCostPerKmUSD: 0.20,
-    busCostPerKmUSD: 0.08,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'Lyft']
-  },
-  'south_america': {
-    intraCityOptions: ['Metro/Subte', 'Bus/Colectivo', 'Uber/Cabify', 'Taxi', 'Remis'],
-    intraCityNote: 'Metro in major cities (Buenos Aires, Santiago, São Paulo). Buses are extensive. Uber/Cabify widely used. Negotiate taxi fares.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 100,
-    trainCostPerKmUSD: 0.04,
-    busCostPerKmUSD: 0.02,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'Cabify', '99']
-  },
-  'central_america': {
-    intraCityOptions: ['Taxi', 'Uber', 'Chicken bus', 'Shuttle', 'Tuk-tuk'],
-    intraCityNote: 'Chicken buses are cheap but crowded. Tourist shuttles between cities. Uber in capitals. Always negotiate taxi fares.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 80,
-    trainCostPerKmUSD: 0.05,
-    busCostPerKmUSD: 0.02,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'InDriver']
-  },
-  'caribbean': {
-    intraCityOptions: ['Taxi', 'Local bus', 'Rental car', 'Water taxi', 'Scooter rental'],
-    intraCityNote: 'Taxis are primary transport. Negotiate fares beforehand. Rental cars give freedom. Water taxis between islands.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: false,
-    avgDomesticFlightCostUSD: 120,
-    trainCostPerKmUSD: 0,
-    busCostPerKmUSD: 0.03,
-    rideshareAvailable: false,
-    rideshareApps: []
-  },
-  'oceania': {
-    intraCityOptions: ['Train', 'Bus', 'Uber/Ola', 'Tram', 'Ferry', 'Rental car'],
-    intraCityNote: 'Good public transport in cities. Opal/Myki cards for travel. Rental car essential for road trips. Ferries for harbor cities.',
-    hasGoodRailNetwork: true,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 120,
-    trainCostPerKmUSD: 0.10,
-    busCostPerKmUSD: 0.05,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'Ola', 'DiDi']
-  },
-  'africa': {
-    intraCityOptions: ['Taxi', 'Uber/Bolt', 'Minibus/Matatu', 'Bus', 'Boda-boda/Okada'],
-    intraCityNote: 'Uber/Bolt in major cities. Minibuses are cheapest. Motorbike taxis (boda-boda) for traffic. Always negotiate fares.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 150,
-    trainCostPerKmUSD: 0.03,
-    busCostPerKmUSD: 0.015,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'Bolt', 'SafeBoda']
-  },
-  'default': {
-    intraCityOptions: ['Taxi', 'Rideshare app', 'Public bus', 'Metro (if available)', 'Rental car'],
-    intraCityNote: 'Check local rideshare apps. Public transport is usually cheapest. Negotiate taxi fares where meters are not used.',
-    hasGoodRailNetwork: false,
-    hasBudgetBuses: true,
-    avgDomesticFlightCostUSD: 100,
-    trainCostPerKmUSD: 0.05,
-    busCostPerKmUSD: 0.03,
-    rideshareAvailable: true,
-    rideshareApps: ['Uber', 'Local apps']
-  }
-};
-
-// Extract country from location string (handles "City, Country" format)
-function extractCountry(location: string): string {
-  const parts = location.split(',').map(p => p.trim().toLowerCase());
-  // Try last part first (usually country)
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const part = parts[i];
-    if (COUNTRY_REGIONS[part]) return part;
-    // Check for partial matches
-    for (const country of Object.keys(COUNTRY_REGIONS)) {
-      if (part.includes(country) || country.includes(part)) return country;
-    }
-  }
-  return parts[parts.length - 1] || 'unknown';
-}
-
-// Get region for a location
-function getRegion(location: string): string {
-  const country = extractCountry(location);
-  return COUNTRY_REGIONS[country] || 'default';
-}
-
-// Check if two locations are in the same country
-function isSameCountry(origin: string, destination: string): boolean {
-  return extractCountry(origin) === extractCountry(destination);
-}
-
-// Check if two locations are in the same region
-function isSameRegion(origin: string, destination: string): boolean {
-  return getRegion(origin) === getRegion(destination);
-}
-
-// Get regional transport info
-function getRegionalTransport(location: string): RegionalTransport {
-  const region = getRegion(location);
-  return REGIONAL_TRANSPORT[region] || REGIONAL_TRANSPORT['default'];
-}
-
-// Inter-city transport options based on distance and region
-interface TransportOption {
-  mode: string;
-  priceRangeUSD: { budget: number; standard: number; luxury: number };
-  durationHours: number;
-  recommended: boolean;
-  tags: ('cheapest' | 'fastest' | 'best_value' | 'most_comfortable')[];
-  note: string;
-}
-
-interface TransportRecommendation {
-  primaryMode: string;
-  allOptions: TransportOption[];
-  isDomestic: boolean;
-  isSameRegion: boolean;
-  distanceCategory: 'short' | 'medium' | 'long' | 'intercontinental';
-  intraCityTransport: { options: string[]; note: string; rideshareApps: string[] };
-  recommendation: string;
-  quickSummary: {
-    cheapest: { mode: string; priceUSD: number; duration: string };
-    fastest: { mode: string; priceUSD: number; duration: string };
-  };
-}
-
-// Known short-distance city pairs (bidirectional) - cities within ~300km
-const SHORT_DISTANCE_PAIRS: Array<[string, string]> = [
-  // India
-  ['delhi', 'agra'], ['delhi', 'jaipur'], ['mumbai', 'pune'], ['mumbai', 'lonavala'],
-  ['bangalore', 'mysore'], ['chennai', 'pondicherry'], ['hyderabad', 'warangal'],
-  ['kolkata', 'digha'], ['ahmedabad', 'vadodara'], ['lucknow', 'kanpur'],
-  // Europe - Neighboring cities
-  ['paris', 'brussels'], ['paris', 'amsterdam'], ['amsterdam', 'brussels'],
-  ['london', 'birmingham'], ['london', 'oxford'], ['london', 'cambridge'],
-  ['rome', 'florence'], ['rome', 'naples'], ['milan', 'turin'], ['venice', 'florence'],
-  ['berlin', 'prague'], ['munich', 'salzburg'], ['vienna', 'prague'], ['vienna', 'bratislava'],
-  ['barcelona', 'valencia'], ['madrid', 'toledo'], ['madrid', 'segovia'],
-  ['zurich', 'geneva'], ['zurich', 'milan'],
-  // UK
-  ['london', 'manchester'], ['london', 'bristol'], ['manchester', 'liverpool'],
-  ['edinburgh', 'glasgow'],
-  // Japan
-  ['tokyo', 'yokohama'], ['osaka', 'kyoto'], ['osaka', 'kobe'], ['nagoya', 'osaka'],
-  // USA (close pairs)
-  ['san francisco', 'san jose'], ['los angeles', 'san diego'], ['boston', 'new york'],
-  ['washington', 'baltimore'], ['philadelphia', 'new york'], ['dallas', 'austin'],
-  // Southeast Asia
-  ['singapore', 'kuala lumpur'], ['bangkok', 'pattaya'], ['hanoi', 'halong'],
-  // China
-  ['shanghai', 'hangzhou'], ['beijing', 'tianjin'], ['guangzhou', 'shenzhen'],
-  ['hong kong', 'shenzhen'], ['hong kong', 'guangzhou'],
-  // Australia
-  ['sydney', 'canberra'], ['melbourne', 'geelong'], ['brisbane', 'gold coast'],
-];
-
-// Medium distance pairs (~300-600km) - good for high-speed rail
-const MEDIUM_DISTANCE_PAIRS: Array<[string, string]> = [
-  // India
-  ['delhi', 'chandigarh'], ['mumbai', 'goa'], ['mumbai', 'ahmedabad'], ['bangalore', 'chennai'],
-  ['delhi', 'lucknow'], ['kolkata', 'patna'], ['hyderabad', 'bangalore'], ['hyderabad', 'bengaluru'],
-  ['hyderabad', 'chennai'], ['hyderabad', 'mumbai'], ['delhi', 'jaipur'], ['bangalore', 'goa'],
-  ['chennai', 'bangalore'], ['pune', 'bangalore'], ['ahmedabad', 'pune'],
-  // Europe
-  ['paris', 'lyon'], ['paris', 'london'], ['london', 'edinburgh'], ['london', 'paris'],
-  ['berlin', 'munich'], ['berlin', 'hamburg'], ['madrid', 'barcelona'],
-  ['rome', 'milan'], ['amsterdam', 'paris'], ['brussels', 'amsterdam'],
-  // Japan
-  ['tokyo', 'osaka'], ['tokyo', 'nagoya'], ['osaka', 'hiroshima'],
-  // USA
-  ['new york', 'boston'], ['new york', 'washington'], ['chicago', 'detroit'],
-  ['los angeles', 'las vegas'], ['san francisco', 'los angeles'],
-  // China
-  ['shanghai', 'nanjing'], ['beijing', 'shanghai'], ['guangzhou', 'hong kong'],
-  // Australia
-  ['sydney', 'melbourne'], ['brisbane', 'sydney'],
-];
-
-// Extract city name from location string for matching
-function extractCity(location: string): string {
-  const parts = location.toLowerCase().split(',');
-  return parts[0].trim()
-    .replace(/city$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// Check if two cities are a known short/medium distance pair
-function checkKnownDistance(origin: string, destination: string): 'short' | 'medium' | null {
-  const originCity = extractCity(origin);
-  const destCity = extractCity(destination);
-
-  // Check short distance pairs
-  for (const [city1, city2] of SHORT_DISTANCE_PAIRS) {
-    if ((originCity.includes(city1) || city1.includes(originCity)) &&
-        (destCity.includes(city2) || city2.includes(destCity))) return 'short';
-    if ((originCity.includes(city2) || city2.includes(originCity)) &&
-        (destCity.includes(city1) || city1.includes(destCity))) return 'short';
-  }
-
-  // Check medium distance pairs
-  for (const [city1, city2] of MEDIUM_DISTANCE_PAIRS) {
-    if ((originCity.includes(city1) || city1.includes(originCity)) &&
-        (destCity.includes(city2) || city2.includes(destCity))) return 'medium';
-    if ((originCity.includes(city2) || city2.includes(originCity)) &&
-        (destCity.includes(city1) || city1.includes(destCity))) return 'medium';
-  }
-
-  return null;
-}
-
-// Estimate distance category based on travel context (no coordinates needed)
-function estimateDistanceCategory(origin: string, destination: string): 'short' | 'medium' | 'long' | 'intercontinental' {
-  const sameCountry = isSameCountry(origin, destination);
-  const sameRegion = isSameRegion(origin, destination);
-
-  // First check if this is a known distance pair
-  const knownDistance = checkKnownDistance(origin, destination);
-  if (knownDistance) return knownDistance;
-
-  if (!sameCountry && !sameRegion) return 'intercontinental';
-
-  // Same region but different countries - check for good rail connections
-  if (!sameCountry && sameRegion) {
-    const region = getRegion(origin);
-    // European countries with excellent rail connectivity
-    if (region === 'western_europe' || region === 'eastern_europe') {
-      return 'medium'; // Train-friendly distance in Europe
-    }
-    return 'long';
-  }
-
-  // Same country - check if likely short/medium/long based on country size
-  const country = extractCountry(origin);
-  const largeCountries = ['usa', 'united states', 'canada', 'russia', 'china', 'india', 'brazil', 'australia'];
-  const mediumCountries = ['france', 'germany', 'spain', 'italy', 'japan', 'mexico', 'argentina', 'south africa'];
-
-  // For large countries, default to long (but known pairs are already handled above)
-  if (largeCountries.includes(country)) return 'long';
-  if (mediumCountries.includes(country)) return 'medium';
-  return 'medium'; // Default for smaller countries
-}
-
-function getTransportRecommendations(
-  origin: string,
-  destination: string,
-  budget: number,
-  currency: string,
-  groupSize: number
-): TransportRecommendation {
-  const isDomestic = isSameCountry(origin, destination);
-  const sameRegion = isSameRegion(origin, destination);
-  const distanceCategory = estimateDistanceCategory(origin, destination);
-
-  // Get regional transport info for destination
-  const destRegionalTransport = getRegionalTransport(destination);
-  const originRegionalTransport = getRegionalTransport(origin);
-
-  const intraCityTransport = {
-    options: destRegionalTransport.intraCityOptions,
-    note: destRegionalTransport.intraCityNote,
-    rideshareApps: destRegionalTransport.rideshareApps
-  };
-
-  const options: TransportOption[] = [];
-  let primaryMode = 'flight';
-  let recommendation = '';
-
-  // Build transport options based on distance category and regional characteristics
-  // Estimate distance in km based on category
-  const estimatedDistanceKm = distanceCategory === 'short' ? 200 : distanceCategory === 'medium' ? 500 : 1000;
-
-  if (distanceCategory === 'short' || (isDomestic && distanceCategory === 'medium')) {
-    // Short/medium domestic - prioritize ground transport
-
-    // Calculate train price using regional per-km cost
-    const trainBudgetUSD = Math.max(5, estimatedDistanceKm * destRegionalTransport.trainCostPerKmUSD);
-    const busBudgetUSD = Math.max(3, estimatedDistanceKm * destRegionalTransport.busCostPerKmUSD);
-
-    if (destRegionalTransport.hasGoodRailNetwork) {
-      primaryMode = 'train';
-      options.push({
-        mode: 'train',
-        priceRangeUSD: {
-          budget: trainBudgetUSD * groupSize,
-          standard: trainBudgetUSD * 2 * groupSize,  // 2AC class
-          luxury: trainBudgetUSD * 4 * groupSize     // 1AC or premium
-        },
-        durationHours: distanceCategory === 'short' ? 2 : 5,
-        recommended: true,
-        tags: [],
-        note: 'Comfortable and scenic. Book in advance for best prices.'
-      });
-    }
-
-    if (destRegionalTransport.hasBudgetBuses) {
-      options.push({
-        mode: 'bus',
-        priceRangeUSD: {
-          budget: busBudgetUSD * groupSize,
-          standard: busBudgetUSD * 2 * groupSize,    // AC/Volvo
-          luxury: busBudgetUSD * 3.5 * groupSize     // Luxury sleeper
-        },
-        durationHours: distanceCategory === 'short' ? 3 : 7,
-        recommended: !destRegionalTransport.hasGoodRailNetwork,
-        tags: [],
-        note: 'Most economical option. Overnight buses save hotel costs.'
-      });
-    }
-
-    // Taxi/cab - calculate based on distance and regional rates
-    const taxiRatePerKm = 0.15; // ~₹12/km for India, slightly higher for other regions
-    const taxiBudgetUSD = Math.max(15, estimatedDistanceKm * taxiRatePerKm);
-
-    options.push({
-      mode: destRegionalTransport.rideshareAvailable ? `${destRegionalTransport.rideshareApps[0] || 'Taxi'}/Cab` : 'Taxi/Cab',
-      priceRangeUSD: {
-        budget: taxiBudgetUSD * groupSize,
-        standard: taxiBudgetUSD * 1.3 * groupSize,   // Peak/comfort
-        luxury: taxiBudgetUSD * 2 * groupSize        // Premium sedan
-      },
-      durationHours: distanceCategory === 'short' ? 1.5 : 4,
-      recommended: false,
-      tags: [],
-      note: 'Door-to-door convenience. Best for groups or heavy luggage.'
-    });
-
-    // Add flight option for medium distances
-    if (distanceCategory === 'medium') {
-      options.push({
-        mode: 'flight',
-        priceRangeUSD: {
-          budget: destRegionalTransport.avgDomesticFlightCostUSD * groupSize * 0.7,
-          standard: destRegionalTransport.avgDomesticFlightCostUSD * groupSize,
-          luxury: destRegionalTransport.avgDomesticFlightCostUSD * groupSize * 1.8
-        },
-        durationHours: 1.5,
-        recommended: false,
-        tags: [],
-        note: 'Fastest option. Consider if time is limited.'
-      });
-    }
-
-    recommendation = destRegionalTransport.hasGoodRailNetwork
-      ? `${isDomestic ? 'Domestic' : 'Regional'} journey. Train recommended for comfort and value.`
-      : `${isDomestic ? 'Domestic' : 'Regional'} journey. Bus is most economical, taxi for convenience.`;
-
-  } else if (distanceCategory === 'long') {
-    // Long domestic/regional - flight or overnight train
-
-    // Calculate long-distance prices using regional per-km costs (for ~1000km journey)
-    const longTrainBudgetUSD = Math.max(15, estimatedDistanceKm * destRegionalTransport.trainCostPerKmUSD);
-    const longBusBudgetUSD = Math.max(10, estimatedDistanceKm * destRegionalTransport.busCostPerKmUSD);
-
-    primaryMode = 'flight';
-    options.push({
-      mode: 'flight',
-      priceRangeUSD: {
-        budget: destRegionalTransport.avgDomesticFlightCostUSD * groupSize * 0.7,
-        standard: destRegionalTransport.avgDomesticFlightCostUSD * groupSize,
-        luxury: destRegionalTransport.avgDomesticFlightCostUSD * groupSize * 2
-      },
-      durationHours: 2,
-      recommended: true,
-      tags: [],
-      note: 'Fastest option for long distances. Book early for best prices.'
-    });
-
-    if (isDomestic && destRegionalTransport.hasGoodRailNetwork) {
-      options.push({
-        mode: 'train (overnight/express)',
-        priceRangeUSD: {
-          budget: longTrainBudgetUSD * groupSize,
-          standard: longTrainBudgetUSD * 2 * groupSize,   // 2AC sleeper
-          luxury: longTrainBudgetUSD * 4 * groupSize      // 1AC
-        },
-        durationHours: 10,
-        recommended: false,
-        tags: [],
-        note: 'Sleeper trains save hotel cost. Great for overnight journeys.'
-      });
-    }
-
-    if (destRegionalTransport.hasBudgetBuses) {
-      options.push({
-        mode: 'bus (overnight)',
-        priceRangeUSD: {
-          budget: longBusBudgetUSD * groupSize,
-          standard: longBusBudgetUSD * 2 * groupSize,     // Volvo sleeper
-          luxury: longBusBudgetUSD * 3 * groupSize        // Luxury sleeper
-        },
-        durationHours: 12,
-        recommended: false,
-        tags: [],
-        note: 'Budget option. Look for luxury/sleeper buses for comfort.'
-      });
-    }
-
-    recommendation = isDomestic
-      ? `Long domestic journey. Flight is fastest, overnight train is budget-friendly.`
-      : `Long regional journey. Flight recommended for time savings.`;
-
-  } else {
-    // Intercontinental - flight only realistically
-
-    primaryMode = 'flight';
-    options.push({
-      mode: 'flight',
-      priceRangeUSD: {
-        budget: 400 * groupSize,
-        standard: 800 * groupSize,
-        luxury: 2500 * groupSize
-      },
-      durationHours: 10,
-      recommended: true,
-      tags: [],
-      note: 'Only practical option for intercontinental travel.'
-    });
-
-    recommendation = `Intercontinental journey. Flight is the only practical option. Book 2-3 months ahead for best prices.`;
-  }
-
-  // Calculate and assign tags: cheapest, fastest, best_value
-  if (options.length > 0) {
-    // Find cheapest (by budget price)
-    const cheapestOption = options.reduce((min, opt) =>
-      opt.priceRangeUSD.budget < min.priceRangeUSD.budget ? opt : min
-    );
-    cheapestOption.tags.push('cheapest');
-
-    // Find fastest
-    const fastestOption = options.reduce((min, opt) =>
-      opt.durationHours < min.durationHours ? opt : min
-    );
-    fastestOption.tags.push('fastest');
-
-    // Best value = good balance of price and time (price/hour ratio)
-    const bestValueOption = options.reduce((best, opt) => {
-      const ratio = opt.priceRangeUSD.budget / opt.durationHours;
-      const bestRatio = best.priceRangeUSD.budget / best.durationHours;
-      return ratio < bestRatio ? opt : best;
-    });
-    if (!bestValueOption.tags.includes('cheapest') && !bestValueOption.tags.includes('fastest')) {
-      bestValueOption.tags.push('best_value');
-    }
-
-    // Most comfortable (usually the luxury option or train)
-    const comfortOption = options.find(o => o.mode.includes('train') && !o.mode.includes('overnight'))
-      || options.find(o => o.mode === 'flight');
-    if (comfortOption && !comfortOption.tags.includes('fastest')) {
-      comfortOption.tags.push('most_comfortable');
-    }
-  }
-
-  // Ensure at least one option is recommended
-  if (!options.some(o => o.recommended) && options.length > 0) {
-    options[0].recommended = true;
-  }
-
-  // Build quick summary for UI
-  const cheapest = options.find(o => o.tags.includes('cheapest')) || options[0];
-  const fastest = options.find(o => o.tags.includes('fastest')) || options[0];
-
-  const formatDuration = (hours: number) => {
-    if (hours < 1) return `${Math.round(hours * 60)} min`;
-    if (hours === Math.floor(hours)) return `${hours}h`;
-    return `${Math.floor(hours)}h ${Math.round((hours % 1) * 60)}m`;
-  };
-
-  return {
-    primaryMode,
-    allOptions: options,
-    isDomestic,
-    isSameRegion: sameRegion,
-    distanceCategory,
-    intraCityTransport,
-    recommendation,
-    quickSummary: {
-      cheapest: {
-        mode: cheapest?.mode || 'flight',
-        priceUSD: cheapest?.priceRangeUSD.budget || 0,
-        duration: formatDuration(cheapest?.durationHours || 0)
-      },
-      fastest: {
-        mode: fastest?.mode || 'flight',
-        priceUSD: fastest?.priceRangeUSD.budget || 0,
-        duration: formatDuration(fastest?.durationHours || 0)
-      }
-    }
-  };
-}
-
-/**
- * Smart Transport Recommendations - Hybrid Approach
- * Uses hardcoded logic for common routes (fast), AI for unusual routes (smart)
- */
-async function getSmartTransportRecommendations(
-  origin: string,
-  destination: string,
-  budget: number,
-  currency: string,
-  groupSize: number,
-  travelStyle: 'budget' | 'standard' | 'luxury' = 'standard'
-): Promise<TransportRecommendation> {
-  // First, get the hardcoded recommendation (instant, always works)
-  const hardcodedRec = getTransportRecommendations(origin, destination, budget, currency, groupSize);
-
-  // Check if this is an "unusual" route that might benefit from AI enhancement
-  const isUnusualRoute = detectUnusualRoute(origin, destination, hardcodedRec);
-
-  if (!isUnusualRoute) {
-    // Common route - hardcoded logic is good enough
-    console.log(`[Transport] Using hardcoded recommendations for ${origin} → ${destination}`);
-    return hardcodedRec;
-  }
-
-  // Unusual route - enhance with AI (but don't block on failure)
-  console.log(`[Transport] Unusual route detected: ${origin} → ${destination}, querying AI...`);
-  try {
-    const aiOptions = await aiGetTransportOptions(origin, destination, travelStyle);
-
-    if (aiOptions.options && aiOptions.options.length > 0) {
-      // Merge AI options with hardcoded ones for best of both
-      const enhancedOptions = mergeTransportOptions(hardcodedRec.allOptions, aiOptions.options, groupSize);
-      console.log(`[Transport] AI enhanced with ${aiOptions.options.length} options`);
-
-      return {
-        ...hardcodedRec,
-        allOptions: enhancedOptions,
-        recommendation: aiOptions.options.find(o => o.recommended)?.note || hardcodedRec.recommendation,
-      };
-    }
-  } catch (error) {
-    console.log(`[Transport] AI enhancement failed, using hardcoded:`, error);
-  }
-
-  // AI failed or no results - return hardcoded (still works!)
-  return hardcodedRec;
-}
-
-/**
- * Detect if a route is "unusual" and might benefit from AI enhancement
- */
-function detectUnusualRoute(origin: string, destination: string, rec: TransportRecommendation): boolean {
-  const originLower = origin.toLowerCase();
-  const destLower = destination.toLowerCase();
-
-  // Routes that are well-covered by hardcoded data (don't need AI)
-  const wellKnownCities = [
-    'paris', 'london', 'tokyo', 'new york', 'dubai', 'singapore', 'bangkok',
-    'rome', 'barcelona', 'amsterdam', 'berlin', 'sydney', 'los angeles',
-    'delhi', 'mumbai', 'beijing', 'shanghai', 'seoul', 'hong kong',
-    'istanbul', 'cairo', 'cape town', 'toronto', 'vancouver', 'chicago'
-  ];
-
-  const originKnown = wellKnownCities.some(city => originLower.includes(city));
-  const destKnown = wellKnownCities.some(city => destLower.includes(city));
-
-  // If both cities are well-known, hardcoded logic is sufficient
-  if (originKnown && destKnown) return false;
-
-  // If we only have 1 option (usually just flight), AI might find more
-  if (rec.allOptions.length <= 1) return true;
-
-  // If the route seems intercontinental but we're not sure
-  if (rec.distanceCategory === 'intercontinental' && !rec.isDomestic) {
-    // Check if it's a common intercontinental route
-    const commonIntercontinental = [
-      ['new york', 'london'], ['new york', 'paris'], ['los angeles', 'tokyo'],
-      ['london', 'dubai'], ['sydney', 'singapore'], ['delhi', 'dubai']
-    ];
-    const isCommon = commonIntercontinental.some(([a, b]) =>
-      (originLower.includes(a) && destLower.includes(b)) ||
-      (originLower.includes(b) && destLower.includes(a))
-    );
-    if (!isCommon) return true;
-  }
-
-  return false;
-}
-
-/**
- * Merge hardcoded and AI transport options
- */
-function mergeTransportOptions(
-  hardcoded: TransportOption[],
-  aiOptions: Array<{ mode: string; duration: string; estimatedCost: number; recommended: boolean; note: string }>,
-  groupSize: number
-): TransportOption[] {
-  const merged = [...hardcoded];
-
-  for (const aiOpt of aiOptions) {
-    // Check if this mode already exists
-    const existing = merged.find(h =>
-      h.mode.toLowerCase().includes(aiOpt.mode.toLowerCase()) ||
-      aiOpt.mode.toLowerCase().includes(h.mode.toLowerCase())
-    );
-
-    if (!existing) {
-      // Parse duration string like "2h 30m" to hours
-      const durationMatch = aiOpt.duration.match(/(\d+)h?\s*(\d+)?m?/);
-      const hours = durationMatch
-        ? parseFloat(durationMatch[1]) + (parseFloat(durationMatch[2] || '0') / 60)
-        : 3;
-
-      // Add new option from AI
-      merged.push({
-        mode: aiOpt.mode,
-        priceRangeUSD: {
-          budget: aiOpt.estimatedCost * groupSize * 0.7,
-          standard: aiOpt.estimatedCost * groupSize,
-          luxury: aiOpt.estimatedCost * groupSize * 1.5,
-        },
-        durationHours: hours,
-        recommended: aiOpt.recommended,
-        tags: ['ai_suggested'],
-        note: aiOpt.note,
-      });
-    }
-  }
-
-  return merged;
-}
-
-// Budget tier multipliers
-const BUDGET_TIERS = {
-  budget: { hotel: 0.6, transport: 0.7, food: 0.7, label: 'Budget' },
-  standard: { hotel: 1.0, transport: 1.0, food: 1.0, label: 'Standard' },
-  luxury: { hotel: 2.0, transport: 1.5, food: 1.5, label: 'Luxury' }
-};
-
-function detectBudgetTier(budget: number, days: number, groupSize: number, currency: string): 'budget' | 'standard' | 'luxury' {
-  // Convert budget to USD equivalent for comparison
-  const budgetPerPersonPerDay = budget / days / groupSize;
-  const rateToUSD = FALLBACK_RATES[currency] || 1;
-  const budgetUSD = budgetPerPersonPerDay / rateToUSD;
-
-  if (budgetUSD < 80) return 'budget';
-  if (budgetUSD > 250) return 'luxury';
-  return 'standard';
-}
+// Transport functions moved to server/services/transportService.ts
+// Import: import * as TransportService from "./services/transportService";
+// Usage: TransportService.getSmartTransportRecommendations()
 
 // ============ ITINERARY CACHE SYSTEM ============
 // Cache stores itinerary templates by destination (without dates)
@@ -3189,21 +1705,6 @@ function safeJsonParse(text: string, fallback: any = {}): any {
   }
 }
 
-// Retry wrapper for AI calls
-async function withRetry<T>(fn: () => Promise<T>, retries = 2, delay = 1000): Promise<T> {
-  let lastError: Error | null = null;
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err as Error;
-      console.log(`[Retry] Attempt ${i + 1} failed, ${retries - i} retries left`);
-      if (i < retries) await new Promise(r => setTimeout(r, delay));
-    }
-  }
-  throw lastError;
-}
-
 // ============================================================================
 // DESTINATION IMAGE FETCHING - Stores AI-fetched image URL for My Trips cards
 // ============================================================================
@@ -3306,9 +1807,9 @@ async function processFeasibilityOnly(tripId: number, input: any) {
                      input.destination.toUpperCase().slice(0, 2);
 
     try {
-      ragVisaFacts = await getVisaFactsFromKnowledge(passportCode, destCode);
+      ragVisaFacts = await VisaService.getVisaFactsFromKnowledge(passportCode, destCode);
       if (ragVisaFacts) {
-        ragVisaDetails = convertVisaFactsToVisaDetails(ragVisaFacts);
+        ragVisaDetails = VisaService.convertVisaFactsToVisaDetails(ragVisaFacts);
         console.log(`[Stage1-RAG] Using cited visa data for ${passportCode} → ${destCode}: ${ragVisaFacts.visaStatus}`);
       }
     } catch (ragError) {
@@ -3658,9 +2159,9 @@ async function processTripInBackground(tripId: number, input: any, skipFeasibili
                      input.destination.toUpperCase().slice(0, 2);
 
     try {
-      ragVisaFacts = await getVisaFactsFromKnowledge(passportCode, destCode);
+      ragVisaFacts = await VisaService.getVisaFactsFromKnowledge(passportCode, destCode);
       if (ragVisaFacts) {
-        ragVisaDetails = convertVisaFactsToVisaDetails(ragVisaFacts);
+        ragVisaDetails = VisaService.convertVisaFactsToVisaDetails(ragVisaFacts);
         console.log(`[RAG] Using cited visa data for ${passportCode} → ${destCode}: ${ragVisaFacts.visaStatus}`);
       }
     } catch (ragError) {
@@ -3733,7 +2234,7 @@ Return JSON:
     // ============================================================================
 
     // If skipFeasibility is true (Stage 2), load existing report instead of running AI check
-    let report: FeasibilityReport;
+    let report!: FeasibilityReport; // Definite assignment - always assigned in both branches
     if (skipFeasibility) {
       console.log(`[Background] Skipping feasibility (Stage 2) - loading existing report...`);
       const existingTrip = await storage.getTrip(tripId);
@@ -3765,7 +2266,7 @@ Return JSON:
                        input.travelStyle === 'standard' ? 'standard' : 'budget';
 
     // SPECULATIVE: Start transport recommendation early (lightweight, fast)
-    const transportRecPromise = getSmartTransportRecommendations(
+    const transportRecPromise = TransportService.getSmartTransportRecommendations(
       originCity || 'Unknown',
       input.destination,
       input.budget,
@@ -3775,7 +2276,7 @@ Return JSON:
     );
 
     // Conditionally run feasibility check or use existing report
-    let transportRec: Awaited<ReturnType<typeof getSmartTransportRecommendations>>;
+    let transportRec: Awaited<ReturnType<typeof TransportService.getSmartTransportRecommendations>>;
 
     if (!skipFeasibility) {
       // Start feasibility check (will complete first, ~2-3 seconds)
@@ -4937,7 +3438,7 @@ ${budgetTier === 'budget' ? 'Focus on FREE attractions, street food, public tran
           selectedTransportNote = `${selectedTransportMode.charAt(0).toUpperCase() + selectedTransportMode.slice(1)} from ${originDisplay} (${transportRec.distanceCategory} distance)`;
 
           // Mark the selected option
-          transportOptions.forEach(opt => {
+          transportOptions.forEach((opt: any) => {
             opt.selected = opt.mode === selectedTransportMode;
           });
         }
@@ -5003,7 +3504,7 @@ Include 2-3 apps per mode and 2-3 mobile options. Use REAL apps and URLs for ${d
                 ]}
               ],
               mobilePlans: [
-                { provider: 'Airalo', plan: 'eSIM', price: 'From $5', data: '1GB', note: 'Works in 190+ countries' }
+                { provider: 'Airalo', plan: 'eSIM', price: 'From $5', note: 'Works in 190+ countries (1GB+)' }
               ]
             };
           }
@@ -5011,7 +3512,7 @@ Include 2-3 apps per mode and 2-3 mobile options. Use REAL apps and URLs for ${d
 
         // Get booking apps in parallel (non-blocking for faster response)
         const transportModes = transportOptions.map(opt => opt.mode.split(' ')[0]); // Extract base mode (bus, train, flight)
-        const uniqueModes = [...new Set(transportModes)];
+        const uniqueModes = Array.from(new Set(transportModes));
         const bookingInfo = await getBookingAppsAndMobileInfo(input.destination, uniqueModes);
 
         // Generate savings tips based on transport and budget
@@ -5245,63 +3746,28 @@ export async function registerRoutes(
   app.use("/api", versionsRouter);
   app.use("/api/knowledge", knowledgeRouter);
   app.use("/api/mapbox", mapboxRouter);
+  app.use("/api/scrape", scrapeRouter);
 
   // Trip creation - rate limited to 5/min per IP (expensive operation)
   app.post(api.trips.create.path, tripCreationRateLimiter, async (req, res) => {
     try {
       const input = api.trips.create.input.parse(req.body);
-
-      // Extract voyage_uid from header (Item 21: Account-lite)
       const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
 
-      // Validate dates are not in the past
-      const dates = parseDateRange(input.dates);
-      if (dates) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const startDate = new Date(dates.startDate);
-        if (startDate < today) {
-          return res.status(400).json({
-            message: "Travel dates must be in the future. Please select upcoming dates.",
-            field: "dates"
-          });
-        }
+      const result = await TripService.createTrip(input, voyageUid);
+      if (!result.trip) {
+        return res.status(400).json({ message: result.error, field: result.field });
       }
 
-      // Validate minimum budget - ONLY for custom travel style
-      // For Budget/Standard/Luxury, AI handles costs automatically (budget field is just a placeholder)
-      const isCustomBudget = input.travelStyle === 'custom';
-      if (isCustomBudget) {
-        const numDays = dates ? Math.ceil((new Date(dates.endDate).getTime() - new Date(dates.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 7;
-        const groupSize = input.groupSize || 1;
-        const minBudget = groupSize * numDays * 50; // $50/person/day absolute minimum
-        if (input.budget < minBudget) {
-          return res.status(400).json({
-            message: `Budget too low. Minimum budget for ${input.groupSize} traveler(s) for ${numDays} days is approximately $${minBudget.toLocaleString()}`,
-            field: "budget"
-          });
-        }
-      }
+      res.status(201).json(result.trip);
 
-      // Create trip immediately with pending status
-      // Include voyageUid for anonymous user tracking (Item 21)
-      const trip = await storage.createTrip({ ...input, voyageUid });
-
-      // Return immediately - don't wait for AI processing
-      res.status(201).json(trip);
-
-      // STAGE 1: Only run feasibility check (fast, ~5-8 seconds)
-      // User will trigger Stage 2 (itinerary) after reviewing feasibility
-      processFeasibilityOnly(trip.id, input).catch(err => {
+      // Run feasibility check in background
+      processFeasibilityOnly(result.trip.id, input).catch(err => {
         console.error('Feasibility check failed:', err);
       });
-
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
-        });
+        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
       }
       res.status(500).json({ message: "Internal Server Error" });
     }
@@ -5314,69 +3780,23 @@ export async function registerRoutes(
     try {
       const tripId = Number(req.params.id);
       const input = api.trips.create.input.parse(req.body);
-
-      // Extract voyage_uid from header
       const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
 
-      // Check if trip exists and belongs to user
-      const existingTrip = await storage.getTrip(tripId);
-      if (!existingTrip) {
-        return res.status(404).json({ message: 'Trip not found' });
+      const result = await TripService.updateTrip(tripId, input as TripService.CreateTripInput, voyageUid);
+      if (!result.trip) {
+        const status = result.error === 'Trip not found' ? 404 : result.error === 'Not authorized to edit this trip' ? 403 : 400;
+        return res.status(status).json({ message: result.error, field: result.field });
       }
 
-      // Verify ownership (if trip has a voyageUid, it must match)
-      if (existingTrip.voyageUid && voyageUid && existingTrip.voyageUid !== voyageUid) {
-        return res.status(403).json({ message: 'Not authorized to edit this trip' });
-      }
-
-      // Validate dates are not in the past
-      const dates = parseDateRange(input.dates);
-      if (dates) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const startDate = new Date(dates.startDate);
-        if (startDate < today) {
-          return res.status(400).json({
-            message: "Travel dates must be in the future. Please select upcoming dates.",
-            field: "dates"
-          });
-        }
-      }
-
-      // Validate minimum budget for custom travel style
-      const isCustomBudget = input.travelStyle === 'custom';
-      if (isCustomBudget) {
-        const numDays = dates ? Math.ceil((new Date(dates.endDate).getTime() - new Date(dates.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1 : 7;
-        const groupSize = input.groupSize || 1;
-        const minBudget = groupSize * numDays * 50;
-        if (input.budget < minBudget) {
-          return res.status(400).json({
-            message: `Budget too low. Minimum budget for ${input.groupSize} traveler(s) for ${numDays} days is approximately $${minBudget.toLocaleString()}`,
-            field: "budget"
-          });
-        }
-      }
-
-      // Update the trip (this resets feasibility and itinerary)
-      const updatedTrip = await storage.updateTrip(tripId, input);
-      if (!updatedTrip) {
-        return res.status(500).json({ message: 'Failed to update trip' });
-      }
-
-      // Return updated trip
-      res.json(updatedTrip);
+      res.json(result.trip);
 
       // Run feasibility check in background
       processFeasibilityOnly(tripId, input).catch(err => {
         console.error('Feasibility check failed after update:', err);
       });
-
     } catch (err) {
       if (err instanceof z.ZodError) {
-        return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join('.'),
-        });
+        return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join('.') });
       }
       console.error('Error updating trip:', err);
       res.status(500).json({ message: "Internal Server Error" });
@@ -5389,40 +3809,13 @@ export async function registerRoutes(
   app.get('/api/my-trips', async (req, res) => {
     try {
       const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
-      console.log('[MyTrips] voyage_uid from header:', voyageUid);
-
       if (!voyageUid) {
         return res.json({ trips: [], message: "No voyage_uid provided" });
       }
 
-      const limit = Math.min(Number(req.query.limit) || 20, 50);
-      const trips = await storage.listTripsByUid(voyageUid, limit);
-
-      // Return minimal data for list view
-      const tripSummaries = trips.map(trip => {
-        const feasibility = trip.feasibilityReport as any;
-        const itinerary = trip.itinerary as any;
-        const costBreakdown = itinerary?.costBreakdown;
-
-        return {
-          id: trip.id,
-          destination: trip.destination,
-          dates: trip.dates,
-          certaintyScore: feasibility?.score ?? null,
-          certaintyLabel: feasibility?.score ? (feasibility.score >= 70 ? 'high' : feasibility.score >= 40 ? 'medium' : 'low') : null,
-          estimatedCost: costBreakdown?.grandTotal ?? costBreakdown?.total ?? null,
-          currency: costBreakdown?.currency || trip.currency || 'USD',
-          travelers: trip.groupSize || 1,
-          travelStyle: trip.travelStyle,
-          status: trip.status,
-          feasibilityStatus: trip.feasibilityStatus,
-          destinationImageUrl: (trip as any).destinationImageUrl ?? null, // AI-fetched image URL
-          createdAt: trip.createdAt,
-          updatedAt: trip.updatedAt,
-        };
-      });
-
-      res.json({ trips: tripSummaries });
+      const limit = Number(req.query.limit) || 20;
+      const trips = await TripService.listMyTrips(voyageUid, limit);
+      res.json({ trips });
     } catch (err) {
       console.error('[my-trips] Error:', err);
       res.status(500).json({ message: 'Failed to fetch trips' });
@@ -5433,28 +3826,12 @@ export async function registerRoutes(
     const tripId = Number(req.params.id);
     const voyageUid = req.headers['x-voyage-uid'] as string | undefined;
 
-    let trip = await storage.getTrip(tripId);
-    if (!trip) {
+    const result = await TripService.getTripWithOwnership(tripId, voyageUid);
+    if (!result.authorized || !result.trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    // Ownership check: if trip has voyageUid and it doesn't match request, deny access
-    // This prevents accidental data leakage while keeping share links for legacy (null uid) trips
-    if (trip.voyageUid && voyageUid && trip.voyageUid !== voyageUid) {
-      return res.status(404).json({ message: 'Trip not found' });
-    }
-
-    // Soft backfill: if trip has no voyageUid and request provides one, adopt it
-    // This makes old trips "adoptable" without exposing them in My Trips list
-    if (!trip.voyageUid && voyageUid) {
-      const adopted = await storage.adoptTrip(tripId, voyageUid);
-      if (adopted) {
-        trip = adopted;
-        console.log(`[TripOwnership] Trip ${tripId} adopted by uid ${voyageUid.slice(0, 8)}...`);
-      }
-    }
-
-    res.json(trip);
+    res.json(result.trip);
   });
 
   // ============================================================================
@@ -5468,30 +3845,13 @@ export async function registerRoutes(
       return res.status(400).json({ message: 'Invalid trip ID' });
     }
 
-    try {
-      // Get trip first to verify ownership
-      const trip = await storage.getTrip(tripId);
-      if (!trip) {
-        return res.status(404).json({ message: 'Trip not found' });
-      }
-
-      // Ownership check: only owner can delete
-      // If trip has a voyageUid, it must match the request
-      // If trip has no voyageUid (legacy), allow deletion if any voyageUid provided
-      if (trip.voyageUid && voyageUid && trip.voyageUid !== voyageUid) {
-        return res.status(403).json({ message: 'Not authorized to delete this trip' });
-      }
-
-      // Delete the trip and associated data
-      await storage.deleteTrip(tripId);
-
-      console.log(`[TripDelete] Trip ${tripId} deleted by uid ${voyageUid?.slice(0, 8) || 'unknown'}...`);
-
-      res.json({ success: true, message: 'Trip deleted successfully' });
-    } catch (error) {
-      console.error('[TripDelete] Error:', error);
-      res.status(500).json({ message: 'Failed to delete trip' });
+    const result = await TripService.deleteTripWithOwnership(tripId, voyageUid);
+    if (!result.success) {
+      const status = result.error === 'Trip not found' ? 404 : result.error === 'Not authorized to delete this trip' ? 403 : 500;
+      return res.status(status).json({ message: result.error });
     }
+
+    res.json({ success: true, message: 'Trip deleted successfully' });
   });
 
   // ============================================================================
@@ -5505,47 +3865,13 @@ export async function registerRoutes(
       return res.status(400).json({ message: 'Invalid trip ID' });
     }
 
-    try {
-      const trip = await storage.getTrip(tripId);
-
-      if (!trip) {
-        return res.status(404).json({ message: 'Trip not found' });
-      }
-
-      // Return trip data for public viewing
-      // Note: No ownership check - anyone with the link can view
-      // We strip any sensitive user data (if any existed)
-      const shareableTrip = {
-        id: trip.id,
-        destination: trip.destination,
-        origin: trip.origin,
-        startDate: trip.startDate,
-        endDate: trip.endDate,
-        groupSize: trip.groupSize,
-        adults: trip.adults,
-        children: trip.children,
-        infants: trip.infants,
-        travelStyle: trip.travelStyle,
-        budget: trip.budget,
-        currency: trip.currency,
-        passport: trip.passport,
-        residence: trip.residence,
-        feasibilityReport: trip.feasibilityReport,
-        itinerary: trip.itinerary,
-        status: trip.status,
-        feasibilityStatus: trip.feasibilityStatus,
-        createdAt: trip.createdAt,
-        // Explicitly exclude: userId, voyageUid, userNotes, etc.
-      };
-
-      // Track share view analytics
-      console.log(`[ShareView] Trip ${tripId} viewed via share link`);
-
-      res.json(shareableTrip);
-    } catch (error) {
-      console.error('[ShareView] Error:', error);
-      res.status(500).json({ message: 'Failed to load shared trip' });
+    const shareableTrip = await TripService.getTripForShare(tripId);
+    if (!shareableTrip) {
+      return res.status(404).json({ message: 'Trip not found' });
     }
+
+    console.log(`[ShareView] Trip ${tripId} viewed via share link`);
+    res.json(shareableTrip);
   });
 
   // ============================================================================
@@ -5560,7 +3886,7 @@ export async function registerRoutes(
       if (!demoTrip || !(demoTrip.itinerary as any)?.days?.length) {
         // Try to find any completed trip we can use as demo
         const allTrips = await storage.listTrips();
-        demoTrip = allTrips.find(t => (t.itinerary as any)?.days?.length > 0) || null;
+        demoTrip = allTrips.find(t => (t.itinerary as any)?.days?.length > 0) ?? undefined;
       }
 
       // If still no demo trip available, return fallback data
@@ -6011,7 +4337,7 @@ export async function registerRoutes(
           currency: trip.currency || 'USD',
           groupSize: trip.groupSize || 2,
           passport: trip.passport,
-          origin: trip.origin
+          origin: trip.origin ?? undefined
         };
 
         console.log(`[StreamAPI] Starting streaming generation for trip ${tripId}: ${numDays} days in ${trip.destination} (lock: ${lockOwner.slice(0, 8)})`);
@@ -6037,11 +4363,12 @@ export async function registerRoutes(
         // Callback to persist each day to DB
         const onDayComplete = async (day: ItineraryDay, allDays: ItineraryDay[]) => {
           try {
-            // Update trip with partial itinerary
+            // Update trip with partial itinerary - cast as any since schema expects Json
             await storage.updateTrip(tripId, {
-              itinerary: { days: allDays } as any,
               status: allDays.length >= numDays ? 'complete' : 'generating'
-            });
+            } as any);
+            // Also update itinerary separately
+            await storage.updateTripItinerary(tripId, { days: allDays });
           } catch (e) {
             console.error(`[StreamAPI] Failed to persist day ${day.day}:`, e);
           }
@@ -6943,15 +5270,26 @@ Current trip context:
 
 Keep responses concise, friendly, and helpful. Ask follow-up questions to gather more details about their trip.`;
 
-      // Call AI agent for response
-      const aiResponse = await aiAgent.chat([
-        { role: 'system', content: systemPrompt },
-        ...(chatHistory || []).map((msg: any) => ({
-          role: msg.role,
-          content: msg.content
-        })),
-        { role: 'user', content: message }
-      ]);
+      // Call AI for response using the OpenAI client
+      if (!openai) {
+        return res.status(500).json({ error: 'AI service not initialized' });
+      }
+
+      const completion = await openai.chat.completions.create({
+        model: aiModel,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...(chatHistory || []).map((msg: any) => ({
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content
+          })),
+          { role: 'user', content: message }
+        ],
+        temperature: 0.7,
+        max_tokens: 500,
+      });
+
+      const aiResponse = completion.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
 
       // Generate contextual suggestions based on the conversation
       const suggestions = generateTripSuggestions(message, tripContext);
