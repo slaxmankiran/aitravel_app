@@ -30,6 +30,7 @@ import {
   getSmartTransportMode,
 } from "./itinerary-adapters";
 import { ActivityImage } from "./ActivityImage";
+import { TrustBadge } from "./TrustBadge";
 
 // ============================================================================
 // TRANSPORT ICON MAPPING
@@ -247,17 +248,31 @@ function ActivityRowComponent({
               )}
             </div>
 
-            {/* Cost badge */}
+            {/* Cost badge with trust indicator */}
             {cost !== null && (
-              <div
-                className={cn(
-                  "px-2 py-0.5 rounded-full text-[11px] font-medium shrink-0",
-                  cost === 0
-                    ? "bg-green-500/15 text-green-300"
-                    : "bg-white/10 text-white/70"
+              <div className="flex items-center gap-1 shrink-0">
+                {/* Trust badge (only show for non-free items) */}
+                {cost > 0 && activity.costVerification && (
+                  <TrustBadge
+                    verification={activity.costVerification}
+                    variant="icon"
+                    size="sm"
+                  />
                 )}
-              >
-                {cost === 0 ? "Free" : `${currencySymbol}${cost.toLocaleString()}`}
+                <div
+                  className={cn(
+                    "px-2 py-0.5 rounded-full text-[11px] font-medium",
+                    cost === 0
+                      ? "bg-green-500/15 text-green-300"
+                      : activity.costVerification?.source === "rag_knowledge"
+                        ? "bg-green-500/10 text-white/80"
+                        : activity.costVerification?.source === "api_estimate"
+                          ? "bg-blue-500/10 text-white/80"
+                          : "bg-white/10 text-white/70"
+                  )}
+                >
+                  {cost === 0 ? "Free" : `${currencySymbol}${cost.toLocaleString()}`}
+                </div>
               </div>
             )}
           </div>

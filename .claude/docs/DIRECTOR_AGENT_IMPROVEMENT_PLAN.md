@@ -527,6 +527,50 @@ const { status, days, validation, refinement, validationResult } = useItineraryS
 )}
 ```
 
-### Phase 3: Trust Badges ⬜ PENDING
+### Phase 3: Trust Badges ✅ COMPLETED (2026-01-19)
+
+**Types Added:**
+
+```typescript
+// server/services/streamingItinerary.ts
+export interface CostVerification {
+  source: "rag_knowledge" | "api_estimate" | "ai_estimate" | "user_input";
+  confidence: "high" | "medium" | "low";
+  lastVerified?: string;
+  citation?: string;
+  originalEstimate?: number;
+}
+```
+
+**Server Changes:**
+- Added `CostVerification` type to `ItineraryActivity` interface
+- Added `annotateWithVerification()` function to add verification metadata after validation
+- Activities automatically get `ai_estimate` source with confidence based on validation result
+
+**Client Components:**
+| File | Purpose |
+|------|---------|
+| `client/src/components/results-v1/TrustBadge.tsx` | Trust badge component with icon/chip/inline variants |
+| `client/src/components/results-v1/itinerary-adapters.ts` | Added `CostVerification` types |
+| `client/src/components/results-v1/ActivityRow.tsx` | Integrated TrustBadge next to cost badges |
+
+**Trust Badge Variants:**
+| Source | Icon | Color | Tooltip |
+|--------|------|-------|---------|
+| `rag_knowledge` | ✓ | Green | "Price verified from trusted sources" |
+| `api_estimate` | ● | Blue | "Real-time price from API" |
+| `ai_estimate` | ~ | Amber | "AI-estimated price (may vary)" |
+| `user_input` | ★ | Purple | "User-provided price" |
+
+**Confidence Mapping:**
+- Budget verified → `medium` confidence
+- Budget not verified → `low` confidence
+- RAG verified (Phase 4) → `high` confidence
+
+**UI Behavior:**
+- Trust badges only shown for non-free activities with verification data
+- Badge colors match verification source (green for verified, amber for estimates)
+- Hover tooltip explains the source
+- Legacy activities without verification show no badge
 
 ### Phase 4: RAG Cost Enhancement ⬜ PENDING

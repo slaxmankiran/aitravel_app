@@ -52,6 +52,14 @@ export interface ItineraryActivity {
   transportMode?: string;
   /** Dedupe key: slug(name) + destination + timeSlot */
   activityKey?: string;
+  /** Cost verification metadata (Phase 3 - Trust Badges) */
+  costVerification?: {
+    source: "rag_knowledge" | "api_estimate" | "ai_estimate" | "user_input";
+    confidence: "high" | "medium" | "low";
+    lastVerified?: string;
+    citation?: string;
+    originalEstimate?: number;
+  };
 }
 
 export interface ItineraryDay {
@@ -393,6 +401,44 @@ export function dedupeActivities(
   }
 
   return { activities: filtered, newKeys };
+}
+
+// ============================================================================
+// COST VERIFICATION (Phase 3 - Trust Badges)
+// ============================================================================
+
+export type CostVerificationSource = "rag_knowledge" | "api_estimate" | "ai_estimate" | "user_input";
+export type CostConfidence = "high" | "medium" | "low";
+
+export interface CostVerification {
+  source: CostVerificationSource;
+  confidence: CostConfidence;
+  lastVerified?: string;
+  citation?: string;
+  originalEstimate?: number;
+}
+
+/**
+ * Annotate activities with cost verification metadata based on validation results
+ */
+export function annotateWithVerification(
+  days: ItineraryDay[],
+  budgetVerified: boolean,
+  logisticsVerified: boolean
+): ItineraryDay[] {
+  const confidence: CostConfidence = budgetVerified ? "medium" : "low";
+
+  return days.map(day => ({
+    ...day,
+    activities: day.activities.map(activity => ({
+      ...activity,
+      costVerification: activity.costVerification || {
+        source: "ai_estimate" as CostVerificationSource,
+        confidence,
+        lastVerified: new Date().toISOString(),
+      },
+    })),
+  }));
 }
 
 // ============================================================================
@@ -1147,6 +1193,16 @@ export async function streamItineraryGeneration(
       const validationTime = Date.now() - validationStartTime;
       console.log(`[StreamItinerary] Validation complete in ${validationTime}ms: ${validationResult.status}`);
 
+      // Annotate activities with verification metadata (Phase 3 - Trust Badges)
+      const annotatedDays = annotateWithVerification(
+        days,
+        validationResult.metadata.budgetVerified,
+        validationResult.metadata.logisticsVerified
+      );
+      days.length = 0;
+      days.push(...annotatedDays);
+      console.log(`[StreamItinerary] Activities annotated with verification metadata (confidence: ${validationResult.metadata.budgetVerified ? 'medium' : 'low'})`);
+
     } catch (error) {
       console.error(`[StreamItinerary] Validation loop error:`, error);
       if (metrics) {
@@ -1402,6 +1458,15 @@ export async function resumeItineraryStream(
 
       const validationTime = Date.now() - validationStartTime;
       console.log(`[StreamItinerary] Resume: Validation complete in ${validationTime}ms: ${validationResult.status}`);
+
+      // Annotate activities with verification metadata (Phase 3 - Trust Badges)
+      const annotatedDays = annotateWithVerification(
+        days,
+        validationResult.metadata.budgetVerified,
+        validationResult.metadata.logisticsVerified
+      );
+      days.length = 0;
+      days.push(...annotatedDays);
 
     } catch (error) {
       console.error(`[StreamItinerary] Resume: Validation loop error:`, error);
