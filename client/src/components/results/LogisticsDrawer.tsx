@@ -126,11 +126,19 @@ function LogisticsDrawerComponent({
     setChatPrefill('');
   };
 
-  // Co-Pilot submit handler
-  const handleCoPilotSubmit = (prompt: string) => {
-    setChatPrefill(prompt);
-    setActiveSection('chat');
-    onChatOpen?.();
+  // Co-Pilot modification complete handler
+  const handleModificationComplete = (result: any) => {
+    // Update trip with new itinerary
+    if (result.success && result.itinerary) {
+      onTripUpdate({ itinerary: result.itinerary });
+
+      // Show success toast or banner with reasoning
+      console.log('[LogisticsDrawer] Modification complete:', result.summary);
+      console.log('[LogisticsDrawer] Reasoning:', result.reasoning);
+
+      // Could add a toast notification here:
+      // toast.success(result.summary);
+    }
   };
 
   return (
@@ -195,7 +203,8 @@ function LogisticsDrawerComponent({
               {!isDemo && (
                 <div className="bg-white/[0.03] rounded-xl p-4">
                   <AICoPilotConsole
-                    onSubmit={handleCoPilotSubmit}
+                    tripId={trip.id}
+                    onModificationComplete={handleModificationComplete}
                     disabled={false}
                   />
                 </div>

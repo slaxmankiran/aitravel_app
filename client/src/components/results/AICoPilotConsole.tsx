@@ -46,9 +46,29 @@ interface ProcessingStep {
 }
 
 interface AICoPilotConsoleProps {
-  onSubmit: (prompt: string) => void;
+  tripId: number;
+  onModificationComplete: (result: ModificationResult) => void;
   disabled?: boolean;
   className?: string;
+}
+
+interface ModificationResult {
+  success: boolean;
+  summary: string;
+  reasoning: string[];
+  diff: {
+    removed: string[];
+    added: string[];
+    modified: string[];
+    costDelta: number;
+  };
+  itinerary: any;
+  metadata: {
+    intent: string;
+    processingTimeMs: number;
+    totalTimeMs: number;
+    affectedDays: number[];
+  };
 }
 
 // ============================================================================
@@ -109,7 +129,8 @@ const PROCESSING_STEPS: Omit<ProcessingStep, 'status'>[] = [
 // ============================================================================
 
 export function AICoPilotConsole({
-  onSubmit,
+  tripId,
+  onModificationComplete,
   disabled = false,
   className,
 }: AICoPilotConsoleProps) {
@@ -118,7 +139,7 @@ export function AICoPilotConsole({
   const [processingSteps, setProcessingSteps] = useState<ProcessingStep[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Handle submit
+  // Handle submit - Call Director Agent API
   const handleSubmit = async (prompt: string) => {
     if (!prompt.trim() || disabled || isProcessing) return;
 
@@ -132,29 +153,69 @@ export function AICoPilotConsole({
     }));
     setProcessingSteps(steps);
 
-    // Animate through steps
-    for (let i = 0; i < steps.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 800));
+    try {
+      // Step 1: Analyzing
       setProcessingSteps(prev =>
         prev.map((step, idx) => ({
           ...step,
-          status: idx < i ? 'complete' : idx === i ? 'active' : 'pending',
+          status: idx === 0 ? 'active' : 'pending',
         }))
       );
+      await new Promise(resolve => setTimeout(resolve, 600));
+
+      // Step 2: Finding alternatives
+      setProcessingSteps(prev =>
+        prev.map((step, idx) => ({
+          ...step,
+          status: idx === 0 ? 'complete' : idx === 1 ? 'active' : 'pending',
+        }))
+      );
+
+      // Make API call to Director Agent
+      const response = await fetch(`/api/trips/${tripId}/modify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ prompt }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Modification failed');
+      }
+
+      const result: ModificationResult = await response.json();
+
+      // Step 3: Updating plan
+      setProcessingSteps(prev =>
+        prev.map((step, idx) => ({
+          ...step,
+          status: idx < 2 ? 'complete' : idx === 2 ? 'active' : 'pending',
+        }))
+      );
+      await new Promise(resolve => setTimeout(resolve, 600));
+
+      // Mark all complete
+      setProcessingSteps(prev =>
+        prev.map(step => ({ ...step, status: 'complete' as const }))
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 400));
+
+      // Notify parent component with result
+      onModificationComplete(result);
+
+    } catch (error) {
+      console.error('[AICoPilot] Error:', error);
+      // Show error in console (could add error UI state here)
+      alert(error instanceof Error ? error.message : 'Failed to modify trip');
+    } finally {
+      // Reset after short delay
+      await new Promise(resolve => setTimeout(resolve, 800));
+      setIsProcessing(false);
     }
-
-    // Mark all complete
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setProcessingSteps(prev =>
-      prev.map(step => ({ ...step, status: 'complete' as const }))
-    );
-
-    // Trigger actual submit
-    onSubmit(prompt);
-
-    // Reset after short delay
-    await new Promise(resolve => setTimeout(resolve, 800));
-    setIsProcessing(false);
   };
 
   // Handle chip click

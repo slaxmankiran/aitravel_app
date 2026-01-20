@@ -5,6 +5,7 @@
 
 import OpenAI from 'openai';
 import { storage } from '../storage';
+import { fetchDestinationImage } from './unsplashService';
 
 // Initialize AI client
 const openai = new OpenAI({
@@ -64,6 +65,49 @@ interface PendingChanges {
   };
   createdAt: Date;
 }
+
+// ============================================================================
+// IMAGE HYDRATION
+// ============================================================================
+
+const IMAGE_FETCH_TIMEOUT_MS = 1000; // 1 second timeout per image
+
+/**
+ * Fetch image for a single activity with timeout
+ */
+async function hydrateActivityImage(
+  activity: any,
+  destination: string
+): Promise<any> {
+  // Skip if already has an image
+  if (activity.imageUrl) return activity;
+
+  try {
+    // Create timeout promise
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), IMAGE_FETCH_TIMEOUT_MS)
+    );
+
+    // Race between fetch and timeout
+    const imageUrl = await Promise.race([
+      fetchDestinationImage(activity.name || destination, 800, 600),
+      timeoutPromise,
+    ]);
+
+    if (imageUrl) {
+      console.log(`[AgentChat] Hydrated image for activity "${activity.name}"`);
+      return { ...activity, imageUrl };
+    }
+  } catch (error) {
+    console.warn(`[AgentChat] Failed to fetch image for "${activity.name}":`, error);
+  }
+
+  return activity;
+}
+
+// ============================================================================
+// JSON PARSING
+// ============================================================================
 
 // Safe JSON parser for AI responses that may be malformed
 function safeParseActionJson(text: string): any | null {
@@ -536,10 +580,13 @@ async function applyActions(tripId: number, actions: ChatAction[], context: Trip
           } else {
             // Generate unique ID for activity
             activity.id = `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            itinerary.days[dayIndex].activities.push(activity);
-            totalCostChange += activity.cost || 0;
 
-            console.log(`[AgentChat] Added activity "${activity.name}" to Day ${dayNumber}`);
+            // Hydrate activity with image before adding (non-blocking)
+            const hydratedActivity = await hydrateActivityImage(activity, context.destination);
+            itinerary.days[dayIndex].activities.push(hydratedActivity);
+            totalCostChange += hydratedActivity.cost || 0;
+
+            console.log(`[AgentChat] Added activity "${hydratedActivity.name}" to Day ${dayNumber}`);
           }
         }
         break;

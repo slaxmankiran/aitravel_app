@@ -824,3 +824,148 @@ knowledgeRouter.post("/visa-lookup", visaLookupRateLimiter, async (req, res) => 
     });
   }
 });
+
+// ============================================================================
+// VISA API ENDPOINTS (RapidAPI Integration)
+// ============================================================================
+
+import {
+  fetchVisaRequirements,
+  seedPopularCorridors,
+  getCountryCode,
+  getVisaTypeLabel,
+} from "../services/visaApiService";
+
+/**
+ * GET /api/knowledge/visa/check
+ *
+ * Fetch visa requirements using the RapidAPI.
+ * Results are cached in the knowledge base.
+ *
+ * Query params:
+ * - passport: Passport country (name or ISO code)
+ * - destination: Destination country (name or ISO code)
+ */
+knowledgeRouter.get("/visa/check", visaLookupRateLimiter, async (req, res) => {
+  try {
+    const { passport, destination } = req.query;
+
+    if (!passport || !destination) {
+      return res.status(400).json({
+        error: "Missing required parameters",
+        message: "Both 'passport' and 'destination' query parameters are required",
+      });
+    }
+
+    const result = await fetchVisaRequirements(
+      passport as string,
+      destination as string
+    );
+
+    if (!result) {
+      return res.status(404).json({
+        error: "Visa information not found",
+        message: `Could not find visa requirements for ${passport} → ${destination}`,
+        hint: "Check if the country names are spelled correctly",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...result,
+        visaTypeLabel: getVisaTypeLabel(result.visaType),
+      },
+    });
+  } catch (error) {
+    console.error("[Knowledge] Visa API check error:", error);
+    res.status(500).json({
+      error: "Visa check failed",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
+ * POST /api/knowledge/visa/seed
+ *
+ * Seed the knowledge base with visa requirements for popular travel corridors.
+ * Admin-only in production. Takes ~40 seconds (rate limited to 1 req/sec).
+ */
+knowledgeRouter.post("/visa/seed", productionAdminOnly, async (_req, res) => {
+  try {
+    console.log("[Knowledge] Starting visa corridor seeding...");
+
+    const result = await seedPopularCorridors();
+
+    res.json({
+      success: true,
+      message: `Seeded ${result.success} visa corridors`,
+      details: result,
+    });
+  } catch (error) {
+    console.error("[Knowledge] Visa seed error:", error);
+    res.status(500).json({
+      error: "Visa seeding failed",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
+ * GET /api/knowledge/visa/stats
+ *
+ * Get statistics about cached visa data in the knowledge base.
+ */
+knowledgeRouter.get("/visa/stats", async (_req, res) => {
+  try {
+    const [stats] = await db
+      .select({
+        totalDocuments: sql<number>`COUNT(*)`,
+        visaApiDocuments: sql<number>`COUNT(*) FILTER (WHERE source_type = 'visa_api')`,
+        uniquePassports: sql<number>`COUNT(DISTINCT from_country) FILTER (WHERE source_type = 'visa_api')`,
+        uniqueDestinations: sql<number>`COUNT(DISTINCT to_country) FILTER (WHERE source_type = 'visa_api')`,
+        oldestCache: sql<string>`MIN(created_at) FILTER (WHERE source_type = 'visa_api')`,
+        newestCache: sql<string>`MAX(created_at) FILTER (WHERE source_type = 'visa_api')`,
+      })
+      .from(knowledgeDocuments);
+
+    // Get breakdown by visa type
+    const corridors = await db
+      .select({
+        fromCountry: knowledgeDocuments.fromCountry,
+        toCountry: knowledgeDocuments.toCountry,
+        title: knowledgeDocuments.title,
+        lastVerified: knowledgeDocuments.lastVerified,
+      })
+      .from(knowledgeDocuments)
+      .where(eq(knowledgeDocuments.sourceType, "visa_api"))
+      .orderBy(desc(knowledgeDocuments.lastVerified))
+      .limit(50);
+
+    res.json({
+      success: true,
+      stats: {
+        totalKnowledgeDocuments: Number(stats.totalDocuments),
+        visaApiCachedCorridors: Number(stats.visaApiDocuments),
+        uniquePassportCountries: Number(stats.uniquePassports),
+        uniqueDestinationCountries: Number(stats.uniqueDestinations),
+        cacheRange: {
+          oldest: stats.oldestCache,
+          newest: stats.newestCache,
+        },
+      },
+      corridors: corridors.map(c => ({
+        route: `${c.fromCountry} → ${c.toCountry}`,
+        title: c.title,
+        lastVerified: c.lastVerified,
+      })),
+    });
+  } catch (error) {
+    console.error("[Knowledge] Visa stats error:", error);
+    res.status(500).json({
+      error: "Failed to get visa stats",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});

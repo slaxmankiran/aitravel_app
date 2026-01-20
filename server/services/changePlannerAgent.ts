@@ -32,6 +32,7 @@ import {
   type ToolExecutionContext,
 } from "./changePlannerTools";
 import crypto from "crypto";
+import { fetchDestinationImage } from "./unsplashService";
 
 // ============================================================================
 // CONFIGURATION
@@ -49,6 +50,73 @@ const MODULE_PRIORITY: Record<RecomputableModule, 1 | 2 | 3> = {
   hotels: 2,
   itinerary: 3,
 };
+
+// ============================================================================
+// IMAGE HYDRATION
+// ============================================================================
+
+const IMAGE_FETCH_TIMEOUT_MS = 1000; // 1 second timeout per image
+
+/**
+ * Hydrate activities with images from Unsplash
+ * Runs in parallel with timeout to avoid slowing down responses
+ */
+async function hydrateActivityImages(
+  activities: any[],
+  destination: string
+): Promise<any[]> {
+  if (!activities || activities.length === 0) return activities;
+
+  const fetchWithTimeout = async (activity: any): Promise<any> => {
+    // Skip if already has an image
+    if (activity.imageUrl) return activity;
+
+    try {
+      // Create timeout promise
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => resolve(null), IMAGE_FETCH_TIMEOUT_MS)
+      );
+
+      // Race between fetch and timeout
+      const imageUrl = await Promise.race([
+        fetchDestinationImage(activity.name || destination, 800, 600),
+        timeoutPromise,
+      ]);
+
+      if (imageUrl) {
+        return { ...activity, imageUrl };
+      }
+    } catch (error) {
+      console.warn(`[ImageHydration] Failed to fetch image for "${activity.name}":`, error);
+    }
+
+    return activity;
+  };
+
+  // Fetch all images in parallel
+  return Promise.all(activities.map(fetchWithTimeout));
+}
+
+/**
+ * Hydrate itinerary days with images
+ */
+async function hydrateItineraryImages(
+  itinerary: any,
+  destination: string
+): Promise<any> {
+  if (!itinerary?.days) return itinerary;
+
+  const hydratedDays = await Promise.all(
+    itinerary.days.map(async (day: any) => {
+      if (!day.activities) return day;
+
+      const hydratedActivities = await hydrateActivityImages(day.activities, destination);
+      return { ...day, activities: hydratedActivities };
+    })
+  );
+
+  return { ...itinerary, days: hydratedDays };
+}
 
 // ============================================================================
 // SYSTEM PROMPT

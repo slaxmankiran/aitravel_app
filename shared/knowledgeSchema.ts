@@ -60,7 +60,7 @@ export const knowledgeDocuments = pgTable("knowledge_documents", {
   id: serial("id").primaryKey(),
 
   // Document identification
-  sourceId: text("source_id").notNull(), // e.g., "visa_india_usa", "safety_thailand"
+  sourceId: text("source_id").notNull().unique(), // e.g., "visa_india_usa", "safety_thailand"
   sourceType: text("source_type").notNull(), // "visa", "safety", "customs", "health", "general"
 
   // Content
