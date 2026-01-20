@@ -826,7 +826,7 @@ knowledgeRouter.post("/visa-lookup", visaLookupRateLimiter, async (req, res) => 
 });
 
 // ============================================================================
-// VISA API ENDPOINTS (RapidAPI Integration)
+// VISA API ENDPOINTS (Hybrid: Passport Index + RapidAPI Enrichment)
 // ============================================================================
 
 import {
@@ -836,19 +836,26 @@ import {
   getVisaTypeLabel,
 } from "../services/visaApiService";
 
+import {
+  lookupVisa,
+  getStats as getPassportIndexStats,
+} from "../services/passportIndexService";
+
 /**
  * GET /api/knowledge/visa/check
  *
- * Fetch visa requirements using the RapidAPI.
- * Results are cached in the knowledge base.
+ * HYBRID visa lookup:
+ * 1. Primary: Passport Index Dataset (FREE, 39k+ routes)
+ * 2. Fallback: RapidAPI for enriched details (120/month limit)
  *
  * Query params:
  * - passport: Passport country (name or ISO code)
  * - destination: Destination country (name or ISO code)
+ * - enrich: "true" to force RapidAPI lookup for extra details (embassy links, etc.)
  */
 knowledgeRouter.get("/visa/check", visaLookupRateLimiter, async (req, res) => {
   try {
-    const { passport, destination } = req.query;
+    const { passport, destination, enrich } = req.query;
 
     if (!passport || !destination) {
       return res.status(400).json({
@@ -857,33 +864,93 @@ knowledgeRouter.get("/visa/check", visaLookupRateLimiter, async (req, res) => {
       });
     }
 
-    const result = await fetchVisaRequirements(
-      passport as string,
-      destination as string
-    );
+    // Layer 1: Passport Index (FREE, instant)
+    const indexResult = lookupVisa(passport as string, destination as string);
 
-    if (!result) {
-      return res.status(404).json({
-        error: "Visa information not found",
-        message: `Could not find visa requirements for ${passport} → ${destination}`,
-        hint: "Check if the country names are spelled correctly",
+    if (indexResult && enrich !== 'true') {
+      // Return free data immediately
+      console.log(`[VisaCheck] Passport Index hit: ${indexResult.passportCode} → ${indexResult.destinationCode}`);
+      return res.json({
+        success: true,
+        data: {
+          passportCountry: indexResult.passport,
+          passportCode: indexResult.passportCode,
+          destinationCountry: indexResult.destination,
+          destinationCode: indexResult.destinationCode,
+          visaType: indexResult.status,
+          visaName: indexResult.statusLabel,
+          duration: indexResult.days ? `${indexResult.days} days` : undefined,
+          source: 'passport_index',
+          visaTypeLabel: indexResult.statusLabel,
+        },
       });
     }
 
-    res.json({
-      success: true,
-      data: {
-        ...result,
-        visaTypeLabel: getVisaTypeLabel(result.visaType),
-      },
+    // Layer 2: RapidAPI (when enrichment requested or index miss)
+    if (enrich === 'true' || !indexResult) {
+      console.log(`[VisaCheck] Using RapidAPI for: ${passport} → ${destination} (enrich=${enrich}, indexHit=${!!indexResult})`);
+
+      const apiResult = await fetchVisaRequirements(
+        passport as string,
+        destination as string
+      );
+
+      if (apiResult) {
+        return res.json({
+          success: true,
+          data: {
+            ...apiResult,
+            visaTypeLabel: getVisaTypeLabel(apiResult.visaType),
+          },
+        });
+      }
+    }
+
+    // Fallback: Return index result even without enrichment if API fails
+    if (indexResult) {
+      return res.json({
+        success: true,
+        data: {
+          passportCountry: indexResult.passport,
+          passportCode: indexResult.passportCode,
+          destinationCountry: indexResult.destination,
+          destinationCode: indexResult.destinationCode,
+          visaType: indexResult.status,
+          visaName: indexResult.statusLabel,
+          duration: indexResult.days ? `${indexResult.days} days` : undefined,
+          source: 'passport_index',
+          visaTypeLabel: indexResult.statusLabel,
+        },
+      });
+    }
+
+    return res.status(404).json({
+      error: "Visa information not found",
+      message: `Could not find visa requirements for ${passport} → ${destination}`,
+      hint: "Check if the country names are spelled correctly",
     });
   } catch (error) {
-    console.error("[Knowledge] Visa API check error:", error);
+    console.error("[Knowledge] Visa check error:", error);
     res.status(500).json({
       error: "Visa check failed",
       message: error instanceof Error ? error.message : "Unknown error",
     });
   }
+});
+
+/**
+ * GET /api/knowledge/visa/index-stats
+ *
+ * Get statistics about the Passport Index dataset.
+ */
+knowledgeRouter.get("/visa/index-stats", (_req, res) => {
+  const stats = getPassportIndexStats();
+  res.json({
+    success: true,
+    source: "passport_index_dataset",
+    description: "Free visa requirements data from https://github.com/ilyankou/passport-index-dataset",
+    stats,
+  });
 });
 
 /**
