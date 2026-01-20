@@ -6,3 +6,4 @@ vite.config.ts.*
 *.tar.gz
 .env
 .env.local.backup/
+server/data/passport-index-metadata.json

@@ -113,8 +113,18 @@ app.use((req, res, next) => {
       host: "0.0.0.0",
       reusePort: true,
     },
-    () => {
+    async () => {
       log(`serving on port ${port}`);
+
+      // Check if Passport Index dataset needs updating (runs in background)
+      try {
+        const { checkAndUpdateIfStale } = await import("./services/passportIndexUpdater");
+        checkAndUpdateIfStale().catch(err => {
+          console.error("[Startup] Passport Index update check failed:", err);
+        });
+      } catch (err) {
+        console.error("[Startup] Could not import passportIndexUpdater:", err);
+      }
     },
   );
 })();

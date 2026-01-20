@@ -938,6 +938,12 @@ knowledgeRouter.get("/visa/check", visaLookupRateLimiter, async (req, res) => {
   }
 });
 
+import {
+  updateDataset,
+  getDatasetStatus,
+  checkAndUpdateIfStale,
+} from "../services/passportIndexUpdater";
+
 /**
  * GET /api/knowledge/visa/index-stats
  *
@@ -945,12 +951,58 @@ knowledgeRouter.get("/visa/check", visaLookupRateLimiter, async (req, res) => {
  */
 knowledgeRouter.get("/visa/index-stats", (_req, res) => {
   const stats = getPassportIndexStats();
+  const status = getDatasetStatus();
   res.json({
     success: true,
     source: "passport_index_dataset",
     description: "Free visa requirements data from https://github.com/ilyankou/passport-index-dataset",
     stats,
+    datasetStatus: {
+      lastUpdated: status.lastUpdated,
+      ageInDays: status.ageInDays,
+      isStale: status.isStale,
+      recommendation: status.isStale
+        ? "Dataset is stale. Consider running POST /api/knowledge/visa/update-index"
+        : "Dataset is fresh",
+    },
   });
+});
+
+/**
+ * POST /api/knowledge/visa/update-index
+ *
+ * Download the latest Passport Index dataset from GitHub.
+ * This is FREE and doesn't use any API quota.
+ * Recommended: Run monthly or when isStale=true.
+ */
+knowledgeRouter.post("/visa/update-index", productionAdminOnly, async (_req, res) => {
+  try {
+    console.log("[Knowledge] Manual dataset update triggered...");
+    const result = await updateDataset();
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: result.message,
+        rowCount: result.rowCount,
+        previousRowCount: result.previousRowCount,
+        change: result.previousRowCount
+          ? result.rowCount! - result.previousRowCount
+          : null,
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.message,
+      });
+    }
+  } catch (error) {
+    console.error("[Knowledge] Dataset update error:", error);
+    res.status(500).json({
+      error: "Dataset update failed",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
 });
 
 /**
