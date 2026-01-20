@@ -60,7 +60,40 @@ export interface StreamError {
   recoverable: boolean;
 }
 
-export type StreamStatus = "idle" | "connecting" | "streaming" | "complete" | "error";
+/**
+ * Validation event data from server
+ */
+export interface StreamValidation {
+  iteration: number;
+  status: "APPROVED" | "REJECTED" | "WARNING";
+  budgetVerified: boolean;
+  logisticsVerified: boolean;
+  flaggedDays: number[];
+  logs: string[];
+}
+
+/**
+ * Refinement event data from server
+ */
+export interface StreamRefinement {
+  iteration: number;
+  daysToRefine: number[];
+  budgetIssues: string[];
+  logisticsIssues: string[];
+}
+
+/**
+ * Validation metadata from done event
+ */
+export interface ValidationMetadata {
+  budgetVerified: boolean;
+  logisticsVerified: boolean;
+  totalIterations: number;
+  refinedDays: number[];
+  logs: string[];
+}
+
+export type StreamStatus = "idle" | "connecting" | "streaming" | "validating" | "refining" | "complete" | "error";
 
 export interface UseItineraryStreamResult {
   /** Current streaming status */
@@ -80,6 +113,15 @@ export interface UseItineraryStreamResult {
 
   /** Whether the itinerary was served from cache */
   isCached: boolean;
+
+  /** Current validation state */
+  validation: StreamValidation | null;
+
+  /** Current refinement state (when refining flagged days) */
+  refinement: StreamRefinement | null;
+
+  /** Final validation metadata after completion */
+  validationResult: ValidationMetadata | null;
 
   /** Start streaming for a trip */
   startStream: (tripId: number) => void;
@@ -102,6 +144,9 @@ export function useItineraryStream(): UseItineraryStreamResult {
   const [progress, setProgress] = useState<StreamProgress | null>(null);
   const [error, setError] = useState<StreamError | null>(null);
   const [isCached, setIsCached] = useState(false);
+  const [validation, setValidation] = useState<StreamValidation | null>(null);
+  const [refinement, setRefinement] = useState<StreamRefinement | null>(null);
+  const [validationResult, setValidationResult] = useState<ValidationMetadata | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const currentTripIdRef = useRef<number | null>(null);
@@ -130,6 +175,9 @@ export function useItineraryStream(): UseItineraryStreamResult {
     setProgress(null);
     setError(null);
     setIsCached(false);
+    setValidation(null);
+    setRefinement(null);
+    setValidationResult(null);
     currentTripIdRef.current = tripId;
 
     const url = `/api/trips/${tripId}/itinerary/stream`;
@@ -188,18 +236,66 @@ export function useItineraryStream(): UseItineraryStreamResult {
       }
     });
 
+    // Handle validation event (Director pattern - budget/logistics check)
+    eventSource.addEventListener("validation", (e) => {
+      try {
+        const data = JSON.parse(e.data) as StreamValidation;
+        console.log(`[ItineraryStream] Validation iteration ${data.iteration}: ${data.status}`);
+        setValidation(data);
+        setStatus("validating");
+
+        // Update progress to show validation phase
+        setProgress((prev) => ({
+          currentDay: prev?.totalDays || 0,
+          totalDays: prev?.totalDays || 0,
+          percent: 100,
+          message: `Validating itinerary... (${data.status})`
+        }));
+      } catch (err) {
+        console.error("[ItineraryStream] Failed to parse validation:", err);
+      }
+    });
+
+    // Handle refinement event (Director pattern - fixing flagged days)
+    eventSource.addEventListener("refinement", (e) => {
+      try {
+        const data = JSON.parse(e.data) as StreamRefinement;
+        console.log(`[ItineraryStream] Refinement iteration ${data.iteration}: days ${data.daysToRefine.join(", ")}`);
+        setRefinement(data);
+        setStatus("refining");
+
+        // Update progress to show refinement phase
+        setProgress((prev) => ({
+          currentDay: prev?.totalDays || 0,
+          totalDays: prev?.totalDays || 0,
+          percent: 100,
+          message: `Refining Day${data.daysToRefine.length > 1 ? "s" : ""} ${data.daysToRefine.join(", ")}...`
+        }));
+      } catch (err) {
+        console.error("[ItineraryStream] Failed to parse refinement:", err);
+      }
+    });
+
     // Handle done event
     eventSource.addEventListener("done", (e) => {
       try {
         const data = JSON.parse(e.data);
         console.log(`[ItineraryStream] Complete: ${data.totalDays} days, ${data.totalActivities} activities`);
 
+        // Capture validation result from done event
+        if (data.validation) {
+          setValidationResult(data.validation as ValidationMetadata);
+          console.log(`[ItineraryStream] Validation result: budget=${data.validation.budgetVerified}, logistics=${data.validation.logisticsVerified}, iterations=${data.validation.totalIterations}`);
+        }
+
         setStatus("complete");
         setProgress({
           currentDay: data.totalDays,
           totalDays: data.totalDays,
           percent: 100,
-          message: "Itinerary complete"
+          message: data.validation
+            ? `Itinerary complete (${data.validation.budgetVerified && data.validation.logisticsVerified ? "verified" : "partial"})`
+            : "Itinerary complete"
         });
 
         cleanup();
@@ -303,6 +399,9 @@ export function useItineraryStream(): UseItineraryStreamResult {
     progress,
     error,
     isCached,
+    validation,
+    refinement,
+    validationResult,
     startStream,
     abortStream,
     retry

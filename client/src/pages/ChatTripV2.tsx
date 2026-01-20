@@ -35,6 +35,8 @@ import {
   Loader2,
   ShieldCheck,
   Plane,
+  Link2,
+  ExternalLink,
 } from "lucide-react";
 import { Link } from "wouter";
 import { COUNTRIES, searchCountries } from "@/lib/travelData";
@@ -67,9 +69,34 @@ interface TripState {
   keyDetails: string;
 }
 
+// Extracted trip data from URL scraping
+interface ExtractedTripData {
+  destination: string | null;
+  destinations: string[];
+  durationDays: number | null;
+  budgetEstimate: number | null;
+  budgetCurrency: string;
+  travelStyle: 'budget' | 'comfort' | 'luxury' | null;
+  highlights: string[];
+  suggestedMonth: string | null;
+  travelers: number | null;
+  rawSummary: string;
+  confidence: 'high' | 'medium' | 'low';
+  source: string;
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+function isValidUrl(urlString: string): boolean {
+  try {
+    const url = new URL(urlString);
+    return ['http:', 'https:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
 
 function formatDateDisplay(state: TripState): string | undefined {
   if (state.dateType === 'flexible') {
@@ -137,6 +164,11 @@ export default function ChatTripV2() {
   // UI states
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [passportSearch, setPassportSearch] = useState("");
+
+  // URL scraping state (Start Anywhere feature)
+  const [isScrapingUrl, setIsScrapingUrl] = useState(false);
+  const [extractedData, setExtractedData] = useState<ExtractedTripData | null>(null);
+  const [urlInputValue, setUrlInputValue] = useState("");
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -314,6 +346,150 @@ export default function ChatTripV2() {
       `**${country} passport** — I'll check visa requirements for your destinations.`,
       'passport'
     );
+  };
+
+  // =========================================================================
+  // URL SCRAPING HANDLERS (Start Anywhere Feature)
+  // =========================================================================
+
+  const prefillFromExtracted = (data: ExtractedTripData) => {
+    // Pre-fill destination
+    if (data.destination) {
+      const parts = data.destination.split(',').map(s => s.trim());
+      const city = parts[0] || '';
+      const country = parts[1] || '';
+      if (city) {
+        setTripState(prev => ({
+          ...prev,
+          destinations: [{ city, country }],
+        }));
+      }
+    }
+
+    // Pre-fill duration
+    if (data.durationDays && data.durationDays > 0) {
+      setTripState(prev => ({
+        ...prev,
+        dateType: 'flexible',
+        numDays: data.durationDays!,
+        preferredMonth: data.suggestedMonth || undefined,
+      }));
+    }
+
+    // Pre-fill budget
+    if (data.budgetEstimate && data.budgetEstimate > 0) {
+      setTripState(prev => ({
+        ...prev,
+        travelStyle: 'custom',
+        customBudget: data.budgetEstimate!,
+        currency: data.budgetCurrency || 'USD',
+      }));
+    } else if (data.travelStyle) {
+      setTripState(prev => ({
+        ...prev,
+        travelStyle: data.travelStyle!,
+      }));
+    }
+
+    // Pre-fill travelers if specified
+    if (data.travelers && data.travelers > 0) {
+      setTripState(prev => ({
+        ...prev,
+        travelers: { adults: data.travelers!, children: 0, infants: 0 },
+      }));
+    }
+
+    // Store highlights as key details
+    if (data.highlights && data.highlights.length > 0) {
+      setTripState(prev => ({
+        ...prev,
+        keyDetails: data.highlights.join(', '),
+      }));
+    }
+  };
+
+  const handleUrlScrape = async () => {
+    const url = urlInputValue.trim();
+    if (!url || !isValidUrl(url)) {
+      toast({
+        title: "Invalid URL",
+        description: "Please paste a valid URL starting with http:// or https://",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsScrapingUrl(true);
+    setExtractedData(null);
+
+    try {
+      trackTripEvent(0, 'url_scrape_started', { url }, {}, 'chat');
+
+      const response = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+
+      const result = await response.json();
+
+      if (!result.success || !result.data) {
+        trackTripEvent(0, 'url_scrape_failed', {
+          url,
+          errorCode: result.errorCode,
+        }, {}, 'chat');
+
+        toast({
+          title: "Couldn't read this link",
+          description: result.error || "Try a different travel blog or article.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Success - store extracted data and prefill form
+      setExtractedData(result.data);
+      prefillFromExtracted(result.data);
+
+      trackTripEvent(0, 'url_scrape_success', {
+        url,
+        destination: result.data.destination,
+        confidence: result.data.confidence,
+      }, {}, 'chat');
+
+      // Show success message
+      const destDisplay = result.data.destination || 'this trip';
+      addNarrativeMessage(
+        `Found trip details for **${destDisplay}**! Review and adjust above, then click **Plan My Trip**.`,
+        'destination'
+      );
+
+      // Clear the URL input
+      setUrlInputValue("");
+
+    } catch (error: any) {
+      console.error('[ChatTripV2] Scrape error:', error);
+      trackTripEvent(0, 'url_scrape_error', { url, error: error.message }, {}, 'chat');
+
+      toast({
+        title: "Something went wrong",
+        description: "Couldn't read this link. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsScrapingUrl(false);
+    }
+  };
+
+  const handleUrlPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pastedText = e.clipboardData.getData('text');
+    if (isValidUrl(pastedText)) {
+      // Update input value and trigger scrape after a short delay
+      setUrlInputValue(pastedText);
+      setTimeout(() => {
+        handleUrlScrape();
+      }, 100);
+    }
   };
 
   const handleSubmit = async () => {
@@ -505,15 +681,125 @@ export default function ChatTripV2() {
         <div className="flex-1 flex flex-col max-w-2xl mx-auto w-full">
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
-            {/* Welcome illustration */}
-            {messages.length <= 1 && (
+            {/* Welcome illustration + Magic Input */}
+            {messages.length <= 1 && !extractedData && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="text-center py-12"
+                className="text-center py-8"
               >
-                <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
-                  <Plane className="w-12 h-12 text-amber-600" />
+                <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
+                  <Plane className="w-10 h-10 text-amber-600" />
+                </div>
+
+                {/* Magic Input - Paste Link */}
+                <div className="max-w-md mx-auto mt-6">
+                  <p className="text-sm text-slate-500 mb-3">
+                    Have a travel article or blog? Paste the link to auto-fill your trip.
+                  </p>
+                  <div className="flex items-center gap-2 p-3 bg-white rounded-xl border border-slate-200 shadow-sm">
+                    <Link2 className="w-4 h-4 text-slate-400 shrink-0" />
+                    <input
+                      type="url"
+                      value={urlInputValue}
+                      onChange={(e) => setUrlInputValue(e.target.value)}
+                      onPaste={handleUrlPaste}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && urlInputValue.trim()) {
+                          e.preventDefault();
+                          handleUrlScrape();
+                        }
+                      }}
+                      placeholder="Paste a travel blog URL..."
+                      disabled={isScrapingUrl}
+                      className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 outline-none disabled:opacity-50"
+                    />
+                    {urlInputValue.trim() && !isScrapingUrl && (
+                      <button
+                        type="button"
+                        onClick={handleUrlScrape}
+                        className="shrink-0 px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition-colors"
+                      >
+                        Import
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Loading state */}
+                  {isScrapingUrl && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex items-center justify-center gap-2 mt-3 text-sm text-amber-600"
+                    >
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Reading article...
+                    </motion.div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+
+            {/* Extracted Data Confirmation Card */}
+            {extractedData && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="max-w-md mx-auto"
+              >
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center shrink-0">
+                      <Sparkles className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-emerald-900">Found trip details!</p>
+                      <ul className="text-sm text-emerald-700 mt-2 space-y-1">
+                        {extractedData.destination && (
+                          <li className="flex items-center gap-1.5">
+                            <span className="text-emerald-500">📍</span>
+                            {extractedData.destination}
+                          </li>
+                        )}
+                        {extractedData.durationDays && (
+                          <li className="flex items-center gap-1.5">
+                            <span className="text-emerald-500">📅</span>
+                            {extractedData.durationDays} days
+                            {extractedData.suggestedMonth && ` in ${extractedData.suggestedMonth}`}
+                          </li>
+                        )}
+                        {extractedData.budgetEstimate && (
+                          <li className="flex items-center gap-1.5">
+                            <span className="text-emerald-500">💰</span>
+                            ~${extractedData.budgetEstimate.toLocaleString()} {extractedData.budgetCurrency}
+                          </li>
+                        )}
+                        {extractedData.highlights.length > 0 && (
+                          <li className="flex items-start gap-1.5">
+                            <span className="text-emerald-500 mt-0.5">✨</span>
+                            <span>{extractedData.highlights.slice(0, 3).join(', ')}</span>
+                          </li>
+                        )}
+                      </ul>
+                      <p className="text-xs text-emerald-600 mt-3 flex items-center gap-1">
+                        <ExternalLink className="w-3 h-3" />
+                        <a
+                          href={extractedData.source}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline hover:no-underline truncate max-w-[200px]"
+                        >
+                          {new URL(extractedData.source).hostname}
+                        </a>
+                        <span className="text-emerald-400 ml-1">
+                          • {extractedData.confidence} confidence
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-emerald-600 mt-3 pt-3 border-t border-emerald-200">
+                    Review the fields above and click <strong>Plan My Trip</strong> when ready.
+                  </p>
                 </div>
               </motion.div>
             )}

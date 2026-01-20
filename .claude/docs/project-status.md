@@ -1,6 +1,6 @@
 # VoyageAI Project Status
 
-## Last Updated: 2026-01-12
+## Last Updated: 2026-01-19
 
 ## Overall Phase Status
 
@@ -10,30 +10,32 @@
 ├────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  Phase 1: Core MVP                                        ✅ COMPLETE       │
-│  ├── Trip creation flow                                                     │
+│  ├── Trip creation flow (CreateTrip + ChatTripV2)                          │
 │  ├── Feasibility analysis (Certainty Engine)                               │
 │  ├── AI itinerary generation                                               │
 │  └── Basic UI (TripResults, DayCards, Map)                                 │
 │                                                                             │
 │  Phase 2: RAG Foundation                                  ✅ COMPLETE       │
-│  ├── pgvector + knowledge schema                                           │
+│  ├── pgvector + knowledge schema (2 tables)                                │
 │  ├── Embeddings service (Ollama/OpenAI)                                    │
 │  ├── Knowledge search endpoint                                             │
 │  └── Visa lookup with citations                                            │
 │                                                                             │
 │  Phase 3: UX & Features                                   ✅ COMPLETE       │
 │  ├── Trip Results V1 (Mindtrip-style layout)                               │
-│  ├── Chat Trip V2 (wizard flow)                                            │
-│  ├── Edit flow with returnTo                                               │
-│  ├── Change Planner Agent                                                  │
+│  ├── Chat Trip V2 (wizard flow + quiet mode)                               │
+│  ├── Edit flow with returnTo (edit-in-place)                               │
+│  ├── Change Planner Agent (agentic with tools)                             │
 │  ├── Compare Plans modal                                                   │
-│  └── Version history                                                       │
+│  ├── Version history                                                       │
+│  └── Account-lite (voyage_uid)                                             │
 │                                                                             │
 │  Phase 4: Streaming & Performance                         ✅ COMPLETE       │
 │  ├── SSE day-by-day streaming                                              │
 │  ├── Progressive skeleton UI                                               │
 │  ├── React.memo optimizations                                              │
-│  └── Lazy loading (TripChat)                                               │
+│  ├── Lazy loading (TripChat)                                               │
+│  └── Multi-layer caching (AI, feasibility, weather)                        │
 │                                                                             │
 │  Phase 5: Production Hardening                            ✅ COMPLETE       │
 │  ├── Heartbeat keep-alive (15s pings)                                      │
@@ -43,9 +45,10 @@
 │  └── Admin token protection (ingest)                                       │
 │                                                                             │
 │  Phase 6: Observability & Guardrails                      ✅ COMPLETE       │
-│  ├── Stream summary logging                              ✅ Done            │
-│  ├── Generation budget guard                             ✅ Done            │
-│  └── Metrics endpoint                                    ✅ Done            │
+│  ├── Stream summary logging                                                │
+│  ├── Generation budget guard                                               │
+│  ├── Metrics endpoint                                                      │
+│  └── Database persistence bug fix (2026-01-19)                             │
 │                                                                             │
 │  Phase 7: Scale & Deploy                                  ⬜ NOT STARTED    │
 │  ├── Redis L2 cache                                                        │
@@ -57,159 +60,161 @@
 
 ---
 
-## Phase 5: Production Hardening (Complete)
+## Recent Updates (2026-01-19)
 
-### What Was Implemented Today (2026-01-12)
+### Database Persistence Bug Fix
 
-#### 1. SSE Heartbeat + Last-Event-ID
-- **Heartbeat**: 15-second pings using SSE comment format (`: ping`)
-- **Event IDs**: All events have IDs (`meta-0`, `day-{i}`, `progress-{i}`, `done-0`)
-- **Resume**: `parseLastEventId()` extracts day index from `Last-Event-ID` header
-- **Files**: `server/services/streamingItinerary.ts`
+**Issue**: Feasibility data was being overwritten to `pending` after successful save.
 
-#### 2. Concurrency Lock
-- **Problem solved**: Two tabs generating same trip = double LLM cost
-- **Solution**: DB lock with status/timestamp/owner
-- **Lock timeout**: 10 minutes (stale locks auto-takeover)
-- **Lock refresh**: Every 60s during generation
-- **Files**: `server/services/itineraryLock.ts`, `shared/schema.ts`
+**Root Cause**: Race condition where `fetchAndStoreDestinationImage()` called `updateTrip()` which ALWAYS reset `feasibilityStatus: 'pending'` and `feasibilityReport: null`.
 
-#### 3. Rate Limiting
-| Endpoint | Limit |
+**Fix Applied**:
+1. Added `updateTripImage()` method to `IStorage` interface
+2. Implemented in `DatabaseStorage` class (server/storage.ts:100-112)
+3. Implemented in `InMemoryStorage` class (server/storage.ts:273-280)
+4. Updated `fetchAndStoreDestinationImage()` in routes.ts to use the new method
+
+**Files Modified**:
+- `server/storage.ts` - Added `updateTripImage()` method
+- `server/routes.ts` - Updated image storage function
+
+---
+
+## Codebase Statistics
+
+### Server (Express + TypeScript)
+
+| Category | Count | Key Files |
+|----------|-------|-----------|
+| Main routes | 5,573 lines | `routes.ts` |
+| Feature routes | 15 files | `chat.ts`, `changePlan.ts`, `versions.ts`, etc. |
+| Services | 20+ files | `aiAgent.ts`, `streamingItinerary.ts`, `changePlannerAgent.ts` |
+| Middleware | 1 file | `rateLimiter.ts` |
+
+### Client (React + TypeScript)
+
+| Category | Count | Key Files |
+|----------|-------|-----------|
+| Pages | 14 files | `TripResultsV1.tsx` (1,716 lines), `CreateTrip.tsx` (2,344 lines) |
+| Components | 100+ files | `results/`, `results-v1/`, `chat/`, `ui/` |
+| Hooks | 10 files | `useItineraryStream.ts`, `useChangePlanner.ts` |
+| Utilities | 20+ files | `verdict.ts`, `comparePlans.ts`, `analytics.ts` |
+
+### Database (Drizzle + PostgreSQL)
+
+| Category | Count |
 |----------|-------|
-| SSE streaming | 10/min + max 3 concurrent per IP |
-| Trip creation | 5/min per IP |
-| Knowledge search | 60/min per IP |
-| Visa lookup | 30/min per IP |
-| General | 100/min per IP |
+| Main tables | 15 |
+| Knowledge tables | 2 (with pgvector) |
+| Total tables | 17 |
 
-#### 4. Admin Token Protection
-- `X-Admin-Token` header required in production for:
-  - `POST /api/knowledge/ingest`
-  - `POST /api/knowledge/ingest/batch`
-  - `DELETE /api/knowledge/documents/:sourceId`
-  - `GET /api/analytics/rate-limits`
-- Set via `ADMIN_TOKEN` environment variable
+---
+
+## Feature Inventory
+
+### Complete Features
+
+| Feature | Status | Key Files |
+|---------|--------|-----------|
+| Trip Creation (Form) | ✅ | `CreateTrip.tsx` |
+| Trip Creation (Chat) | ✅ | `ChatTripV2.tsx` |
+| Feasibility Analysis | ✅ | `routes.ts`, `feasibilityCache.ts` |
+| Streaming Itinerary | ✅ | `streamingItinerary.ts`, `useItineraryStream.ts` |
+| Day Cards UI | ✅ | `DayCard.tsx`, `DayCardList.tsx` |
+| Interactive Map | ✅ | `ItineraryMap.tsx` |
+| Verdict System | ✅ | `verdict.ts`, `VerdictCard.tsx` |
+| Certainty Breakdown | ✅ | `certaintyBreakdown.ts`, `CertaintyBreakdown.tsx` |
+| Change Planner | ✅ | `changePlannerAgent.ts`, `useChangePlanner.ts` |
+| Compare Plans | ✅ | `comparePlans.ts`, `ComparePlansModal.tsx` |
+| Version History | ✅ | `versions.ts`, `useTripVersions.ts` |
+| AI Chat | ✅ | `agentChat.ts`, `TripChat.tsx` |
+| Account-lite | ✅ | `voyageUid.ts`, trips.voyageUid |
+| Share View | ✅ | `TripShareView.tsx`, `/api/share/:id` |
+| PDF Export | ✅ | `TripExport.tsx` |
+| My Trips | ✅ | `MyTrips.tsx`, `/api/my-trips` |
+| RAG Knowledge | ✅ | `knowledge.ts`, `embeddings.ts` |
+
+### Infrastructure Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| SSE Heartbeat | ✅ | 15s pings |
+| Last-Event-ID Resume | ✅ | Auto-reconnect |
+| Concurrency Lock | ✅ | Prevent duplicate generation |
+| Rate Limiting | ✅ | Per-endpoint limits |
+| Generation Budgets | ✅ | maxDays, maxTime, maxCalls |
+| Stream Logging | ✅ | Structured JSON per stream |
+| Feasibility Cache | ✅ | 24h TTL, 1000 entries LRU |
+| AI Cache | ✅ | Multi-TTL by data type |
 
 ---
 
 ## Environment Variables
 
-### Required for Production
+### Required
+
 ```bash
 DEEPSEEK_API_KEY=sk-xxx           # AI API key
-DATABASE_URL=postgres://...       # PostgreSQL connection
+DATABASE_URL=postgres://...       # PostgreSQL connection (prod)
+```
+
+### Production
+
+```bash
 ADMIN_TOKEN=your-secret-token     # Admin endpoint protection
 NODE_ENV=production               # Enables strict security
 ```
 
 ### Optional
+
 ```bash
 STREAMING_ITINERARY_ENABLED=true  # SSE streaming (default: true)
 EMBEDDING_DIM=768                 # pgvector embedding dimension
 OLLAMA_URL=http://localhost:11434 # Local embeddings
+SERP_API_KEY=sk-xxx               # Flight search API
 ```
 
 ---
 
-## Schema Changes (Run drizzle-kit push)
+## API Endpoints Summary
 
-### Today's Additions
-```sql
--- Itinerary generation lock fields
-ALTER TABLE trips ADD COLUMN itinerary_status TEXT DEFAULT 'idle';
-ALTER TABLE trips ADD COLUMN itinerary_locked_at TIMESTAMP;
-ALTER TABLE trips ADD COLUMN itinerary_lock_owner TEXT;
-```
+### Trip Management
 
----
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/trips` | POST | Create trip |
+| `/api/trips/:id` | GET | Get trip |
+| `/api/trips/:id` | PUT | Update trip (edit-in-place) |
+| `/api/trips/:id` | DELETE | Delete trip |
+| `/api/my-trips` | GET | List user's trips |
+| `/api/trips/:id/itinerary/stream` | GET | SSE streaming |
 
-## Files Created/Modified Today
+### AI Features
 
-### New Files
-| File | Purpose |
-|------|---------|
-| `server/services/itineraryLock.ts` | Concurrency lock for generation |
-| `server/middleware/rateLimiter.ts` | Rate limiting middleware |
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/trips/:id/chat` | POST | Chat with AI |
+| `/api/trips/:id/chat/confirm` | POST | Apply pending changes |
+| `/api/change-plan` | POST | Change planner agent |
+| `/api/trips/:id/fix-options` | POST | Suggest fixes |
+| `/api/trips/:id/generate-itinerary` | POST | Generate itinerary |
 
-### Modified Files
-| File | Changes |
-|------|---------|
-| `server/services/streamingItinerary.ts` | Heartbeat, event IDs, SSE context |
-| `server/routes.ts` | Lock integration, rate limiters |
-| `server/routes/knowledge.ts` | Rate limits, admin protection |
-| `shared/schema.ts` | Lock fields on trips table |
+### Versions & Sharing
 
----
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/trips/:id/versions` | GET/POST | Version history |
+| `/api/trips/:id/versions/:vid/restore` | POST | Restore version |
+| `/api/share/:id` | GET | Public share view |
+| `/api/trips/:id/applied-plans` | GET/POST | Shareable plan links |
 
-## Phase 6: Observability & Guardrails (Complete)
+### Knowledge (RAG)
 
-### What Was Implemented (2026-01-12)
-
-#### 1. Stream Summary Logging
-One structured JSON log line per stream for debugging and monitoring.
-
-**Log Format:**
-```json
-{
-  "type": "stream_summary",
-  "tripId": 123,
-  "lockOwner": "abc123",
-  "status": "complete",
-  "totalDays": 7,
-  "generatedDays": 7,
-  "cachedDays": 0,
-  "timeToFirstDayMs": 5200,
-  "totalMs": 45000,
-  "aiCalls": 7,
-  "recoverableErrors": 0,
-  "lockWaitMs": 0,
-  "budgetExceeded": { "type": null, "limit": null, "actual": null },
-  "requestId": "stream_1736678400000_abc123",
-  "destination": "Paris, France",
-  "ip": "127.0.0.1",
-  "userAgent": "Mozilla/5.0...",
-  "timestamp": "2026-01-12T10:00:00.000Z"
-}
-```
-
-**Status Values:**
-- `complete` - Successfully generated all days
-- `abort` - Client disconnected mid-generation
-- `error` - Server error during generation
-- `budget_exceeded` - Hit a generation limit
-
-#### 2. Generation Budget Guard
-Hard caps to prevent runaway generation and control costs.
-
-**Budget Constants:**
-```typescript
-export const GENERATION_BUDGETS = {
-  maxDays: 14,           // Maximum days in a single itinerary
-  maxTotalMs: 5 * 60 * 1000, // 5 minutes max generation time
-  maxAICalls: 20,        // Maximum AI API calls per stream
-  maxRetriesPerDay: 2,   // Max retries before giving up on a day
-};
-```
-
-**How It Works:**
-- Checks are performed before each day generation
-- If any budget is exceeded, generation stops with `budget_exceeded` status
-- Client receives an error event with `budgetType` (days/time/calls)
-- Partial itineraries are preserved and can be resumed later
-
-**Files Modified:**
-- `server/services/streamingItinerary.ts` - Added metrics and budget tracking
-- `server/routes.ts` - Creates metrics, passes to generator, logs summary
-
----
-
-## Next Steps (Phase 7)
-
-### Priority Order:
-1. **Redis L2 Cache** - Reduce DB load for hot trip data
-2. **Multi-instance Lock Coordination** - Redis-based locks for horizontal scaling
-3. **Corridor Expansion** - Seed top 20 visa corridors with RAG data
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/knowledge/search` | POST | Semantic search |
+| `/api/knowledge/ingest` | POST | Add documents (admin) |
+| `/api/knowledge/ingest/batch` | POST | Batch ingest (admin) |
 
 ---
 
@@ -220,6 +225,7 @@ export const GENERATION_BUDGETS = {
 - [x] Admin token for ingest/delete operations
 - [x] Concurrency lock prevents cost abuse
 - [x] Client disconnect aborts generation
+- [x] Voyage UID ownership checks
 - [ ] Input validation hardening
 - [ ] CORS configuration
 
@@ -228,18 +234,47 @@ export const GENERATION_BUDGETS = {
 - [x] Last-Event-ID enables auto-reconnect
 - [x] Atomic persistence (DB before SSE)
 - [x] Stale lock recovery
-- [x] Generation budget guards (maxDays, maxTime, maxCalls)
+- [x] Generation budget guards
+- [x] Database persistence bug fixed (2026-01-19)
 - [ ] Circuit breaker for AI API
 
 ### Observability
 - [x] Console logging throughout
 - [x] Rate limit metrics endpoint
-- [x] Stream summary logging (structured JSON per stream)
+- [x] Stream summary logging
 - [ ] Error tracking (Sentry)
-- [ ] Performance metrics
+- [ ] Performance metrics dashboard
 
 ### Scalability
 - [x] DB caching for complete itineraries
+- [x] Multi-layer AI caching
+- [x] Feasibility LRU cache
 - [ ] Redis L2 cache
 - [ ] Multi-instance lock coordination
 - [ ] Queue for long generation jobs
+
+---
+
+## Next Steps (Phase 7)
+
+### Priority Order:
+1. **Redis L2 Cache** - Reduce DB load for hot trip data
+2. **Multi-instance Lock Coordination** - Redis-based locks for horizontal scaling
+3. **Corridor Expansion** - Seed top 20 visa corridors with RAG data
+4. **Error Tracking** - Sentry integration for production monitoring
+
+---
+
+## Key Architecture Decisions
+
+1. **Account-lite over Auth-first**: UUID in localStorage enables anonymous usage while preserving trip ownership
+
+2. **WorkingTrip Pattern**: Separates server data from optimistic UI updates, enabling undo and comparison
+
+3. **SSE over WebSockets**: Simpler protocol for one-way streaming, better proxy compatibility
+
+4. **Agentic Change Planning**: AI with tools for intelligent recomputation vs. full regeneration
+
+5. **Edit-in-place**: Same trip ID preserved on edit, not duplicated
+
+6. **Dedicated Image Update**: `updateTripImage()` method prevents feasibility data loss (bug fix)

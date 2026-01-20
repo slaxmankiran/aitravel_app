@@ -12,6 +12,18 @@
 
 import OpenAI from "openai";
 import type { Response, Request } from "express";
+import {
+  validateItinerary,
+  buildRefinementPrompt,
+  type CombinedValidationResult,
+  type GroupProfile,
+} from "./validators";
+import {
+  enhanceWithRagVerification,
+  isRagVerificationAvailable,
+  getVisaCostForTrip,
+  type VisaCostVerificationResult,
+} from "./ragCostVerifier";
 
 // ============================================================================
 // TYPES
@@ -28,6 +40,17 @@ export interface StreamingItineraryInput {
   groupSize: number;
   passport?: string;
   origin?: string;
+  /** Group profile for logistics validation */
+  groupProfile?: GroupProfile;
+  /** Enable validation loop (default: true) */
+  enableValidation?: boolean;
+  /** Enable RAG cost verification (default: true) */
+  enableRagVerification?: boolean;
+  /** Visa details for cost verification */
+  visaDetails?: {
+    type?: string;
+    costs?: { total?: number };
+  };
 }
 
 export interface ItineraryActivity {
@@ -42,6 +65,14 @@ export interface ItineraryActivity {
   transportMode?: string;
   /** Dedupe key: slug(name) + destination + timeSlot */
   activityKey?: string;
+  /** Cost verification metadata (Phase 3 - Trust Badges) */
+  costVerification?: {
+    source: "rag_knowledge" | "api_estimate" | "ai_estimate" | "user_input";
+    confidence: "high" | "medium" | "low";
+    lastVerified?: string;
+    citation?: string;
+    originalEstimate?: number;
+  };
 }
 
 export interface ItineraryDay {
@@ -60,8 +91,29 @@ export interface ItineraryDay {
 }
 
 export interface StreamEvent {
-  event: "meta" | "day" | "progress" | "done" | "error";
+  event: "meta" | "day" | "progress" | "done" | "error" | "validation" | "refinement";
   data: any;
+}
+
+/**
+ * Validation result included in done event
+ */
+export interface ValidationMetadata {
+  budgetVerified: boolean;
+  logisticsVerified: boolean;
+  totalIterations: number;
+  refinedDays: number[];
+  logs: string[];
+  /** RAG cost verification stats (Phase 4) */
+  ragVerification?: {
+    enabled: boolean;
+    activitiesVerified: number;
+    activitiesUnverified: number;
+    visaCostVerified?: boolean;
+    visaCost?: number;
+    visaCostSource?: string;
+    visaCostCitation?: string;
+  };
 }
 
 /**
@@ -372,6 +424,368 @@ export function dedupeActivities(
   }
 
   return { activities: filtered, newKeys };
+}
+
+// ============================================================================
+// COST VERIFICATION (Phase 3 - Trust Badges)
+// ============================================================================
+
+export type CostVerificationSource = "rag_knowledge" | "api_estimate" | "ai_estimate" | "user_input";
+export type CostConfidence = "high" | "medium" | "low";
+
+export interface CostVerification {
+  source: CostVerificationSource;
+  confidence: CostConfidence;
+  lastVerified?: string;
+  citation?: string;
+  originalEstimate?: number;
+}
+
+/**
+ * Annotate activities with cost verification metadata based on validation results
+ */
+export function annotateWithVerification(
+  days: ItineraryDay[],
+  budgetVerified: boolean,
+  logisticsVerified: boolean
+): ItineraryDay[] {
+  const confidence: CostConfidence = budgetVerified ? "medium" : "low";
+
+  return days.map(day => ({
+    ...day,
+    activities: day.activities.map(activity => ({
+      ...activity,
+      costVerification: activity.costVerification || {
+        source: "ai_estimate" as CostVerificationSource,
+        confidence,
+        lastVerified: new Date().toISOString(),
+      },
+    })),
+  }));
+}
+
+// ============================================================================
+// VALIDATION LOOP CONFIGURATION
+// ============================================================================
+
+/**
+ * Maximum refinement iterations before accepting imperfect result
+ */
+const MAX_REFINEMENT_ITERATIONS = 2;
+
+/**
+ * Validate itinerary and refine flagged days if needed
+ *
+ * This is the core of the Director pattern - the "self-healing loop"
+ */
+export async function validateAndRefineDays(
+  res: Response,
+  openai: OpenAI,
+  model: string,
+  input: StreamingItineraryInput,
+  days: ItineraryDay[],
+  usedActivityKeys: Set<string>,
+  abortController?: StreamAbortController,
+  onDayComplete?: (day: ItineraryDay, allDays: ItineraryDay[]) => Promise<void>,
+  metrics?: StreamMetrics
+): Promise<{ days: ItineraryDay[]; validation: CombinedValidationResult; iterations: number }> {
+  let currentDays = [...days];
+  let iteration = 0;
+  let lastValidation: CombinedValidationResult | null = null;
+  const allRefinedDays: number[] = [];
+
+  // Build group profile from input
+  const groupProfile: GroupProfile = input.groupProfile || {
+    hasToddler: false,
+    hasElderly: false,
+    hasMobilityIssues: false,
+    groupSize: input.groupSize || 2,
+  };
+
+  while (iteration < MAX_REFINEMENT_ITERATIONS) {
+    iteration++;
+
+    // Check abort
+    if (abortController?.aborted) {
+      console.log(`[Validation] Aborted during validation iteration ${iteration}`);
+      break;
+    }
+
+    console.log(`[Validation] Running validation iteration ${iteration}...`);
+
+    // Run validators
+    const validationResult = await validateItinerary({
+      itinerary: currentDays,
+      totalBudget: input.budget,
+      numDays: input.numDays,
+      groupProfile,
+    });
+
+    lastValidation = validationResult;
+
+    // Send validation event to client
+    sendSSE(res, {
+      event: "validation",
+      data: {
+        iteration,
+        status: validationResult.status,
+        budgetVerified: validationResult.metadata.budgetVerified,
+        logisticsVerified: validationResult.metadata.logisticsVerified,
+        flaggedDays: validationResult.flaggedDays,
+        logs: validationResult.logs.slice(-5), // Last 5 log lines
+      }
+    }, `validation-${iteration}`);
+
+    // If approved, we're done
+    if (validationResult.status === "APPROVED") {
+      console.log(`[Validation] APPROVED on iteration ${iteration}`);
+      break;
+    }
+
+    // If this is the last iteration, accept the imperfect result
+    if (iteration >= MAX_REFINEMENT_ITERATIONS) {
+      console.log(`[Validation] Max iterations (${MAX_REFINEMENT_ITERATIONS}) reached, accepting ${validationResult.status}`);
+      break;
+    }
+
+    // Build refinement prompt
+    const refinementFeedback = buildRefinementPrompt(validationResult, iteration);
+    const daysToRefine = validationResult.flaggedDays;
+
+    if (daysToRefine.length === 0) {
+      console.log(`[Validation] Status is ${validationResult.status} but no flagged days, breaking`);
+      break;
+    }
+
+    console.log(`[Validation] Refining days: ${daysToRefine.join(", ")}`);
+    allRefinedDays.push(...daysToRefine);
+
+    // Send refinement event to client
+    sendSSE(res, {
+      event: "refinement",
+      data: {
+        iteration,
+        daysToRefine,
+        budgetIssues: validationResult.budget.suggestions,
+        logisticsIssues: validationResult.logistics.suggestions,
+      }
+    }, `refinement-${iteration}`);
+
+    // Regenerate flagged days with feedback
+    for (const dayNum of daysToRefine) {
+      if (abortController?.aborted) break;
+
+      const dayIndex = dayNum - 1; // Day numbers are 1-indexed
+
+      // Build context from other days
+      const otherDays = currentDays.filter(d => d.day !== dayNum);
+      const previousDaysSummary = otherDays.map(d => summarizeDay(d));
+
+      // Generate refined day with feedback
+      const refinedDay = await generateRefinedDay(
+        openai,
+        model,
+        input,
+        dayIndex,
+        previousDaysSummary,
+        usedActivityKeys,
+        refinementFeedback,
+        validationResult,
+        abortController,
+        metrics
+      );
+
+      if (refinedDay && !abortController?.aborted) {
+        // Replace the day in our array
+        const existingIndex = currentDays.findIndex(d => d.day === dayNum);
+        if (existingIndex >= 0) {
+          currentDays[existingIndex] = refinedDay;
+        }
+
+        // Persist refined day
+        if (onDayComplete) {
+          try {
+            await onDayComplete(refinedDay, currentDays);
+          } catch (e) {
+            console.error(`[Validation] Failed to persist refined day ${dayNum}:`, e);
+          }
+        }
+
+        // Send refined day to client
+        sendSSE(res, {
+          event: "day",
+          data: {
+            dayIndex,
+            day: refinedDay,
+            refined: true,
+            iteration,
+          }
+        }, `day-${dayIndex}-r${iteration}`);
+      }
+    }
+  }
+
+  // Return final result
+  return {
+    days: currentDays,
+    validation: lastValidation || await validateItinerary({
+      itinerary: currentDays,
+      totalBudget: input.budget,
+      numDays: input.numDays,
+      groupProfile,
+    }),
+    iterations: iteration,
+  };
+}
+
+/**
+ * Generate a refined day based on validation feedback
+ */
+async function generateRefinedDay(
+  openai: OpenAI,
+  model: string,
+  input: StreamingItineraryInput,
+  dayIndex: number,
+  previousDaysSummary: string[],
+  usedActivityKeys: Set<string>,
+  refinementFeedback: string,
+  validationResult: CombinedValidationResult,
+  abortController?: StreamAbortController,
+  metrics?: StreamMetrics
+): Promise<ItineraryDay | null> {
+  if (abortController?.aborted) return null;
+
+  const dayDate = new Date(input.startDate);
+  dayDate.setDate(dayDate.getDate() + dayIndex);
+  const dateStr = dayDate.toISOString().split("T")[0];
+  const dayNum = dayIndex + 1;
+
+  // Find specific issues for this day
+  const dayBudget = validationResult.budget.perDayBreakdown.find(d => d.day === dayNum);
+  const dayLogistics = validationResult.logistics.perDayLogistics.find(d => d.day === dayNum);
+
+  const budgetIssue = dayBudget?.status === "OVER_BUDGET"
+    ? `Day ${dayNum} costs $${dayBudget.actual.toFixed(0)} but should be ≤$${dayBudget.allocated.toFixed(0)}. REDUCE costs by $${dayBudget.delta.toFixed(0)}.`
+    : "";
+
+  const logisticsIssues = dayLogistics?.conflicts
+    .filter(c => c.severity === "error")
+    .map(c => c.issue)
+    .join(" ") || "";
+
+  const previousContext = previousDaysSummary.length > 0
+    ? `\nOTHER DAYS (DO NOT REPEAT):\n${previousDaysSummary.join("\n")}`
+    : "";
+
+  const prompt = `REFINEMENT REQUEST: Regenerate Day ${dayNum} fixing the issues below.
+
+DATE: ${dateStr}
+DESTINATION: ${input.destination}
+STYLE: ${input.travelStyle || "standard"}
+DAILY BUDGET: ~$${Math.round(input.budget / input.numDays)}
+TRAVELERS: ${input.groupSize}
+${previousContext}
+
+ISSUES TO FIX:
+${budgetIssue}
+${logisticsIssues}
+
+REFINEMENT INSTRUCTIONS:
+${refinementFeedback}
+
+REQUIREMENTS:
+1. Fix ALL issues mentioned above
+2. Keep activities realistic and properly spaced (minimum 1 hour between activities)
+3. ALL costs must be realistic (use free alternatives if over budget)
+4. Ensure morning activities are before afternoon, afternoon before evening
+5. Include realistic transit time between locations
+
+Return JSON ONLY:
+{
+  "day": ${dayNum},
+  "date": "${dateStr}",
+  "title": "Creative title",
+  "activities": [
+    {
+      "time": "09:00",
+      "name": "Specific Place",
+      "description": "Brief description",
+      "type": "activity|meal|transport|lodging",
+      "estimatedCost": 20,
+      "duration": "2 hours",
+      "location": "Location",
+      "coordinates": {"lat": 0.0, "lng": 0.0},
+      "transportMode": "walk|metro|taxi|bus"
+    }
+  ],
+  "localFood": []
+}`;
+
+  if (abortController?.aborted) return null;
+
+  if (metrics) {
+    metrics.aiCalls++;
+  }
+
+  try {
+    const response = await openai.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: `You are a travel expert FIXING an itinerary based on validation feedback. The previous version had budget or logistics issues. Return valid JSON only.`
+        },
+        { role: "user", content: prompt }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.3, // Lower temperature for more focused refinement
+      max_tokens: 1500,
+    });
+
+    if (abortController?.aborted) return null;
+
+    const content = response.choices[0].message.content || "{}";
+    const parsed = JSON.parse(content);
+
+    let activities: ItineraryActivity[] = (parsed.activities || []).map((a: any) => ({
+      time: a.time || "09:00",
+      name: a.name || "Activity",
+      description: a.description || a.name || "Activity",
+      type: a.type || "activity",
+      estimatedCost: a.estimatedCost ?? 20,
+      duration: a.duration || "2 hours",
+      location: a.location || a.name,
+      coordinates: {
+        lat: a.coordinates?.lat || 0,
+        lng: a.coordinates?.lng || 0
+      },
+      transportMode: a.transportMode
+    }));
+
+    // Deduplicate
+    const { activities: dedupedActivities, newKeys } = dedupeActivities(
+      activities,
+      usedActivityKeys,
+      input.destination
+    );
+    newKeys.forEach(key => usedActivityKeys.add(key));
+
+    console.log(`[Validation] Refined Day ${dayNum}: ${dedupedActivities.length} activities, $${dedupedActivities.reduce((s, a) => s + (a.estimatedCost || 0), 0)} total`);
+
+    return {
+      day: parsed.day || dayNum,
+      date: parsed.date || dateStr,
+      title: parsed.title || `Day ${dayNum} (Refined)`,
+      activities: dedupedActivities,
+      localFood: parsed.localFood || []
+    };
+  } catch (e) {
+    console.error(`[Validation] Error refining day ${dayNum}:`, e);
+    if (metrics) {
+      metrics.recoverableErrors++;
+    }
+    return null;
+  }
 }
 
 // ============================================================================
@@ -758,8 +1172,149 @@ export async function streamItineraryGeneration(
     }
   }
 
+  let totalActivities = days.reduce((sum, d) => sum + d.activities.length, 0);
+  console.log(`[StreamItinerary] Generation phase complete: ${days.length} days, ${totalActivities} activities`);
+
+  // ============================================================================
+  // VALIDATION LOOP (Director Pattern)
+  // ============================================================================
+  let validationResult: CombinedValidationResult | null = null;
+  let validationIterations = 0;
+  let refinedDays: number[] = [];
+
+  // Run validation if enabled and we have days to validate
+  const enableValidation = input.enableValidation !== false;
+  if (enableValidation && days.length > 0 && !abortController?.aborted) {
+    console.log(`[StreamItinerary] Starting validation loop...`);
+
+    try {
+      const validationStartTime = Date.now();
+
+      const result = await validateAndRefineDays(
+        res,
+        openai,
+        model,
+        input,
+        days,
+        usedActivityKeys,
+        abortController,
+        onDayComplete,
+        metrics
+      );
+
+      // Update days with refined versions
+      days.length = 0;
+      days.push(...result.days);
+      validationResult = result.validation;
+      validationIterations = result.iterations;
+
+      // Track which days were refined
+      if (result.validation.flaggedDays.length > 0 && result.iterations > 1) {
+        refinedDays = result.validation.flaggedDays;
+      }
+
+      const validationTime = Date.now() - validationStartTime;
+      console.log(`[StreamItinerary] Validation complete in ${validationTime}ms: ${validationResult.status}`);
+
+      // Annotate activities with verification metadata (Phase 3 - Trust Badges)
+      const annotatedDays = annotateWithVerification(
+        days,
+        validationResult.metadata.budgetVerified,
+        validationResult.metadata.logisticsVerified
+      );
+      days.length = 0;
+      days.push(...annotatedDays);
+      console.log(`[StreamItinerary] Activities annotated with verification metadata (confidence: ${validationResult.metadata.budgetVerified ? 'medium' : 'low'})`);
+
+    } catch (error) {
+      console.error(`[StreamItinerary] Validation loop error:`, error);
+      if (metrics) {
+        metrics.recoverableErrors++;
+      }
+    }
+  }
+
+  // ============================================================================
+  // RAG COST VERIFICATION (Phase 4 - Director Pattern Enhancement)
+  // ============================================================================
+  let ragVerificationStats: ValidationMetadata["ragVerification"] | undefined;
+  let visaCostResult: VisaCostVerificationResult | undefined;
+
+  const enableRagVerification = input.enableRagVerification !== false;
+  if (enableRagVerification && days.length > 0 && !abortController?.aborted) {
+    console.log(`[StreamItinerary] Starting RAG cost verification...`);
+
+    try {
+      // Check if RAG verification is available (has pricing data in knowledge base)
+      const ragAvailable = await isRagVerificationAvailable();
+
+      if (ragAvailable) {
+        const ragStartTime = Date.now();
+
+        // Enhance activities with RAG-verified costs
+        const enhancedDays = await enhanceWithRagVerification(days, input.destination);
+
+        // Count verification results
+        let verified = 0;
+        let unverified = 0;
+        for (const day of enhancedDays) {
+          for (const activity of day.activities) {
+            if (activity.costVerification?.source === "rag_knowledge") {
+              verified++;
+            } else {
+              unverified++;
+            }
+          }
+        }
+
+        // Update days with enhanced verification
+        days.length = 0;
+        days.push(...enhancedDays);
+
+        const ragTime = Date.now() - ragStartTime;
+        console.log(`[StreamItinerary] RAG verification complete in ${ragTime}ms: ${verified} verified, ${unverified} unverified`);
+
+        ragVerificationStats = {
+          enabled: true,
+          activitiesVerified: verified,
+          activitiesUnverified: unverified,
+        };
+      } else {
+        console.log(`[StreamItinerary] RAG verification skipped - no pricing data in knowledge base`);
+        ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+      }
+
+      // Verify visa cost if passport is provided
+      if (input.passport && input.destination) {
+        console.log(`[StreamItinerary] Verifying visa cost for ${input.passport} → ${input.destination}...`);
+        visaCostResult = await getVisaCostForTrip(
+          input.passport,
+          input.destination,
+          input.visaDetails
+        );
+
+        if (ragVerificationStats) {
+          ragVerificationStats.visaCostVerified = visaCostResult.confidence !== "low";
+          ragVerificationStats.visaCost = visaCostResult.verifiedCost;
+          ragVerificationStats.visaCostSource = visaCostResult.source;
+          ragVerificationStats.visaCostCitation = visaCostResult.citation;
+        }
+
+        console.log(`[StreamItinerary] Visa cost: $${visaCostResult.verifiedCost} (${visaCostResult.confidence} confidence from ${visaCostResult.source})`);
+      }
+
+    } catch (error) {
+      console.error(`[StreamItinerary] RAG verification error:`, error);
+      ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+      if (metrics) {
+        metrics.recoverableErrors++;
+      }
+    }
+  }
+
+  // Recalculate totals after potential refinement
   const totalTime = Date.now() - startTime;
-  const totalActivities = days.reduce((sum, d) => sum + d.activities.length, 0);
+  totalActivities = days.reduce((sum, d) => sum + d.activities.length, 0);
 
   console.log(`[StreamItinerary] Complete: ${days.length} days, ${totalActivities} activities in ${totalTime}ms`);
 
@@ -772,6 +1327,16 @@ export async function streamItineraryGeneration(
     }
   }
 
+  // Build validation metadata for done event
+  const validationMetadata: ValidationMetadata | null = validationResult ? {
+    budgetVerified: validationResult.metadata.budgetVerified,
+    logisticsVerified: validationResult.metadata.logisticsVerified,
+    totalIterations: validationIterations,
+    refinedDays,
+    logs: validationResult.logs.slice(-10), // Last 10 log entries
+    ragVerification: ragVerificationStats,
+  } : null;
+
   // Send done event (even if partial) with ID for resume support
   if (!abortController?.aborted) {
     sendSSE(res, {
@@ -782,7 +1347,8 @@ export async function streamItineraryGeneration(
         totalActivities,
         generationTimeMs: totalTime,
         itinerary: { days },
-        complete: days.length >= input.numDays
+        complete: days.length >= input.numDays,
+        validation: validationMetadata,
       }
     }, "done-0");
   }
@@ -954,7 +1520,130 @@ export async function resumeItineraryStream(
     }
   }
 
+  // ============================================================================
+  // VALIDATION LOOP (Director Pattern)
+  // ============================================================================
+  let validationResult: CombinedValidationResult | null = null;
+  let validationIterations = 0;
+  let refinedDays: number[] = [];
+
+  // Run validation if enabled and we have days to validate
+  const enableValidation = input.enableValidation !== false;
+  if (enableValidation && days.length > 0 && !abortController?.aborted) {
+    console.log(`[StreamItinerary] Resume: Starting validation loop...`);
+
+    try {
+      const validationStartTime = Date.now();
+
+      const result = await validateAndRefineDays(
+        res,
+        openai,
+        model,
+        input,
+        days,
+        usedActivityKeys,
+        abortController,
+        onDayComplete,
+        metrics
+      );
+
+      // Update days with refined versions
+      days.length = 0;
+      days.push(...result.days);
+      validationResult = result.validation;
+      validationIterations = result.iterations;
+
+      // Track which days were refined
+      if (result.validation.flaggedDays.length > 0 && result.iterations > 1) {
+        refinedDays = result.validation.flaggedDays;
+      }
+
+      const validationTime = Date.now() - validationStartTime;
+      console.log(`[StreamItinerary] Resume: Validation complete in ${validationTime}ms: ${validationResult.status}`);
+
+      // Annotate activities with verification metadata (Phase 3 - Trust Badges)
+      const annotatedDays = annotateWithVerification(
+        days,
+        validationResult.metadata.budgetVerified,
+        validationResult.metadata.logisticsVerified
+      );
+      days.length = 0;
+      days.push(...annotatedDays);
+
+    } catch (error) {
+      console.error(`[StreamItinerary] Resume: Validation loop error:`, error);
+      if (metrics) {
+        metrics.recoverableErrors++;
+      }
+    }
+  }
+
+  // ============================================================================
+  // RAG COST VERIFICATION (Phase 4 - Resume)
+  // ============================================================================
+  let ragVerificationStats: ValidationMetadata["ragVerification"] | undefined;
+  let visaCostResult: VisaCostVerificationResult | undefined;
+
+  const enableRagVerification = input.enableRagVerification !== false;
+  if (enableRagVerification && days.length > 0 && !abortController?.aborted) {
+    console.log(`[StreamItinerary] Resume: Starting RAG cost verification...`);
+
+    try {
+      const ragAvailable = await isRagVerificationAvailable();
+
+      if (ragAvailable) {
+        const enhancedDays = await enhanceWithRagVerification(days, input.destination);
+
+        let verified = 0;
+        let unverified = 0;
+        for (const day of enhancedDays) {
+          for (const activity of day.activities) {
+            if (activity.costVerification?.source === "rag_knowledge") {
+              verified++;
+            } else {
+              unverified++;
+            }
+          }
+        }
+
+        days.length = 0;
+        days.push(...enhancedDays);
+
+        ragVerificationStats = {
+          enabled: true,
+          activitiesVerified: verified,
+          activitiesUnverified: unverified,
+        };
+      } else {
+        ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+      }
+
+      // Verify visa cost if passport is provided
+      if (input.passport && input.destination) {
+        visaCostResult = await getVisaCostForTrip(
+          input.passport,
+          input.destination,
+          input.visaDetails
+        );
+
+        if (ragVerificationStats) {
+          ragVerificationStats.visaCostVerified = visaCostResult.confidence !== "low";
+          ragVerificationStats.visaCost = visaCostResult.verifiedCost;
+          ragVerificationStats.visaCostSource = visaCostResult.source;
+          ragVerificationStats.visaCostCitation = visaCostResult.citation;
+        }
+
+        console.log(`[StreamItinerary] Resume: Visa cost: $${visaCostResult.verifiedCost} (${visaCostResult.source})`);
+      }
+
+    } catch (error) {
+      console.error(`[StreamItinerary] Resume: RAG verification error:`, error);
+      ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+    }
+  }
+
   const totalTime = Date.now() - startTime;
+  const totalActivities = days.reduce((sum, d) => sum + d.activities.length, 0);
 
   // Finalize metrics
   if (metrics) {
@@ -964,6 +1653,16 @@ export async function resumeItineraryStream(
     }
   }
 
+  // Build validation metadata for done event
+  const validationMetadata: ValidationMetadata | null = validationResult ? {
+    budgetVerified: validationResult.metadata.budgetVerified,
+    logisticsVerified: validationResult.metadata.logisticsVerified,
+    totalIterations: validationIterations,
+    refinedDays,
+    logs: validationResult.logs.slice(-10), // Last 10 log entries
+    ragVerification: ragVerificationStats,
+  } : null;
+
   // Done with ID for resume support
   if (!abortController?.aborted) {
     sendSSE(res, {
@@ -971,9 +1670,10 @@ export async function resumeItineraryStream(
       data: {
         tripId: input.tripId,
         totalDays: days.length,
-        totalActivities: days.reduce((sum, d) => sum + d.activities.length, 0),
+        totalActivities,
         itinerary: { days },
-        complete: days.length >= input.numDays
+        complete: days.length >= input.numDays,
+        validation: validationMetadata,
       }
     }, "done-0");
   }

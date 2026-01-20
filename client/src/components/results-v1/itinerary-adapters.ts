@@ -9,6 +9,26 @@
 // TYPES (matching ItineraryTimeline data shape)
 // ============================================================================
 
+/**
+ * Cost verification metadata (Trust Badges - Phase 3)
+ * Shows where cost estimate came from and confidence level
+ */
+export type CostVerificationSource = "rag_knowledge" | "api_estimate" | "ai_estimate" | "user_input";
+export type CostConfidence = "high" | "medium" | "low";
+
+export interface CostVerification {
+  /** Where the cost estimate came from */
+  source: CostVerificationSource;
+  /** Confidence level in the estimate */
+  confidence: CostConfidence;
+  /** When the cost was last verified (ISO date) */
+  lastVerified?: string;
+  /** Citation/source name for RAG-verified costs */
+  citation?: string;
+  /** Original AI estimate if different from verified */
+  originalEstimate?: number;
+}
+
 export interface Activity {
   time: string;
   description: string;
@@ -21,6 +41,8 @@ export interface Activity {
   name?: string;
   cost?: number;
   transportMode?: string;
+  /** Cost verification metadata (Phase 3 - Trust Badges) */
+  costVerification?: CostVerification;
 }
 
 export interface LocalFoodSpot {

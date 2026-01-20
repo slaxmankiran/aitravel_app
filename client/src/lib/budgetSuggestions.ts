@@ -107,13 +107,13 @@ export function getBudgetSuggestions(
   const total = costs.grandTotal;
 
   // Build category costs (excluding visa/insurance/misc as they're less controllable)
-  const categoryCosts: CategoryCost[] = [
-    { category: 'flights', amount: costs.flights, percent: costs.flights / total },
-    { category: 'accommodation', amount: costs.accommodation, percent: costs.accommodation / total },
-    { category: 'activities', amount: costs.activities, percent: costs.activities / total },
-    { category: 'food', amount: costs.food, percent: costs.food / total },
-    { category: 'transport', amount: costs.transport, percent: costs.transport / total },
-  ].filter(c => c.amount > 0); // Only include categories with actual costs
+  const categoryCosts: CategoryCost[] = ([
+    { category: 'flights' as const, amount: costs.flights, percent: costs.flights / total },
+    { category: 'accommodation' as const, amount: costs.accommodation, percent: costs.accommodation / total },
+    { category: 'activities' as const, amount: costs.activities, percent: costs.activities / total },
+    { category: 'food' as const, amount: costs.food, percent: costs.food / total },
+    { category: 'transport' as const, amount: costs.transport, percent: costs.transport / total },
+  ] as CategoryCost[]).filter(c => c.amount > 0); // Only include categories with actual costs
 
   // Sort by percentage (highest first)
   categoryCosts.sort((a, b) => b.percent - a.percent);
