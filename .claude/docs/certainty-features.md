@@ -73,7 +73,7 @@ const verdictResult = useMemo(() => {
 
 ### Status: Implemented
 
-Full specification: [`docs/CERTAINTY_BREAKDOWN_IMPLEMENTATION.md`](docs/CERTAINTY_BREAKDOWN_IMPLEMENTATION.md)
+Full specification: [`CERTAINTY_BREAKDOWN_IMPLEMENTATION.md`](CERTAINTY_BREAKDOWN_IMPLEMENTATION.md)
 
 ### Overview
 
@@ -151,7 +151,7 @@ Visual timeline showing certainty score evolution across changes.
 
 ### Status: Implemented
 
-Full specification: [`docs/VERSION_HISTORY_IMPLEMENTATION.md`](docs/VERSION_HISTORY_IMPLEMENTATION.md)
+Full specification: [`VERSION_HISTORY_IMPLEMENTATION.md`](VERSION_HISTORY_IMPLEMENTATION.md)
 
 ### Overview
 

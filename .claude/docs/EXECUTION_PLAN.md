@@ -12,7 +12,7 @@ Optimized for:
 ### Goal
 Freeze scope so execution stays sharp.
 
-### Deliverable: `docs/BETA_DEFINITION.md`
+### Deliverable: `BETA_DEFINITION.md`
 
 ```
 VoyageAI Beta is complete when:

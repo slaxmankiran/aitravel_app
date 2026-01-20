@@ -159,19 +159,24 @@
 | Analytics     | 8     | `/trip-events`, `/affiliate-click`, `/dashboard`      |
 | Templates     | 4     | List, get, use, rate                                  |
 | Versions      | 4     | `GET/POST /api/trips/:id/versions`, `/restore`        |
+| Knowledge     | 3     | `/search`, `/ingest`, `/ingest/batch` (RAG)           |
+| Change Plan   | 2     | `POST /api/change-plan`, `/fix-options`               |
 
 ---
 
 ## Tech Stack Summary
 
-| Layer    | Technology                                 |
-|----------|--------------------------------------------|
-| Frontend | React 18 + TypeScript + Vite + TailwindCSS |
-| Backend  | Express + TypeScript                       |
-| Database | PostgreSQL 15 (Drizzle ORM)                |
-| AI       | Deepseek API (OpenAI SDK compatible)       |
-| State    | React Query                                |
-| Routing  | Wouter (client), Express (server)          |
+| Layer | Technology |
+|-------|------------|
+| **Frontend** | React 18 + TypeScript + Vite + TailwindCSS + Radix UI |
+| **Backend** | Express + TypeScript |
+| **Database** | PostgreSQL 15 (Drizzle ORM) + pgvector for RAG |
+| **AI** | Deepseek API (OpenAI SDK compatible) |
+| **Embeddings** | Ollama (nomic-embed-text) or OpenAI-compatible |
+| **Routing** | Wouter (client), Express (server) |
+| **State** | React Query + WorkingTrip pattern |
+| **Animations** | Framer Motion |
+| **Maps** | Leaflet + Mapbox |
 
 ---
 
@@ -191,3 +196,7 @@
 | Budget Alerts | ✅ Complete | Decision-grade right rail with suggestion chips |
 | Share View | ✅ Complete | Public read-only with OG tags |
 | Streaming Itinerary | ✅ Complete | SSE day-by-day generation |
+| **Phase 5: Production Hardening** | ✅ Complete | SSE heartbeat, concurrency lock, rate limiting |
+| **Phase 6: Observability** | ✅ Complete | Stream logging, budget guards, metrics |
+| RAG Foundation | ✅ Complete | pgvector + knowledge schema |
+| Agent Loop | 🟡 In Progress | Agentic change planning with tools |

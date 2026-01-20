@@ -4,7 +4,7 @@
 
 Smart agent that detects user changes after seeing results, recomputes only impacted modules, and explains deltas in plain language.
 
-**Full Specification:** [`docs/CHANGE_PLANNER_AGENT_SPEC.md`](docs/CHANGE_PLANNER_AGENT_SPEC.md)
+**Full Specification:** [`CHANGE_PLANNER_AGENT_SPEC.md`](CHANGE_PLANNER_AGENT_SPEC.md)
 
 ## Core Capabilities
 
