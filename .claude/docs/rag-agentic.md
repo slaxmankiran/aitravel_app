@@ -1,8 +1,10 @@
 # RAG + Agentic AI Implementation
 
-## Status: In Progress (2026-01-12)
+## Status: In Progress (2026-01-20)
 
 Adding RAG (Retrieval Augmented Generation) for cited visa answers and agentic AI for smart trip planning.
+
+> **See also:** [Visa System Documentation](./visa-system.md) for the hybrid free + API visa lookup system.
 
 ## Architecture Overview
 
@@ -40,6 +42,7 @@ Adding RAG (Retrieval Augmented Generation) for cited visa answers and agentic A
 |-------|-------|--------|
 | **Phase 1** | Quick wins (due dates, caching) | ✅ Complete |
 | **Phase 2** | RAG foundation (pgvector, knowledge base) | ✅ Complete |
+| **Phase 2.5** | Visa System (free dataset + API enrichment) | ✅ Complete |
 | **Phase 3** | Agent loop with tools | 🟡 In Progress |
 
 ---
@@ -120,6 +123,47 @@ Uses Drizzle's `cosineDistance()` helper for pgvector queries.
 
 ---
 
+## Phase 2.5: Visa System ✅
+
+**Full documentation:** [visa-system.md](./visa-system.md)
+
+### Overview
+
+Hybrid visa lookup using free Passport Index dataset (39,601 routes) as primary source, with optional RapidAPI enrichment.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `server/services/passportIndexService.ts` | FREE visa lookup |
+| `server/services/passportIndexUpdater.ts` | Auto-update from GitHub |
+| `server/services/visaApiService.ts` | RapidAPI enrichment |
+| `server/data/passport-index.csv` | Static dataset |
+
+### Endpoints
+
+```
+GET /api/knowledge/visa/check?passport=India&destination=Thailand
+    → FREE instant lookup (source: passport_index)
+
+GET /api/knowledge/visa/check?passport=India&destination=Thailand&enrich=true
+    → RapidAPI for embassy links, exchange rates (costs 1 API call)
+
+GET /api/knowledge/visa/index-stats
+    → Dataset freshness and stats
+
+POST /api/knowledge/visa/update-index  (admin)
+    → Manual refresh from GitHub
+```
+
+### Auto-Update
+
+- On startup: Checks if dataset > 7 days old, updates if stale
+- GitHub source updated every 2-4 weeks by maintainer
+- Zero cost for updates (just downloads CSV)
+
+---
+
 ## Phase 3: Agent Loop (In Progress)
 
 ### Tool Definitions
@@ -146,23 +190,27 @@ POST /api/trips/:id/assistant
 ## Local Development Setup
 
 ```bash
-# 1. Enable pgvector
-docker exec -it voyageai-postgres psql -U voyageai -d voyageai \
-  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+# 1. Database (Supabase recommended)
+# - Create project at supabase.com
+# - Enable pgvector in SQL Editor: CREATE EXTENSION IF NOT EXISTS vector;
+# - Add DATABASE_URL to .env (use pooler connection string)
 
-# 2. Install Ollama (macOS)
+# 2. Optional: Install Ollama for local embeddings (macOS)
 brew install ollama
 ollama pull nomic-embed-text  # 768-dim embeddings
-
-# 3. Start Ollama
 ollama serve  # Runs on localhost:11434
 
-# 4. Set environment
-echo "EMBEDDING_DIM=768" >> .env
-echo "OLLAMA_URL=http://localhost:11434" >> .env
+# 3. Set environment variables in .env
+DATABASE_URL="postgresql://..."  # From Supabase
+DEEPSEEK_API_KEY="sk-..."
+EMBEDDING_DIM=768
+OLLAMA_URL=http://localhost:11434  # Optional
 
-# 5. Push schema changes
-DATABASE_URL="postgres://voyageai:voyageai@localhost:5432/voyageai" npx drizzle-kit push
+# 4. Push schema changes
+npx drizzle-kit push
+
+# 5. Start server (visa dataset auto-downloads on first run)
+npm run dev
 ```
 
 ---
@@ -174,7 +222,11 @@ DATABASE_URL="postgres://voyageai:voyageai@localhost:5432/voyageai" npx drizzle-
 | `server/services/dueDates.ts` | Due date calculator | ✅ Created |
 | `shared/knowledgeSchema.ts` | pgvector tables | ✅ Created |
 | `server/services/embeddings.ts` | Ollama/OpenAI embeddings | ✅ Created |
-| `server/routes/knowledge.ts` | RAG search endpoint | ✅ Created |
+| `server/routes/knowledge.ts` | RAG search + visa endpoints | ✅ Created |
+| `server/services/passportIndexService.ts` | FREE visa lookup (39k routes) | ✅ Created |
+| `server/services/passportIndexUpdater.ts` | Auto-update from GitHub | ✅ Created |
+| `server/services/visaApiService.ts` | RapidAPI enrichment | ✅ Created |
+| `server/data/passport-index.csv` | Static visa dataset | ✅ Auto-downloaded |
 | `server/services/agentTools.ts` | Agent tool definitions | 🟡 In Progress |
 | `server/services/agentLoop.ts` | Agent orchestration | ⬜ Pending |
 | `server/services/streamingItinerary.ts` | SSE streaming service | ✅ Production Hardened |

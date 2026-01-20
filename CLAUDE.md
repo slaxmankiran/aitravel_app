@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 VoyageAI is an AI-powered travel planning application that analyzes trip feasibility, generates personalized itineraries, and provides real-time travel insights. The core value proposition is the "Certainty Engine" - answering "Can I go? What will it truly cost? What's the plan?"
 
-**Last Updated:** 2026-01-19
+**Last Updated:** 2026-01-20
 
 ## Commands
 
@@ -21,29 +21,27 @@ VoyageAI is an AI-powered travel planning application that analyzes trip feasibi
 ## Quick Start
 
 ```bash
-# Start PostgreSQL container
-docker start voyageai-postgres
+# Copy .env.example to .env and fill in your values
+cp .env.example .env
 
-# Or create new container with pgvector support
-docker run -d --name voyageai-postgres \
-  -e POSTGRES_USER=voyageai \
-  -e POSTGRES_PASSWORD=voyageai \
-  -e POSTGRES_DB=voyageai \
-  -p 5432:5432 \
-  pgvector/pgvector:pg15
+# Required environment variables in .env:
+# DATABASE_URL="postgresql://user:pass@host:5432/db"  (Supabase recommended)
+# DEEPSEEK_API_KEY="sk-xxx"
+# PORT=3000
 
-# Enable pgvector extension (for RAG)
-docker exec -it voyageai-postgres psql -U voyageai -d voyageai \
-  -c "CREATE EXTENSION IF NOT EXISTS vector;"
+# Start dev server
+npm run dev
 
-# Start dev server (port 3000)
-DATABASE_URL="postgres://voyageai:voyageai@localhost:5432/voyageai" \
-DEEPSEEK_API_KEY="sk-xxx" \
-PORT=3000 npm run dev
-
-# Push schema changes
-DATABASE_URL="postgres://voyageai:voyageai@localhost:5432/voyageai" npx drizzle-kit push
+# Push schema changes (after modifying schema.ts)
+npx drizzle-kit push
 ```
+
+### Database Setup (Supabase - Recommended)
+
+1. Create project at [supabase.com](https://supabase.com)
+2. Enable pgvector: SQL Editor → `CREATE EXTENSION IF NOT EXISTS vector;`
+3. Copy pooler connection string to `DATABASE_URL` in `.env`
+4. Run `npx drizzle-kit push` to create tables
 
 ## Documentation Index
 
@@ -79,6 +77,7 @@ All documentation is organized in `.claude/docs/`. Files are categorized below:
 - **Director Agent:** @.claude/docs/DIRECTOR_AGENT_IMPLEMENTATION_SUMMARY.md
 - **Director Agent Tests:** @.claude/docs/DIRECTOR_AGENT_TEST_RESULTS.md
 - **RAG + Agentic AI:** @.claude/docs/rag-agentic.md
+- **Visa System:** @.claude/docs/visa-system.md (hybrid free + API approach)
 
 ### Infrastructure
 - **Account & Security:** @.claude/docs/account-security.md
@@ -148,6 +147,9 @@ server/
     itineraryLock.ts     # Concurrency protection
     embeddings.ts        # RAG embeddings
     visaService.ts       # Visa lookup with RAG
+    passportIndexService.ts  # FREE visa lookup (39k routes)
+    passportIndexUpdater.ts  # Auto-update from GitHub
+    visaApiService.ts    # RapidAPI enrichment (optional)
     feasibilityCache.ts  # LRU caching
 
   middleware/
@@ -165,11 +167,11 @@ shared/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DEEPSEEK_API_KEY` | Yes | API key for AI (Deepseek/OpenAI-compatible) |
-| `DATABASE_URL` | Prod | PostgreSQL connection (uses SQLite if not set) |
+| `DATABASE_URL` | Yes | PostgreSQL connection (Supabase) |
 | `ADMIN_TOKEN` | Prod | Admin token for protected endpoints (ingest, delete) |
 | `NODE_ENV` | No | Set to `production` for strict security |
+| `RAPIDAPI_KEY` | No | RapidAPI key for visa enrichment (optional, 120/month free) |
 | `SERP_API_KEY` | No | SerpAPI for flight searches |
-| `SQLITE_DB_PATH` | No | Custom SQLite path (default: ./dev.db) |
 | `EMBEDDING_DIM` | No | RAG embedding dimension (default: 768) |
 | `OLLAMA_URL` | No | Local Ollama for embeddings |
 | `STREAMING_ITINERARY_ENABLED` | No | Enable SSE streaming (default: true) |
@@ -195,7 +197,11 @@ shared/
 | - Stream Summary Logging | ✅ |
 | - Generation Budget Guard | ✅ |
 | - Metrics Endpoint | ✅ |
-| - Database Persistence Bug Fix (2026-01-19) | ✅ |
+| **Visa System (2026-01-20)** | ✅ Complete |
+| - Passport Index Dataset (39k routes, FREE) | ✅ |
+| - Auto-update on startup (if > 7 days old) | ✅ |
+| - RapidAPI enrichment (optional) | ✅ |
+| - Supabase PostgreSQL migration | ✅ |
 
 ## API Patterns
 
