@@ -1,38 +1,29 @@
 import * as schema from "@shared/schema";
 
-// Support both Postgres (when DATABASE_URL is set) and a local SQLite
-// fallback for development so the app can run without a provisioned
-// Postgres instance (useful for local runs).
+// PostgreSQL (Supabase) - Required for all environments
+// No fallback to SQLite or in-memory storage
 
-// Postgres imports
 import { drizzle as pgDrizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 
-// SQLite (better-sqlite3) imports for local dev
-import Database from "better-sqlite3";
-import { drizzle as sqliteDrizzle } from "drizzle-orm/better-sqlite3";
-
 const { Pool } = pg;
 
-let _pool: any = undefined;
-let _db: any = undefined;
-
-if (process.env.DATABASE_URL) {
-  // Production / explicit DB URL (Postgres)
-  console.log(`[DB] Using PostgreSQL: ${process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@')}`);
-  _pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
-  });
-  _db = pgDrizzle(_pool, { schema });
-} else {
-  // Development fallback: use a local SQLite file `dev.db` by default.
-  // You can override the file path with SQLITE_DB_PATH env var.
-  const sqlitePath = process.env.SQLITE_DB_PATH || "./dev.db";
-  console.log(`[DB] Using SQLite: ${sqlitePath}`);
-  const sqlite = new Database(sqlitePath);
-  _db = sqliteDrizzle(sqlite, { schema });
+// Enforce DATABASE_URL requirement
+if (!process.env.DATABASE_URL) {
+  console.error("[DB] ERROR: DATABASE_URL environment variable is required.");
+  console.error("[DB] Please set DATABASE_URL in your .env file or environment.");
+  console.error("[DB] Example: DATABASE_URL=\"postgresql://user:pass@host:5432/db\"");
+  process.exit(1);
 }
 
-export const pool: any = _pool;
-export const db: any = _db;
+console.log(`[DB] Using PostgreSQL: ${process.env.DATABASE_URL.replace(/:[^:@]+@/, ':***@')}`);
+
+const _pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, // Required for Supabase
+});
+
+const _db = pgDrizzle(_pool, { schema });
+
+export const pool = _pool;
+export const db = _db;

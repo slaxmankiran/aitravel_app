@@ -18,6 +18,12 @@ import {
   type CombinedValidationResult,
   type GroupProfile,
 } from "./validators";
+import {
+  enhanceWithRagVerification,
+  isRagVerificationAvailable,
+  getVisaCostForTrip,
+  type VisaCostVerificationResult,
+} from "./ragCostVerifier";
 
 // ============================================================================
 // TYPES
@@ -38,6 +44,13 @@ export interface StreamingItineraryInput {
   groupProfile?: GroupProfile;
   /** Enable validation loop (default: true) */
   enableValidation?: boolean;
+  /** Enable RAG cost verification (default: true) */
+  enableRagVerification?: boolean;
+  /** Visa details for cost verification */
+  visaDetails?: {
+    type?: string;
+    costs?: { total?: number };
+  };
 }
 
 export interface ItineraryActivity {
@@ -91,6 +104,16 @@ export interface ValidationMetadata {
   totalIterations: number;
   refinedDays: number[];
   logs: string[];
+  /** RAG cost verification stats (Phase 4) */
+  ragVerification?: {
+    enabled: boolean;
+    activitiesVerified: number;
+    activitiesUnverified: number;
+    visaCostVerified?: boolean;
+    visaCost?: number;
+    visaCostSource?: string;
+    visaCostCitation?: string;
+  };
 }
 
 /**
@@ -1211,6 +1234,84 @@ export async function streamItineraryGeneration(
     }
   }
 
+  // ============================================================================
+  // RAG COST VERIFICATION (Phase 4 - Director Pattern Enhancement)
+  // ============================================================================
+  let ragVerificationStats: ValidationMetadata["ragVerification"] | undefined;
+  let visaCostResult: VisaCostVerificationResult | undefined;
+
+  const enableRagVerification = input.enableRagVerification !== false;
+  if (enableRagVerification && days.length > 0 && !abortController?.aborted) {
+    console.log(`[StreamItinerary] Starting RAG cost verification...`);
+
+    try {
+      // Check if RAG verification is available (has pricing data in knowledge base)
+      const ragAvailable = await isRagVerificationAvailable();
+
+      if (ragAvailable) {
+        const ragStartTime = Date.now();
+
+        // Enhance activities with RAG-verified costs
+        const enhancedDays = await enhanceWithRagVerification(days, input.destination);
+
+        // Count verification results
+        let verified = 0;
+        let unverified = 0;
+        for (const day of enhancedDays) {
+          for (const activity of day.activities) {
+            if (activity.costVerification?.source === "rag_knowledge") {
+              verified++;
+            } else {
+              unverified++;
+            }
+          }
+        }
+
+        // Update days with enhanced verification
+        days.length = 0;
+        days.push(...enhancedDays);
+
+        const ragTime = Date.now() - ragStartTime;
+        console.log(`[StreamItinerary] RAG verification complete in ${ragTime}ms: ${verified} verified, ${unverified} unverified`);
+
+        ragVerificationStats = {
+          enabled: true,
+          activitiesVerified: verified,
+          activitiesUnverified: unverified,
+        };
+      } else {
+        console.log(`[StreamItinerary] RAG verification skipped - no pricing data in knowledge base`);
+        ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+      }
+
+      // Verify visa cost if passport is provided
+      if (input.passport && input.destination) {
+        console.log(`[StreamItinerary] Verifying visa cost for ${input.passport} → ${input.destination}...`);
+        visaCostResult = await getVisaCostForTrip(
+          input.passport,
+          input.destination,
+          input.visaDetails
+        );
+
+        if (ragVerificationStats) {
+          ragVerificationStats.visaCostVerified = visaCostResult.confidence !== "low";
+          ragVerificationStats.visaCost = visaCostResult.verifiedCost;
+          ragVerificationStats.visaCostSource = visaCostResult.source;
+          ragVerificationStats.visaCostCitation = visaCostResult.citation;
+        }
+
+        console.log(`[StreamItinerary] Visa cost: $${visaCostResult.verifiedCost} (${visaCostResult.confidence} confidence from ${visaCostResult.source})`);
+      }
+
+    } catch (error) {
+      console.error(`[StreamItinerary] RAG verification error:`, error);
+      ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+      if (metrics) {
+        metrics.recoverableErrors++;
+      }
+    }
+  }
+
   // Recalculate totals after potential refinement
   const totalTime = Date.now() - startTime;
   totalActivities = days.reduce((sum, d) => sum + d.activities.length, 0);
@@ -1233,6 +1334,7 @@ export async function streamItineraryGeneration(
     totalIterations: validationIterations,
     refinedDays,
     logs: validationResult.logs.slice(-10), // Last 10 log entries
+    ragVerification: ragVerificationStats,
   } : null;
 
   // Send done event (even if partial) with ID for resume support
@@ -1476,6 +1578,70 @@ export async function resumeItineraryStream(
     }
   }
 
+  // ============================================================================
+  // RAG COST VERIFICATION (Phase 4 - Resume)
+  // ============================================================================
+  let ragVerificationStats: ValidationMetadata["ragVerification"] | undefined;
+  let visaCostResult: VisaCostVerificationResult | undefined;
+
+  const enableRagVerification = input.enableRagVerification !== false;
+  if (enableRagVerification && days.length > 0 && !abortController?.aborted) {
+    console.log(`[StreamItinerary] Resume: Starting RAG cost verification...`);
+
+    try {
+      const ragAvailable = await isRagVerificationAvailable();
+
+      if (ragAvailable) {
+        const enhancedDays = await enhanceWithRagVerification(days, input.destination);
+
+        let verified = 0;
+        let unverified = 0;
+        for (const day of enhancedDays) {
+          for (const activity of day.activities) {
+            if (activity.costVerification?.source === "rag_knowledge") {
+              verified++;
+            } else {
+              unverified++;
+            }
+          }
+        }
+
+        days.length = 0;
+        days.push(...enhancedDays);
+
+        ragVerificationStats = {
+          enabled: true,
+          activitiesVerified: verified,
+          activitiesUnverified: unverified,
+        };
+      } else {
+        ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+      }
+
+      // Verify visa cost if passport is provided
+      if (input.passport && input.destination) {
+        visaCostResult = await getVisaCostForTrip(
+          input.passport,
+          input.destination,
+          input.visaDetails
+        );
+
+        if (ragVerificationStats) {
+          ragVerificationStats.visaCostVerified = visaCostResult.confidence !== "low";
+          ragVerificationStats.visaCost = visaCostResult.verifiedCost;
+          ragVerificationStats.visaCostSource = visaCostResult.source;
+          ragVerificationStats.visaCostCitation = visaCostResult.citation;
+        }
+
+        console.log(`[StreamItinerary] Resume: Visa cost: $${visaCostResult.verifiedCost} (${visaCostResult.source})`);
+      }
+
+    } catch (error) {
+      console.error(`[StreamItinerary] Resume: RAG verification error:`, error);
+      ragVerificationStats = { enabled: false, activitiesVerified: 0, activitiesUnverified: 0 };
+    }
+  }
+
   const totalTime = Date.now() - startTime;
   const totalActivities = days.reduce((sum, d) => sum + d.activities.length, 0);
 
@@ -1494,6 +1660,7 @@ export async function resumeItineraryStream(
     totalIterations: validationIterations,
     refinedDays,
     logs: validationResult.logs.slice(-10), // Last 10 log entries
+    ragVerification: ragVerificationStats,
   } : null;
 
   // Done with ID for resume support

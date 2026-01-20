@@ -19,6 +19,7 @@ export interface IStorage {
   updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip>;
   setTripFeasibilityPending(id: number): Promise<Trip>; // Sets pending status with timestamp
   updateTripItinerary(id: number, itinerary: any): Promise<Trip>;
+  updateTripImage(id: number, imageUrl: string): Promise<Trip | null>; // Updates ONLY the image, preserves feasibility
 }
 
 export class DatabaseStorage implements IStorage {
@@ -96,6 +97,20 @@ export class DatabaseStorage implements IStorage {
     await db.delete(trips).where(eq(trips.id, id));
   }
 
+  // Update ONLY the destination image - preserves all other fields including feasibility
+  async updateTripImage(id: number, imageUrl: string): Promise<Trip | null> {
+    console.log(`[Storage] updateTripImage: id=${id}`);
+    const [updatedTrip] = await db
+      .update(trips)
+      .set({
+        destinationImageUrl: imageUrl,
+        updatedAt: new Date(),
+      })
+      .where(eq(trips.id, id))
+      .returning();
+    return updatedTrip || null;
+  }
+
   async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {
     console.log(`[Storage] updateTripFeasibility: id=${id}, status=${status}`);
 
@@ -145,117 +160,5 @@ export class DatabaseStorage implements IStorage {
     return updatedTrip;
   }
 }
-// In-memory fallback for local development. When `USE_IN_MEMORY_DB` is set
-// the app will not attempt to query Postgres/SQLite and will instead store
-// data in memory. Useful for quickly running the app without a DB.
-export class InMemoryStorage implements IStorage {
-  private users: User[] = [];
-  private trips: Trip[] = [];
-  private nextId = 1;
-
-  async getUser(id: number): Promise<User | undefined> {
-    return this.users.find(u => u.id === id);
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    // Note: Users table doesn't have username column, using email as fallback
-    return this.users.find(u => u.email === username);
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const user: any = { id: this.nextId++, ...insertUser };
-    this.users.push(user);
-    return user;
-  }
-
-  async createTrip(trip: InsertTrip): Promise<Trip> {
-    const newTrip: any = {
-      id: this.nextId++,
-      ...trip,
-      feasibilityStatus: "pending",
-      feasibilityReport: null,
-      itinerary: null,
-      createdAt: new Date().toISOString(),
-    };
-    this.trips.push(newTrip);
-    return newTrip;
-  }
-
-  async updateTrip(id: number, tripData: Partial<InsertTrip>): Promise<Trip | null> {
-    const trip = this.trips.find(t => t.id === id) as any;
-    if (!trip) return null;
-
-    // Update trip fields and reset feasibility/itinerary
-    Object.assign(trip, tripData, {
-      feasibilityStatus: 'pending',
-      feasibilityReport: null,
-      feasibilityError: null,
-      itinerary: null,
-      updatedAt: new Date().toISOString(),
-    });
-    return trip;
-  }
-
-  async getTrip(id: number): Promise<Trip | undefined> {
-    return this.trips.find(t => t.id === id);
-  }
-
-  async listTrips(): Promise<Trip[]> {
-    return [...this.trips].sort((a, b) =>
-      new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
-  }
-
-  async listTripsByUid(voyageUid: string, limit = 20): Promise<Trip[]> {
-    return this.trips
-      .filter(t => (t as any).voyageUid === voyageUid)
-      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-      .slice(0, limit);
-  }
-
-  // Adopt an orphan trip (soft backfill) - only updates if voyageUid is currently null
-  async adoptTrip(id: number, voyageUid: string): Promise<Trip | null> {
-    const trip = this.trips.find(t => t.id === id) as any;
-    if (!trip) return null;
-    if (trip.voyageUid !== null && trip.voyageUid !== undefined) return null; // Already owned
-    trip.voyageUid = voyageUid;
-    return trip;
-  }
-
-  // Delete trip from memory
-  async deleteTrip(id: number): Promise<void> {
-    const index = this.trips.findIndex(t => t.id === id);
-    if (index !== -1) {
-      this.trips.splice(index, 1);
-    }
-  }
-
-  async updateTripFeasibility(id: number, status: string, report: FeasibilityReport | null, error?: string): Promise<Trip> {
-    const trip = this.trips.find(t => t.id === id) as any;
-    if (!trip) throw new Error("Trip not found");
-    trip.feasibilityStatus = status;
-    trip.feasibilityReport = report;
-    trip.feasibilityError = error || null;
-    return trip;
-  }
-
-  async setTripFeasibilityPending(id: number): Promise<Trip> {
-    const trip = this.trips.find(t => t.id === id) as any;
-    if (!trip) throw new Error("Trip not found");
-    trip.feasibilityStatus = 'pending';
-    trip.feasibilityError = null;
-    trip.feasibilityLastRunAt = new Date();
-    return trip;
-  }
-
-  async updateTripItinerary(id: number, itinerary: any): Promise<Trip> {
-    const trip = this.trips.find(t => t.id === id) as any;
-    if (!trip) throw new Error("Trip not found");
-    trip.itinerary = itinerary;
-    return trip;
-  }
-}
-
-export const storage: IStorage = process.env.USE_IN_MEMORY_DB
-  ? new InMemoryStorage()
-  : new DatabaseStorage();
+// Always use PostgreSQL (Supabase) - no in-memory fallback
+export const storage: IStorage = new DatabaseStorage();

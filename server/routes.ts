@@ -88,6 +88,7 @@ import {
   getMaxSpeculativeDays,
   getSpeculativeStats,
 } from "./services/speculativeExecution";
+import { ItineraryModifierService } from "./services/itineraryModifier";
 
 // ============ FEASIBILITY ANALYTICS ============
 // Decision-quality metrics for validation
@@ -1728,7 +1729,8 @@ async function fetchAndStoreDestinationImage(tripId: number, destination: string
 
     if (result.imageUrl) {
       // Store the image URL directly in the trip record
-      await storage.updateTrip(tripId, { destinationImageUrl: result.imageUrl } as any);
+      // IMPORTANT: Use updateTripImage to preserve feasibility data (not updateTrip which resets it)
+      await storage.updateTripImage(tripId, result.imageUrl);
       console.log(`[DestImage] Stored image for trip ${tripId}: ${result.landmark} → ${result.imageUrl.slice(0, 60)}...`);
     } else {
       console.log(`[DestImage] No image found for trip ${tripId}: ${destination}`);
@@ -3859,6 +3861,41 @@ export async function registerRoutes(
   app.use("/api/mapbox", mapboxRouter);
   app.use("/api/scrape", scrapeRouter);
 
+  // ==========================================================================
+  // HEALTH & KEEP-ALIVE ENDPOINTS
+  // ==========================================================================
+
+  // Basic health check
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // Keep-alive endpoint for Supabase free tier (prevents 7-day inactivity pause)
+  // Point a cron service (cron-job.org, UptimeRobot) at this endpoint every 5 days
+  app.get('/api/keep-alive', async (_req, res) => {
+    try {
+      // Touch the database to keep Supabase active
+      const result = await db.execute(sql`SELECT COUNT(*) as trip_count FROM trips`);
+      const tripCount = result.rows?.[0]?.trip_count ?? 0;
+
+      res.json({
+        status: 'alive',
+        database: 'connected',
+        tripCount: Number(tripCount),
+        timestamp: new Date().toISOString(),
+        nextPingRecommended: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(), // 5 days
+      });
+    } catch (error: any) {
+      console.error('[KeepAlive] Database ping failed:', error.message);
+      res.status(500).json({
+        status: 'error',
+        database: 'disconnected',
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
   // Trip creation - rate limited to 5/min per IP (expensive operation)
   app.post(api.trips.create.path, tripCreationRateLimiter, async (req, res) => {
     try {
@@ -4251,6 +4288,88 @@ export async function registerRoutes(
     } catch (error) {
       console.error('[API] Generate itinerary error:', error);
       res.status(500).json({ message: 'Failed to start itinerary generation' });
+    }
+  });
+
+  // ============================================================================
+  // DIRECTOR AGENT - SURGICAL ITINERARY MODIFICATION
+  // ============================================================================
+  // The "Director Agent" architecture - surgical modifications instead of full regeneration
+  // Classifies intent and routes to specialized handlers:
+  // - OPTIMIZE_ROUTE: Traveling Salesman Problem solver
+  // - REDUCE_BUDGET: Cost analyzer with AI-powered swaps
+  // - SPECIFIC_EDIT: Surgical LLM edits for semantic changes
+
+  app.post('/api/trips/:id/modify', async (req, res) => {
+    try {
+      const tripId = Number(req.params.id);
+      const { prompt } = req.body;
+
+      // Validation
+      if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+        return res.status(400).json({
+          error: 'Invalid request',
+          message: 'Prompt is required'
+        });
+      }
+
+      // Get trip
+      const trip = await storage.getTrip(tripId);
+      if (!trip) {
+        return res.status(404).json({
+          error: 'Trip not found',
+          message: `Trip ${tripId} does not exist`
+        });
+      }
+
+      // Check if itinerary exists
+      if (!trip.itinerary) {
+        return res.status(400).json({
+          error: 'No itinerary',
+          message: 'Cannot modify trip without an itinerary. Generate one first.'
+        });
+      }
+
+      console.log(`[ModifyAPI] Trip ${tripId}: "${prompt}"`);
+
+      // Initialize Director Agent
+      const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || "";
+      const modifier = new ItineraryModifierService(apiKey, aiModel);
+
+      // Execute surgical modification
+      const startTime = Date.now();
+      const result = await modifier.modifyItinerary(trip, prompt);
+      const totalTime = Date.now() - startTime;
+
+      console.log(`[ModifyAPI] ${result.success ? 'Success' : 'Failed'}: ${result.summary} (${totalTime}ms)`);
+
+      // Update database if successful
+      if (result.success) {
+        await storage.updateTripItinerary(tripId, result.updatedItinerary);
+        console.log(`[ModifyAPI] Trip ${tripId} updated in database`);
+      }
+
+      // Return result with metadata
+      res.json({
+        success: result.success,
+        summary: result.summary,
+        reasoning: result.reasoning,
+        diff: result.diff,
+        metadata: {
+          ...result.metadata,
+          totalTimeMs: totalTime,
+        },
+        // Include updated itinerary for client
+        itinerary: result.updatedItinerary,
+      });
+
+    } catch (error) {
+      console.error('[ModifyAPI] Error:', error);
+      res.status(500).json({
+        error: 'Modification failed',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        success: false
+      });
     }
   });
 

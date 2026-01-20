@@ -573,4 +573,111 @@ export interface CostVerification {
 - Hover tooltip explains the source
 - Legacy activities without verification show no badge
 
-### Phase 4: RAG Cost Enhancement ⬜ PENDING
+### Phase 4: RAG Cost Enhancement ✅ COMPLETED (2026-01-19)
+
+**Files Created:**
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `server/services/ragCostVerifier.ts` | ~700 | RAG-based cost verification + visa cost lookup |
+
+**RAG Cost Verifier Features:**
+
+**Activity Cost Verification:**
+- Searches knowledge base for pricing info using vector similarity
+- Extracts prices using specialized regex patterns ($25, €30, "free admission", etc.)
+- Supports price ranges (e.g., "$20-30")
+- Determines confidence based on source trust level and data freshness
+- Falls back to AI estimate if no RAG match
+
+**Visa/e-Visa/VOA Cost Verification:**
+- Built-in known visa costs for 20+ popular corridors
+- Supports Indian, US, and UK passport holders
+- Extracts visa fees from text (processing fee, service fee, expedite fee)
+- Maps visa types: `visa_free`, `visa_on_arrival`, `e_visa`, `visa_required`
+- Returns citations and source URLs when available
+
+**Known Visa Cost Data (Sample):**
+| Passport | Destination | Visa Type | Cost | Source |
+|----------|-------------|-----------|------|--------|
+| India | Thailand | VOA | $57 | Thailand Immigration |
+| India | Vietnam | e-Visa | $25 | Vietnam Immigration |
+| India | Japan | Required | $27 | Embassy of Japan |
+| India | UK | Required | $168 | UK Home Office |
+| India | USA | Required | $185 | US Dept of State |
+| USA | Australia | e-Visa | $20 | Australian Immigration |
+| UK | USA | e-Visa (ESTA) | $21 | US CBP |
+
+**Streaming Integration:**
+- Added `enableRagVerification` input flag (default: true)
+- Added `visaDetails` input for visa cost verification
+- RAG verification runs after validation loop completes
+- Visa cost verified automatically when passport is provided
+- Results included in `done` event's `validation.ragVerification` field
+
+**Server Changes (`server/services/streamingItinerary.ts`):**
+- Import RAG verifier functions
+- Added `enableRagVerification` and `visaDetails` to `StreamingItineraryInput`
+- Added `ragVerification` to `ValidationMetadata` interface
+- RAG verification section added to both `streamItineraryGeneration()` and `resumeItineraryStream()`
+
+**RAG Verification Flow:**
+```
+Validation complete
+    ↓
+Check isRagVerificationAvailable() [has pricing data in KB?]
+    ↓
+If available → enhanceWithRagVerification(days, destination)
+    ↓
+Verify each paid activity against knowledge base
+    ↓
+If passport provided → getVisaCostForTrip(passport, destination)
+    ↓
+Include stats in done event: { activitiesVerified, visaCostVerified, visaCost }
+```
+
+**ValidationMetadata Extension:**
+```typescript
+ragVerification?: {
+  enabled: boolean;
+  activitiesVerified: number;
+  activitiesUnverified: number;
+  visaCostVerified?: boolean;
+  visaCost?: number;
+  visaCostSource?: string;
+  visaCostCitation?: string;
+}
+```
+
+**Usage:**
+```typescript
+// Streaming with RAG verification
+const input: StreamingItineraryInput = {
+  tripId: 1,
+  destination: "Bangkok, Thailand",
+  passport: "India",
+  visaDetails: { type: "visa_on_arrival", costs: { total: 60 } },
+  enableRagVerification: true,
+  // ... other fields
+};
+
+// In done event:
+// validation.ragVerification.visaCost = 57
+// validation.ragVerification.visaCostSource = "rag_knowledge"
+// validation.ragVerification.visaCostCitation = "Thailand Immigration Bureau"
+```
+
+---
+
+## Summary: All Phases Complete
+
+| Phase | Status | Key Deliverable |
+|-------|--------|-----------------|
+| Phase 1: Deterministic Validators | ✅ | `budgetValidator.ts`, `logisticsValidator.ts` |
+| Phase 2: Validation Loop | ✅ | Self-healing loop with SSE events |
+| Phase 3: Trust Badges | ✅ | `TrustBadge.tsx`, verification metadata |
+| Phase 4: RAG Cost Enhancement | ✅ | `ragCostVerifier.ts`, visa cost lookup |
+
+**The Director Agent hybrid pattern is now fully implemented!**
+
+The system achieves the original goal: Generate → Validate → Refine with deterministic validators and RAG-backed cost verification, all at a fraction of the cost of a full multi-agent system.
