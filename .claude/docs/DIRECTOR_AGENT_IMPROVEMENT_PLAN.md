@@ -460,7 +460,72 @@ if (result.status === 'REJECTED') {
 }
 ```
 
-### Phase 2: Validation Loop ⬜ PENDING
+### Phase 2: Validation Loop ✅ COMPLETED (2026-01-19)
+
+**Server Changes (`server/services/streamingItinerary.ts`):**
+
+| Addition | Lines | Purpose |
+|----------|-------|---------|
+| `validateAndRefineDays()` | ~160 | Core validation loop - runs validators, sends SSE events, triggers refinement |
+| `generateRefinedDay()` | ~145 | Regenerates flagged days with validation feedback |
+| Validation integration | ~60 | Added to `streamItineraryGeneration()` and `resumeItineraryStream()` |
+
+**New SSE Events:**
+- `validation` - Sent after each validation iteration with status (APPROVED/REJECTED/WARNING)
+- `refinement` - Sent before refining flagged days with specific issues
+- `done.validation` - Final validation metadata in done event
+
+**Validation Loop Flow:**
+```
+Generate all days
+    ↓
+Run validateItinerary() [parallel: budget + logistics]
+    ↓
+If APPROVED → done
+    ↓
+If REJECTED/WARNING → identify flagged days
+    ↓
+Send refinement event → regenerate flagged days with feedback
+    ↓
+Loop (max 2 iterations)
+    ↓
+Send done with validation metadata
+```
+
+**Client Changes (`client/src/hooks/useItineraryStream.ts`):**
+
+| Addition | Purpose |
+|----------|---------|
+| `StreamValidation` type | Validation event data |
+| `StreamRefinement` type | Refinement event data |
+| `ValidationMetadata` type | Final validation result |
+| `validation` state | Current validation status |
+| `refinement` state | Current refinement status |
+| `validationResult` state | Final validation after completion |
+| `validating` status | UI knows we're in validation phase |
+| `refining` status | UI knows we're refining days |
+
+**Usage in Components:**
+```tsx
+const { status, days, validation, refinement, validationResult } = useItineraryStream();
+
+// Show validation progress
+{status === "validating" && (
+  <p>Checking budget and logistics... {validation?.status}</p>
+)}
+
+// Show refinement progress
+{status === "refining" && (
+  <p>Improving Day{refinement?.daysToRefine.join(", ")}...</p>
+)}
+
+// Show final verification status
+{validationResult && (
+  <Badge variant={validationResult.budgetVerified && validationResult.logisticsVerified ? "success" : "warning"}>
+    {validationResult.budgetVerified ? "✓ Budget verified" : "⚠ Budget issues"}
+  </Badge>
+)}
+```
 
 ### Phase 3: Trust Badges ⬜ PENDING
 
