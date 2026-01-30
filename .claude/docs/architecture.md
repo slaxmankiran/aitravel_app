@@ -1,6 +1,6 @@
 # Architecture
 
-## Last Updated: 2026-01-19
+## Last Updated: 2026-01-30
 
 ## Tech Stack
 
@@ -9,7 +9,7 @@
 | **Frontend** | React 18 + TypeScript + Vite + TailwindCSS + Radix UI |
 | **Backend** | Express + TypeScript |
 | **Database** | PostgreSQL 15 (Drizzle ORM) + pgvector for RAG |
-| **AI** | Deepseek API (OpenAI SDK compatible) |
+| **AI** | Tiered LLM Factory (GPT-4o / DeepSeek via OpenAI SDK) |
 | **Embeddings** | Ollama (nomic-embed-text) or OpenAI-compatible |
 | **Routing** | Wouter (client), Express (server) |
 | **State** | React Query + WorkingTrip pattern |
@@ -259,30 +259,72 @@ applyPendingChanges() → workingTrip updated
 
 ## AI Integration
 
-### Services
+### Centralized AI Client Factory
 
-| Service | Purpose |
-|---------|---------|
-| `aiAgent.ts` | Coordinates, attractions, costs, images |
-| `changePlannerAgent.ts` | Agentic change planning with tools |
-| `agentChat.ts` | Conversational itinerary modifications |
-| `streamingItinerary.ts` | Day-by-day SSE generation |
+All AI calls go through `server/services/aiClientFactory.ts`, which provides:
+- **Tiered model routing** — Quality-critical vs cost-efficient calls
+- **Provider-agnostic** — Swap DeepSeek ↔ GPT-4o via env var, zero code changes
+- **Singleton caching** — One OpenAI SDK instance per (apiKey + baseURL) pair
+- **Lazy initialization** — Services init on first use, not at startup
+
+```typescript
+import { getAIClient, isAIConfigured } from './aiClientFactory';
+
+// Get a client for the appropriate tier
+const { openai, model } = getAIClient('premium');
+```
+
+#### Provider Detection (Cascade)
+
+```
+1. OPENAI_API_KEY     → OpenAI (GPT-4o / GPT-4o-mini)
+2. DEEPSEEK_API_KEY   → DeepSeek (deepseek-chat, baseURL: api.deepseek.com)
+3. AI_INTEGRATIONS_*  → Replit integration fallback
+```
+
+#### Tier Assignment
+
+| Tier | Default Model | Purpose | Files |
+|------|--------------|---------|-------|
+| `premium` | gpt-4o | User-facing content, structured output | routes.ts, agentChat.ts, itineraryModifier.ts, streamingItinerary.ts |
+| `standard` | gpt-4o | Analysis, change planning | aiAgent.ts, changePlannerAgent.ts |
+| `fast` | gpt-4o-mini | Classification, extraction | scrapingService.ts, flightApi.ts, import.ts |
+| `auxiliary` | gpt-4o-mini | Low-stakes conversational | concierge.ts |
+
+When only `DEEPSEEK_API_KEY` is set, all tiers use `deepseek-chat`.
+
+### AI Services
+
+| Service | Tier | Purpose |
+|---------|------|---------|
+| `aiClientFactory.ts` | — | Central factory (all AI clients) |
+| `aiAgent.ts` | standard | Coordinates, attractions, costs, images |
+| `changePlannerAgent.ts` | standard | Agentic change planning with tools |
+| `agentChat.ts` | premium | Conversational itinerary modifications |
+| `streamingItinerary.ts` | premium | Day-by-day SSE generation |
+| `itineraryModifier.ts` | premium+fast | Director Agent (intent classification + surgical edits) |
+| `scrapingService.ts` | fast | URL scraping + AI extraction |
+| `flightApi.ts` | fast | Airport code lookup |
 
 ### Caching Strategy
 
-| Data Type | TTL | Rationale |
-|-----------|-----|-----------|
-| Coordinates | 7 days | Immutable |
-| Attractions | 1 day | Stable |
-| Transport | 1 day | Stable |
-| Costs | 1 hour | Volatile |
-| Weather | 30 min | Real-time |
-| Feasibility | 24 hours | LRU cache, max 1000 |
+| Data Type | TTL | Max Size | Implementation |
+|-----------|-----|----------|----------------|
+| Coordinates | 7 days | 2,000 | BoundedMap (LRU) |
+| Attractions | 1 day | 2,000 | BoundedMap (LRU) |
+| Transport | 1 day | 2,000 | BoundedMap (LRU) |
+| Costs | 1 hour | 2,000 | BoundedMap (LRU) |
+| Weather | 30 min | 500 | BoundedMap (LRU) |
+| Feasibility | 24 hours | 1,000 | BoundedMap (LRU) |
+| Scraped content | 24 hours | 200 | BoundedMap (LRU) |
+| Airport codes | Permanent | Unbounded (small) | Map |
+
+All caches use `BoundedMap` (`server/utils/boundedMap.ts`) with LRU eviction + TTL to prevent unbounded memory growth.
 
 ### Fallback Chain
 
 ```
-Nominatim (free) → AI (Deepseek) → Cached/Static
+Nominatim (free) → AI (via factory) → Cached/Static
 ```
 
 ---
@@ -346,9 +388,23 @@ if (trip.voyageUid && voyageUid !== trip.voyageUid) {
 
 ## Environment Variables
 
+### AI Configuration
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DEEPSEEK_API_KEY` | Yes | AI API key |
+| `DEEPSEEK_API_KEY` | Yes* | DeepSeek API key (default provider) |
+| `OPENAI_API_KEY` | No | OpenAI API key (overrides DeepSeek when set) |
+| `AI_PREMIUM_MODEL` | No | Override premium tier (default: gpt-4o / deepseek-chat) |
+| `AI_STANDARD_MODEL` | No | Override standard tier (default: gpt-4o / deepseek-chat) |
+| `AI_FAST_MODEL` | No | Override fast tier (default: gpt-4o-mini / deepseek-chat) |
+| `AI_AUXILIARY_MODEL` | No | Override auxiliary tier (default: gpt-4o-mini / deepseek-chat) |
+
+*At least one of `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` is required.
+
+### Infrastructure
+
+| Variable | Required | Description |
+|----------|----------|-------------|
 | `DATABASE_URL` | Prod | PostgreSQL connection |
 | `ADMIN_TOKEN` | Prod | Admin endpoint protection |
 | `NODE_ENV` | No | 'production' for strict security |

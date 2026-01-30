@@ -4,20 +4,18 @@
  * Features AI-powered airport code lookup for any city
  */
 
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
+import { getAIClient, isAIConfigured } from './aiClientFactory';
 
-// Initialize OpenAI client for airport lookups
+// Initialize OpenAI client for airport lookups (lazy via factory)
 let openaiClient: OpenAI | null = null;
+let aiModel = 'deepseek-chat';
 
 function getOpenAIClient(): OpenAI | null {
-  if (!openaiClient) {
-    const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
-    if (apiKey) {
-      openaiClient = new OpenAI({
-        apiKey,
-        baseURL: process.env.DEEPSEEK_API_KEY ? 'https://api.deepseek.com' : undefined,
-      });
-    }
+  if (!openaiClient && isAIConfigured()) {
+    const client = getAIClient('fast');
+    openaiClient = client.openai;
+    aiModel = client.model;
   }
   return openaiClient;
 }
@@ -107,7 +105,7 @@ async function getAirportCodeFromAI(city: string): Promise<string | null> {
 
   try {
     const response = await client.chat.completions.create({
-      model: process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'gpt-3.5-turbo',
+      model: aiModel,
       messages: [
         {
           role: 'system',

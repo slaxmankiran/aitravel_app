@@ -175,6 +175,22 @@ const COUNTRY_CODES: Record<string, string> = {
   'dubai city': 'AE',
   'mumbai': 'IN',
   'delhi': 'IN',
+  // Canadian cities
+  'vancouver': 'CA',
+  'toronto': 'CA',
+  'montreal': 'CA',
+  'calgary': 'CA',
+  'ottawa': 'CA',
+  // US cities
+  'los angeles': 'US',
+  'san francisco': 'US',
+  'chicago': 'US',
+  'miami': 'US',
+  'las vegas': 'US',
+  'seattle': 'US',
+  'boston': 'US',
+  'washington': 'US',
+  'washington dc': 'US',
 };
 
 // =============================================================================

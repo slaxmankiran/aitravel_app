@@ -3,15 +3,10 @@
  * Intelligent assistant that remembers context and can update trips
  */
 
-import OpenAI from 'openai';
 import { storage } from '../storage';
 import { fetchDestinationImage } from './unsplashService';
-
-// Initialize AI client
-const openai = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY || '',
-  baseURL: 'https://api.deepseek.com/v1',
-});
+import { BoundedMap } from '../utils/boundedMap';
+import { getAIClient } from './aiClientFactory';
 
 // Chat session memory - stores conversation context per trip
 interface ChatSession {
@@ -174,14 +169,14 @@ function safeParseActionJson(text: string): any | null {
   }
 }
 
-// In-memory session storage (use Redis in production)
-const chatSessions = new Map<number, ChatSession>();
+// In-memory session storage (bounded to prevent memory leaks; use Redis in production)
+const chatSessions = new BoundedMap<number, ChatSession>({ maxSize: 200, ttlMs: 2 * 60 * 60 * 1000 }); // 2h TTL
 
 // Pending changes cache - stores proposed changes awaiting user confirmation
-const pendingChangesCache = new Map<string, PendingChanges>();
+const pendingChangesCache = new BoundedMap<string, PendingChanges>({ maxSize: 200, ttlMs: 30 * 60 * 1000 }); // 30min TTL
 
 // Cached itinerary for fast updates
-const itineraryCache = new Map<number, { itinerary: any; cachedAt: Date }>();
+const itineraryCache = new BoundedMap<number, { itinerary: any; cachedAt: Date }>({ maxSize: 200, ttlMs: 60 * 60 * 1000 }); // 1h TTL
 
 /**
  * Cache the current itinerary for a trip
@@ -701,8 +696,9 @@ export async function processChat(
     ];
 
     // Call AI
+    const { openai, model } = getAIClient('premium');
     const completion = await openai.chat.completions.create({
-      model: 'deepseek-chat',
+      model,
       messages,
       temperature: 0.7,
       max_tokens: 2000,

@@ -6,6 +6,20 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { validateSession, getSessionIdFromHeaders } from '../services/auth';
+import { db } from '../db';
+import { users, subscriptions } from '@shared/schema';
+import { eq } from 'drizzle-orm';
+import {
+  isStripeConfigured,
+  getOrCreateCustomer,
+  createCheckoutSession,
+  createPortalSession,
+  cancelSubscription,
+  reactivateSubscription,
+  getPriceIdForPlan,
+  SUBSCRIPTION_PRODUCTS,
+  type SubscriptionPlan,
+} from '../services/stripeService';
 
 const router = Router();
 
@@ -86,25 +100,7 @@ const SUBSCRIPTION_PLANS = {
   },
 };
 
-// In-memory subscription storage (use database in production)
-interface UserSubscription {
-  id: number;
-  userId: number;
-  planId: string;
-  status: 'active' | 'cancelled' | 'past_due' | 'trialing';
-  stripeCustomerId?: string;
-  stripeSubscriptionId?: string;
-  currentPeriodStart: Date;
-  currentPeriodEnd: Date;
-  cancelAtPeriodEnd: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const subscriptions = new Map<number, UserSubscription>();
-let subscriptionIdCounter = 1;
-
-// Usage tracking
+// Usage tracking (in-memory for now, can be moved to Redis later)
 interface UsageRecord {
   userId: number;
   feature: string;
@@ -113,6 +109,19 @@ interface UsageRecord {
 }
 
 const usageRecords = new Map<string, UsageRecord>();
+
+// Helper to get user with subscription from database
+async function getUserWithSubscription(userId: number) {
+  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  if (!user) return null;
+
+  const [subscription] = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, userId));
+
+  return { user, subscription };
+}
 
 /**
  * GET /api/subscriptions/plans
@@ -151,6 +160,7 @@ router.get('/current', async (req: Request, res: Response) => {
         subscription: null,
         plan: SUBSCRIPTION_PLANS.free,
         limits: SUBSCRIPTION_PLANS.free.limits,
+        stripeConfigured: isStripeConfigured(),
       });
     }
 
@@ -160,33 +170,51 @@ router.get('/current', async (req: Request, res: Response) => {
         subscription: null,
         plan: SUBSCRIPTION_PLANS.free,
         limits: SUBSCRIPTION_PLANS.free.limits,
+        stripeConfigured: isStripeConfigured(),
       });
     }
 
-    // Find user's subscription
-    const subscription = Array.from(subscriptions.values())
-      .find(s => s.userId === session.user.id && s.status === 'active');
-
-    if (!subscription) {
+    // Get user with subscription from database
+    const data = await getUserWithSubscription(session.user.id);
+    if (!data) {
       return res.json({
         subscription: null,
         plan: SUBSCRIPTION_PLANS.free,
         limits: SUBSCRIPTION_PLANS.free.limits,
+        stripeConfigured: isStripeConfigured(),
       });
     }
 
-    const plan = SUBSCRIPTION_PLANS[subscription.planId as keyof typeof SUBSCRIPTION_PLANS];
+    const { user, subscription } = data;
+
+    // Check if subscription is active
+    const isActive = subscription?.status === 'active' &&
+      subscription.currentPeriodEnd &&
+      new Date(subscription.currentPeriodEnd) > new Date();
+
+    if (!subscription || !isActive) {
+      return res.json({
+        subscription: null,
+        plan: SUBSCRIPTION_PLANS.free,
+        limits: SUBSCRIPTION_PLANS.free.limits,
+        stripeConfigured: isStripeConfigured(),
+      });
+    }
+
+    const planId = subscription.plan as keyof typeof SUBSCRIPTION_PLANS;
+    const plan = SUBSCRIPTION_PLANS[planId] || SUBSCRIPTION_PLANS.free;
 
     res.json({
       subscription: {
         id: subscription.id,
-        planId: subscription.planId,
+        planId: subscription.plan,
         status: subscription.status,
         currentPeriodEnd: subscription.currentPeriodEnd,
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
       },
       plan,
       limits: plan.limits,
+      stripeConfigured: isStripeConfigured(),
     });
   } catch (err) {
     console.error('[Subscriptions] Get current error:', err);
@@ -223,20 +251,61 @@ router.post('/checkout', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Cannot checkout free plan' });
     }
 
-    // In production, create Stripe checkout session
-    // For now, simulate checkout
-    const checkoutId = `checkout_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Get or create Stripe customer
+    const [user] = await db.select().from(users).where(eq(users.id, session.user.id));
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const customerId = await getOrCreateCustomer(
+      user.email,
+      user.id,
+      user.stripeCustomerId
+    );
+
+    if (!customerId) {
+      return res.status(500).json({ error: 'Failed to create customer' });
+    }
+
+    // Update user with Stripe customer ID if new
+    if (!user.stripeCustomerId) {
+      await db
+        .update(users)
+        .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+        .where(eq(users.id, user.id));
+    }
+
+    // Get price ID for the plan
+    const priceId = getPriceIdForPlan(planId as SubscriptionPlan);
+    if (!priceId) {
+      return res.status(400).json({ error: 'No price configured for this plan' });
+    }
+
+    // Build success/cancel URLs
+    const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+    const finalSuccessUrl = successUrl || `${baseUrl}/account/billing?success=1`;
+    const finalCancelUrl = cancelUrl || `${baseUrl}/account/billing?cancelled=1`;
+
+    // Create Stripe checkout session
+    const checkoutSession = await createCheckoutSession({
+      customerId,
+      priceId,
+      successUrl: finalSuccessUrl,
+      cancelUrl: finalCancelUrl,
+      userId: user.id,
+      planId: planId as SubscriptionPlan,
+    });
+
+    if (!checkoutSession) {
+      return res.status(500).json({ error: 'Failed to create checkout session' });
+    }
 
     console.log(`[Subscriptions] Checkout initiated for user ${session.user.id}, plan ${planId}`);
 
-    // Simulate successful checkout for demo
-    // In production, redirect to Stripe checkout URL
-    const checkoutUrl = `/checkout/success?session_id=${checkoutId}&plan=${planId}`;
-
     res.json({
-      checkoutId,
-      checkoutUrl,
-      // In production: url: stripeSession.url
+      checkoutId: checkoutSession.sessionId,
+      checkoutUrl: checkoutSession.url,
+      url: checkoutSession.url, // Alias for frontend compatibility
     });
   } catch (err) {
     console.error('[Subscriptions] Checkout error:', err);
@@ -247,6 +316,7 @@ router.post('/checkout', async (req: Request, res: Response) => {
 /**
  * POST /api/subscriptions/activate
  * Activate subscription after successful payment (webhook or manual)
+ * Note: This is mainly used for legacy/fallback. Primary activation happens via webhook.
  */
 router.post('/activate', async (req: Request, res: Response) => {
   try {
@@ -268,45 +338,79 @@ router.post('/activate', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid checkout' });
     }
 
+    const userId = session.user.id;
+    const now = new Date();
+    const periodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
     // Check for existing subscription
-    const existing = Array.from(subscriptions.values())
-      .find(s => s.userId === session.user.id);
+    const [existing] = await db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, userId));
 
     if (existing) {
       // Update existing
-      existing.planId = planId;
-      existing.status = 'active';
-      existing.currentPeriodStart = new Date();
-      existing.currentPeriodEnd = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      existing.cancelAtPeriodEnd = false;
-      existing.updatedAt = new Date();
+      await db
+        .update(subscriptions)
+        .set({
+          plan: planId,
+          status: 'active',
+          currentPeriodStart: now,
+          currentPeriodEnd: periodEnd,
+          cancelAtPeriodEnd: false,
+          updatedAt: now,
+        })
+        .where(eq(subscriptions.userId, userId));
+
+      // Update user tier
+      await db
+        .update(users)
+        .set({
+          subscriptionTier: planId,
+          subscriptionExpiresAt: periodEnd,
+          updatedAt: now,
+        })
+        .where(eq(users.id, userId));
+
+      const [updated] = await db
+        .select()
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
 
       return res.json({
         success: true,
-        subscription: existing,
+        subscription: updated,
       });
     }
 
     // Create new subscription
-    const subscription: UserSubscription = {
-      id: subscriptionIdCounter++,
-      userId: session.user.id,
-      planId,
-      status: 'active',
-      currentPeriodStart: new Date(),
-      currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      cancelAtPeriodEnd: false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+    const [inserted] = await db
+      .insert(subscriptions)
+      .values({
+        userId,
+        plan: planId,
+        status: 'active',
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        cancelAtPeriodEnd: false,
+      })
+      .returning();
 
-    subscriptions.set(subscription.id, subscription);
+    // Update user tier
+    await db
+      .update(users)
+      .set({
+        subscriptionTier: planId,
+        subscriptionExpiresAt: periodEnd,
+        updatedAt: now,
+      })
+      .where(eq(users.id, userId));
 
-    console.log(`[Subscriptions] Activated ${planId} for user ${session.user.id}`);
+    console.log(`[Subscriptions] Activated ${planId} for user ${userId}`);
 
     res.json({
       success: true,
-      subscription,
+      subscription: inserted,
     });
   } catch (err) {
     console.error('[Subscriptions] Activate error:', err);
@@ -331,16 +435,37 @@ router.post('/cancel', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
-    const subscription = Array.from(subscriptions.values())
-      .find(s => s.userId === session.user.id && s.status === 'active');
+    // Get subscription from database
+    const [subscription] = await db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, session.user.id));
 
-    if (!subscription) {
+    if (!subscription || subscription.status !== 'active') {
       return res.status(404).json({ error: 'No active subscription found' });
     }
 
-    // Cancel at period end (don't immediately revoke access)
-    subscription.cancelAtPeriodEnd = true;
-    subscription.updatedAt = new Date();
+    // Cancel in Stripe if we have a subscription ID
+    if (subscription.stripeSubscriptionId) {
+      const { immediately } = req.body;
+      const success = await cancelSubscription(
+        subscription.stripeSubscriptionId,
+        immediately === true
+      );
+
+      if (!success) {
+        return res.status(500).json({ error: 'Failed to cancel subscription in Stripe' });
+      }
+    }
+
+    // Update local database (webhook will also do this, but update immediately for UX)
+    await db
+      .update(subscriptions)
+      .set({
+        cancelAtPeriodEnd: true,
+        updatedAt: new Date(),
+      })
+      .where(eq(subscriptions.userId, session.user.id));
 
     console.log(`[Subscriptions] Cancelled subscription for user ${session.user.id}`);
 
@@ -372,15 +497,33 @@ router.post('/reactivate', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
-    const subscription = Array.from(subscriptions.values())
-      .find(s => s.userId === session.user.id && s.cancelAtPeriodEnd);
+    // Get subscription from database
+    const [subscription] = await db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.userId, session.user.id));
 
-    if (!subscription) {
+    if (!subscription || !subscription.cancelAtPeriodEnd) {
       return res.status(404).json({ error: 'No cancelled subscription found' });
     }
 
-    subscription.cancelAtPeriodEnd = false;
-    subscription.updatedAt = new Date();
+    // Reactivate in Stripe if we have a subscription ID
+    if (subscription.stripeSubscriptionId) {
+      const success = await reactivateSubscription(subscription.stripeSubscriptionId);
+
+      if (!success) {
+        return res.status(500).json({ error: 'Failed to reactivate subscription in Stripe' });
+      }
+    }
+
+    // Update local database
+    await db
+      .update(subscriptions)
+      .set({
+        cancelAtPeriodEnd: false,
+        updatedAt: new Date(),
+      })
+      .where(eq(subscriptions.userId, session.user.id));
 
     console.log(`[Subscriptions] Reactivated subscription for user ${session.user.id}`);
 
@@ -415,11 +558,19 @@ router.get('/usage', async (req: Request, res: Response) => {
       }
     }
 
-    // Get user's plan limits
-    const subscription = userId ? Array.from(subscriptions.values())
-      .find(s => s.userId === userId && s.status === 'active') : null;
+    // Get user's plan from database
+    let planId: string = 'free';
+    if (userId) {
+      const [subscription] = await db
+        .select()
+        .from(subscriptions)
+        .where(eq(subscriptions.userId, userId));
 
-    const planId = subscription?.planId || 'free';
+      if (subscription && subscription.status === 'active') {
+        planId = subscription.plan;
+      }
+    }
+
     const plan = SUBSCRIPTION_PLANS[planId as keyof typeof SUBSCRIPTION_PLANS];
     const limit = (plan.limits as any)[feature] || 0;
 
@@ -519,11 +670,35 @@ router.post('/portal', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
-    // In production, create Stripe customer portal session
-    const portalUrl = '/account/billing';
+    // Get user from database
+    const [user] = await db.select().from(users).where(eq(users.id, session.user.id));
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Need Stripe customer ID to create portal session
+    if (!user.stripeCustomerId) {
+      return res.status(400).json({
+        error: 'No billing account found',
+        portalUrl: '/account/billing', // Fallback
+      });
+    }
+
+    // Build return URL
+    const { returnUrl } = req.body;
+    const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get('host')}`;
+    const finalReturnUrl = returnUrl || `${baseUrl}/account/billing`;
+
+    // Create Stripe customer portal session
+    const portalUrl = await createPortalSession(user.stripeCustomerId, finalReturnUrl);
+
+    if (!portalUrl) {
+      return res.status(500).json({ error: 'Failed to create portal session' });
+    }
 
     res.json({
       portalUrl,
+      url: portalUrl, // Alias for frontend compatibility
     });
   } catch (err) {
     console.error('[Subscriptions] Portal error:', err);

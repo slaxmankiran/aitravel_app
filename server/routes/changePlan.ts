@@ -27,20 +27,12 @@ import type {
 } from "@shared/schema";
 import {
   runChangePlannerAgent,
-  initializeChangePlannerAgent,
   isAgentInitialized,
 } from "../services/changePlannerAgent";
 
 const router: Router = express.Router();
 
-// Initialize agent with API key (done once at startup)
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-if (DEEPSEEK_API_KEY) {
-  initializeChangePlannerAgent(DEEPSEEK_API_KEY, "https://api.deepseek.com", "deepseek-chat");
-  console.log("[ChangePlan] Agentic AI mode enabled");
-} else {
-  console.log("[ChangePlan] No DEEPSEEK_API_KEY, using deterministic mode");
-}
+// Agent self-initializes via aiClientFactory on first use
 
 // Toggle for agent mode (can be overridden per-request or by env var)
 const USE_AGENT_DEFAULT = process.env.USE_CHANGE_PLANNER_AGENT !== "false";

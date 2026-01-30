@@ -5,9 +5,11 @@
  * Fetches high-quality travel photos based on destination name.
  */
 
-// In-memory cache for session performance (avoids redundant API calls)
-const imageCache = new Map<string, { url: string; timestamp: number }>();
+import { BoundedMap } from '../utils/boundedMap';
+
+// In-memory cache for session performance (bounded to prevent memory leaks)
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const imageCache = new BoundedMap<string, { url: string; timestamp: number }>({ maxSize: 500, ttlMs: CACHE_TTL_MS });
 
 interface UnsplashPhoto {
   id: string;

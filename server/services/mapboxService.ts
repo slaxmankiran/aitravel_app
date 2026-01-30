@@ -8,6 +8,8 @@
  * 4. RATE LIMITING - Respect Mapbox API limits
  */
 
+import { BoundedMap } from '../utils/boundedMap';
+
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
@@ -20,13 +22,13 @@ const CACHE_DURATION = {
   directions: 24 * 60 * 60 * 1000,      // 1 day - routes relatively stable
 };
 
-// In-memory cache
+// In-memory cache (bounded to prevent memory leaks)
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
 }
 
-const cache = new Map<string, CacheEntry<any>>();
+const cache = new BoundedMap<string, CacheEntry<any>>({ maxSize: 1000 });
 
 function getCached<T>(key: string, maxAge: number): T | null {
   const entry = cache.get(key);
@@ -359,4 +361,137 @@ export function formatDuration(seconds: number): string {
 export function formatDistance(meters: number): string {
   if (meters < 1000) return `${Math.round(meters)}m`;
   return `${(meters / 1000).toFixed(1)}km`;
+}
+
+// ============================================================================
+// WALKING TIME HELPERS
+// ============================================================================
+
+export interface WalkingTimeResult {
+  from: { lat: number; lng: number };
+  to: { lat: number; lng: number };
+  distanceMeters: number;
+  durationSeconds: number;
+  walkable: boolean; // true if under 5km
+  formattedDistance: string;
+  formattedDuration: string;
+}
+
+/**
+ * Get walking time between two points
+ * Returns null if Mapbox not configured or route not found
+ */
+export async function getWalkingTime(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number }
+): Promise<WalkingTimeResult | null> {
+  if (!isMapboxConfigured()) {
+    return null;
+  }
+
+  const route = await getDirections(
+    [{ lat: from.lat, lng: from.lng }, { lat: to.lat, lng: to.lng }],
+    'walking'
+  );
+
+  if (!route) {
+    return null;
+  }
+
+  return {
+    from,
+    to,
+    distanceMeters: route.distance,
+    durationSeconds: route.duration,
+    walkable: route.distance < 5000, // Less than 5km is walkable
+    formattedDistance: formatDistance(route.distance),
+    formattedDuration: formatDuration(route.duration),
+  };
+}
+
+/**
+ * Get walking times between a list of activities (consecutive pairs)
+ * Returns array of walking times for each pair (n-1 results for n activities)
+ */
+export async function getWalkingTimesBetweenActivities(
+  activities: Array<{ coordinates: { lat: number; lng: number } }>
+): Promise<(WalkingTimeResult | null)[]> {
+  if (activities.length < 2) {
+    return [];
+  }
+
+  const results: (WalkingTimeResult | null)[] = [];
+
+  // Process pairs sequentially to respect rate limits
+  for (let i = 0; i < activities.length - 1; i++) {
+    const from = activities[i].coordinates;
+    const to = activities[i + 1].coordinates;
+
+    // Skip if coordinates are invalid
+    if (!from.lat || !from.lng || !to.lat || !to.lng) {
+      results.push(null);
+      continue;
+    }
+
+    const walkingTime = await getWalkingTime(from, to);
+    results.push(walkingTime);
+
+    // Small delay to respect rate limits
+    if (i < activities.length - 2) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Get walking route for an entire day's itinerary
+ * Returns a single route through all activity locations
+ */
+export async function getDayWalkingRoute(
+  activities: Array<{ coordinates: { lat: number; lng: number } }>
+): Promise<DirectionsRoute | null> {
+  if (activities.length < 2) {
+    return null;
+  }
+
+  // Filter out activities with invalid coordinates
+  const validActivities = activities.filter(
+    a => a.coordinates?.lat && a.coordinates?.lng
+  );
+
+  if (validActivities.length < 2) {
+    return null;
+  }
+
+  const waypoints = validActivities.map(a => ({
+    lat: a.coordinates.lat,
+    lng: a.coordinates.lng,
+  }));
+
+  return getDirections(waypoints, 'walking');
+}
+
+/**
+ * Cache stats for monitoring
+ */
+export function getCacheStats(): { entries: number; types: Record<string, number> } {
+  const stats = { entries: cache.size, types: {} as Record<string, number> };
+
+  const entries = Array.from(cache.keys());
+  for (const key of entries) {
+    const type = key.split(':')[0];
+    stats.types[type] = (stats.types[type] || 0) + 1;
+  }
+
+  return stats;
+}
+
+/**
+ * Clear cache (for testing/maintenance)
+ */
+export function clearCache(): void {
+  cache.clear();
+  console.log('[Mapbox] Cache cleared');
 }

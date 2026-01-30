@@ -9,6 +9,7 @@
  */
 
 import OpenAI from "openai";
+import { getAIClient, isAIConfigured } from "./aiClientFactory";
 
 // ============================================================================
 // INTELLIGENT CACHE SYSTEM
@@ -88,13 +89,17 @@ async function fetchCoordinatesFromNominatim(location: string): Promise<{ lat: n
 let openai: OpenAI | null = null;
 let aiModel = "deepseek-chat";
 
-export function initializeAIAgent(apiKey: string, baseURL?: string, model?: string) {
-  openai = new OpenAI({
-    apiKey,
-    baseURL: baseURL || "https://api.deepseek.com",
-  });
-  if (model) aiModel = model;
-  console.log(`[AIAgent] Initialized with model: ${aiModel}`);
+function ensureAIClient(): void {
+  if (!openai && isAIConfigured()) {
+    const client = getAIClient('standard');
+    openai = client.openai;
+    aiModel = client.model;
+  }
+}
+
+/** @deprecated Use aiClientFactory directly. Kept for backward compatibility. */
+export function initializeAIAgent(_apiKey?: string, _baseURL?: string, _model?: string) {
+  ensureAIClient();
 }
 
 /**
@@ -123,6 +128,7 @@ export async function getCoordinates(location: string): Promise<{
   }
 
   // 3. Fallback to AI knowledge (always available)
+  ensureAIClient();
   if (openai) {
     try {
       const response = await openai.chat.completions.create({
@@ -168,6 +174,7 @@ export async function getAttractions(destination: string, count: number = 5): Pr
     return { attractions: cached, source: 'cache' };
   }
 
+  ensureAIClient();
   if (!openai) {
     return { attractions: [], source: 'ai' };
   }
@@ -224,6 +231,7 @@ export async function getTransportOptions(
     return { options: cached, source: 'cache' };
   }
 
+  ensureAIClient();
   if (!openai) {
     return { options: [], source: 'ai' };
   }
@@ -280,6 +288,7 @@ export async function getCostEstimates(
     return { daily: cached, source: 'cache' };
   }
 
+  ensureAIClient();
   if (!openai) {
     // Fallback estimates based on travel style
     const fallback = {
@@ -399,6 +408,7 @@ export async function getDestinationCategory(destination: string): Promise<{
     return { category: cached as any, source: 'cache' };
   }
 
+  ensureAIClient();
   if (!openai) {
     return { category: 'default', source: 'ai' };
   }
@@ -456,6 +466,7 @@ export async function getDestinationImageTerms(destination: string): Promise<{
     return { ...cached, source: 'cache' };
   }
 
+  ensureAIClient();
   if (!openai) {
     // Fallback to destination name
     return { searchTerms: [destination], landmark: destination, source: 'ai' };

@@ -24,6 +24,11 @@ import {
   getVisaCostForTrip,
   type VisaCostVerificationResult,
 } from "./ragCostVerifier";
+import {
+  isGooglePlacesConfigured,
+  enrichActivitiesBatch,
+  type PlaceDetails,
+} from "./googlePlacesService";
 
 // ============================================================================
 // TYPES
@@ -46,6 +51,8 @@ export interface StreamingItineraryInput {
   enableValidation?: boolean;
   /** Enable RAG cost verification (default: true) */
   enableRagVerification?: boolean;
+  /** Enable Google Places enrichment (default: true if API key configured) */
+  enablePlacesEnrichment?: boolean;
   /** Visa details for cost verification */
   visaDetails?: {
     type?: string;
@@ -72,6 +79,20 @@ export interface ItineraryActivity {
     lastVerified?: string;
     citation?: string;
     originalEstimate?: number;
+  };
+  /** Google Places enrichment (Phase 8 - Week 2) */
+  placeDetails?: {
+    placeId?: string;
+    rating?: number;
+    userRatingsTotal?: number;
+    priceLevel?: number;
+    googleMapsUrl?: string;
+    website?: string;
+    phoneNumber?: string;
+    openingHours?: {
+      isOpen?: boolean;
+      weekdayText?: string[];
+    };
   };
 }
 
@@ -462,6 +483,109 @@ export function annotateWithVerification(
       },
     })),
   }));
+}
+
+// ============================================================================
+// GOOGLE PLACES ENRICHMENT
+// ============================================================================
+
+/**
+ * Enrich activities in a day with real Google Places data (opening hours, ratings, etc.)
+ * This runs asynchronously and doesn't block itinerary generation.
+ */
+export async function enrichDayWithPlaceDetails(
+  day: ItineraryDay,
+  destination: string
+): Promise<ItineraryDay> {
+  if (!isGooglePlacesConfigured()) {
+    console.log(`[PlacesEnrich] Google Places API not configured, skipping enrichment`);
+    return day;
+  }
+
+  try {
+    // Only enrich activity-type items (not transport or lodging)
+    const enrichableActivities = day.activities.filter(
+      a => a.type === 'activity' || a.type === 'meal'
+    );
+
+    if (enrichableActivities.length === 0) {
+      return day;
+    }
+
+    // Build batch request
+    const batchInput = enrichableActivities.map(activity => ({
+      name: activity.name,
+      destination,
+      coordinates: activity.coordinates.lat !== 0 ? activity.coordinates : undefined,
+    }));
+
+    // Fetch place details in batch (with rate limiting built-in)
+    const results = await enrichActivitiesBatch(batchInput, {
+      maxConcurrent: 2, // Conservative to avoid rate limits
+      delayMs: 300,
+    });
+
+    // Map results back to activities
+    const enrichedActivities = day.activities.map(activity => {
+      const key = `${activity.name}-${destination}`;
+      const placeData = results.get(key);
+
+      if (placeData) {
+        return {
+          ...activity,
+          placeDetails: {
+            placeId: placeData.placeId,
+            rating: placeData.rating,
+            priceLevel: placeData.priceLevel,
+            googleMapsUrl: placeData.googleMapsUrl,
+            openingHours: placeData.openingHours ? {
+              isOpen: placeData.openingHours.isOpen,
+              weekdayText: placeData.openingHours.weekdayText,
+            } : undefined,
+          },
+        };
+      }
+      return activity;
+    });
+
+    console.log(`[PlacesEnrich] Day ${day.day}: Enriched ${results.size}/${enrichableActivities.length} activities with Google Places data`);
+
+    return {
+      ...day,
+      activities: enrichedActivities,
+    };
+  } catch (error) {
+    console.error(`[PlacesEnrich] Error enriching day ${day.day}:`, error);
+    return day; // Return original day on error
+  }
+}
+
+/**
+ * Enrich all days with Google Places data
+ * Runs in parallel for efficiency but with rate limiting
+ */
+export async function enrichAllDaysWithPlaceDetails(
+  days: ItineraryDay[],
+  destination: string
+): Promise<ItineraryDay[]> {
+  if (!isGooglePlacesConfigured()) {
+    return days;
+  }
+
+  const startTime = Date.now();
+  console.log(`[PlacesEnrich] Starting enrichment for ${days.length} days`);
+
+  // Process days sequentially to respect rate limits
+  const enrichedDays: ItineraryDay[] = [];
+  for (const day of days) {
+    const enrichedDay = await enrichDayWithPlaceDetails(day, destination);
+    enrichedDays.push(enrichedDay);
+  }
+
+  const elapsed = Date.now() - startTime;
+  console.log(`[PlacesEnrich] Completed enrichment in ${elapsed}ms`);
+
+  return enrichedDays;
 }
 
 // ============================================================================

@@ -20,6 +20,11 @@ import {
   geocodePlace,
   reverseGeocode,
   getDirections,
+  getWalkingTime,
+  getWalkingTimesBetweenActivities,
+  getDayWalkingRoute,
+  getCacheStats,
+  clearCache,
   formatDuration,
   formatDistance,
   type GeocodeOptions,
@@ -281,4 +286,149 @@ mapboxRouter.post("/directions", directionsRateLimiter, async (req, res) => {
     console.error("[Mapbox] Directions endpoint error:", error);
     res.status(500).json({ error: "Directions request failed" });
   }
+});
+
+// ============================================================================
+// WALKING TIMES FOR ITINERARIES
+// ============================================================================
+
+/**
+ * POST /api/mapbox/walking-times
+ *
+ * Get walking times between consecutive activity locations
+ * Optimized for itinerary display - returns formatted times for each pair
+ *
+ * Body:
+ * - activities: Array of { coordinates: { lat, lng } } (required, 2+ items)
+ */
+mapboxRouter.post("/walking-times", directionsRateLimiter, async (req, res) => {
+  try {
+    const { activities } = req.body;
+
+    if (!activities || !Array.isArray(activities)) {
+      return res.status(400).json({ error: "activities array is required" });
+    }
+
+    if (activities.length < 2) {
+      return res.status(400).json({ error: "At least 2 activities required" });
+    }
+
+    // Get walking times between each consecutive pair
+    const results = await getWalkingTimesBetweenActivities(activities);
+
+    // Format response with activity indices
+    const walkingTimes = results.map((result, index) => {
+      if (!result) {
+        return {
+          fromIndex: index,
+          toIndex: index + 1,
+          available: false,
+        };
+      }
+
+      return {
+        fromIndex: index,
+        toIndex: index + 1,
+        available: true,
+        distanceMeters: result.distanceMeters,
+        durationSeconds: result.durationSeconds,
+        walkable: result.walkable,
+        formattedDistance: result.formattedDistance,
+        formattedDuration: result.formattedDuration,
+      };
+    });
+
+    res.json({
+      activityCount: activities.length,
+      segments: walkingTimes.length,
+      walkingTimes,
+    });
+  } catch (error) {
+    console.error("[Mapbox] Walking times endpoint error:", error);
+    res.status(500).json({ error: "Walking times request failed" });
+  }
+});
+
+/**
+ * POST /api/mapbox/day-route
+ *
+ * Get optimized walking route for entire day's activities
+ * Returns a single route through all locations
+ *
+ * Body:
+ * - activities: Array of { coordinates: { lat, lng } } (required, 2+ items)
+ */
+mapboxRouter.post("/day-route", directionsRateLimiter, async (req, res) => {
+  try {
+    const { activities } = req.body;
+
+    if (!activities || !Array.isArray(activities)) {
+      return res.status(400).json({ error: "activities array is required" });
+    }
+
+    if (activities.length < 2) {
+      return res.status(400).json({ error: "At least 2 activities required" });
+    }
+
+    const route = await getDayWalkingRoute(activities);
+
+    if (!route) {
+      return res.status(404).json({
+        error: "No route found",
+        message: "Could not find a walking route through all activities",
+      });
+    }
+
+    res.json({
+      activityCount: activities.length,
+      route: {
+        ...route,
+        durationFormatted: formatDuration(route.duration),
+        distanceFormatted: formatDistance(route.distance),
+      },
+    });
+  } catch (error) {
+    console.error("[Mapbox] Day route endpoint error:", error);
+    res.status(500).json({ error: "Day route request failed" });
+  }
+});
+
+// ============================================================================
+// CACHE MANAGEMENT (Admin)
+// ============================================================================
+
+/**
+ * GET /api/mapbox/cache/stats
+ *
+ * Get cache statistics (admin only in production)
+ */
+mapboxRouter.get("/cache/stats", (req, res) => {
+  // Check for admin token in production
+  if (process.env.NODE_ENV === "production") {
+    const adminToken = req.headers["x-admin-token"];
+    if (!adminToken || adminToken !== process.env.ADMIN_TOKEN) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+  }
+
+  const stats = getCacheStats();
+  res.json(stats);
+});
+
+/**
+ * POST /api/mapbox/cache/clear
+ *
+ * Clear cache (admin only)
+ */
+mapboxRouter.post("/cache/clear", (req, res) => {
+  // Check for admin token in production
+  if (process.env.NODE_ENV === "production") {
+    const adminToken = req.headers["x-admin-token"];
+    if (!adminToken || adminToken !== process.env.ADMIN_TOKEN) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+  }
+
+  clearCache();
+  res.json({ success: true, message: "Cache cleared" });
 });
