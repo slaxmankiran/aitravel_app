@@ -11,13 +11,13 @@ import { getAlternatives } from "./services/alternativesService";
 import { searchFlights, type FlightResult } from "./services/flightApi";
 import { searchHotels, type HotelResult } from "./services/hotelApi";
 import {
-  initializeAIAgent,
   getCoordinates as aiGetCoordinates,
   getAttractions as aiGetAttractions,
   getTransportOptions as aiGetTransportOptions,
   getDestinationImage as aiGetDestinationImage,
   getDestinationCategory as aiGetDestinationCategory,
 } from "./services/aiAgent";
+import { getAIClient, isAIConfigured, logAIConfig } from "./services/aiClientFactory";
 import authRouter from "./routes/auth";
 import emailRouter from "./routes/email";
 import chatRouter from "./routes/chat";
@@ -28,6 +28,8 @@ import insuranceRouter from "./routes/insurance";
 import collaborationRouter from "./routes/collaboration";
 import weatherRouter from "./routes/weather";
 import subscriptionsRouter from "./routes/subscriptions";
+import webhooksRouter from "./routes/webhooks";
+import apiV1Router from "./routes/api/v1";
 import changePlanRouter from "./routes/changePlan";
 import fixOptionsRouter from "./routes/fixOptions";
 import appliedPlansRouter from "./routes/appliedPlans";
@@ -35,6 +37,9 @@ import versionsRouter from "./routes/versions";
 import { knowledgeRouter } from "./routes/knowledge";
 import { mapboxRouter } from "./routes/mapbox";
 import scrapeRouter from "./routes/scrape";
+import placesRouter from "./routes/places";
+import socialImportRouter from "./routes/import";
+import conciergeRouter from "./routes/concierge";
 import { VisaFacts, computeVisaConfidence } from "@shared/knowledgeSchema";
 import { db } from "./db";
 import { knowledgeDocuments } from "@shared/knowledgeSchema";
@@ -75,6 +80,7 @@ import {
 import * as TripService from "./services/tripService";
 import * as TransportService from "./services/transportService";
 import * as VisaService from "./services/visaService";
+import { getCountryCode as getVisaCountryCode } from "./services/visaApiService";
 import {
   getCachedFeasibility,
   cacheFeasibility,
@@ -618,33 +624,17 @@ const AFFILIATE_CONFIG = {
 // NOTE: calculateVisaTiming, calculateCertaintyScore, calculateEntryCosts, generateActionItems
 // have been removed - these functions were unused and duplicated client-side logic.
 
-// Initialize AI client
+// Initialize AI client via centralized factory
 let openai: OpenAI | null = null;
 let aiModel = "gpt-4o";
 
-if (process.env.DEEPSEEK_API_KEY) {
-  openai = new OpenAI({
-    apiKey: process.env.DEEPSEEK_API_KEY,
-    baseURL: "https://api.deepseek.com",
-  });
-  aiModel = "deepseek-chat";
-  // Initialize AI Agent for dynamic data fetching
-  initializeAIAgent(process.env.DEEPSEEK_API_KEY, "https://api.deepseek.com", "deepseek-chat");
-  console.log("AI Provider: Deepseek (with AI Agent)");
-} else if (process.env.AI_INTEGRATIONS_OPENAI_API_KEY) {
-  openai = new OpenAI({
-    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-  });
-  // Initialize AI Agent for dynamic data fetching
-  initializeAIAgent(
-    process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-    process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-    "gpt-4o"
-  );
-  console.log("AI Provider: OpenAI (with AI Agent)");
+if (isAIConfigured()) {
+  const client = getAIClient('premium');
+  openai = client.openai;
+  aiModel = client.model;
+  logAIConfig();
 } else {
-  console.log("AI Provider: None (no API key configured)");
+  console.log("[AIClientFactory] No AI provider configured");
 }
 
 // Currency symbols mapping - supports all 28 currencies from CreateTrip
@@ -1854,7 +1844,9 @@ async function processFeasibilityOnly(tripId: number, input: any) {
     };
 
     const passportCode = passportCodeMap[input.passport.toLowerCase()] || input.passport.toUpperCase().slice(0, 2);
-    const destCode = destCodeMap[input.destination.toLowerCase().split(",")[0].trim()] ||
+    // Use comprehensive country code extraction that handles "City, Country" format
+    const destCode = getVisaCountryCode(input.destination) ||
+                     destCodeMap[input.destination.toLowerCase().split(",")[0].trim()] ||
                      input.destination.toUpperCase().slice(0, 2);
 
     try {
@@ -2222,7 +2214,9 @@ async function processTripInBackground(tripId: number, input: any, skipFeasibili
     };
 
     const passportCode = passportCodeMap[input.passport.toLowerCase()] || input.passport.toUpperCase().slice(0, 2);
-    const destCode = destCodeMap[input.destination.toLowerCase().split(",")[0].trim()] ||
+    // Use comprehensive country code extraction that handles "City, Country" format
+    const destCode = getVisaCountryCode(input.destination) ||
+                     destCodeMap[input.destination.toLowerCase().split(",")[0].trim()] ||
                      input.destination.toUpperCase().slice(0, 2);
 
     try {
@@ -3853,6 +3847,8 @@ export async function registerRoutes(
   app.use('/api/trips', collaborationRouter);
   app.use('/api/weather', weatherRouter);
   app.use('/api/subscriptions', subscriptionsRouter);
+  app.use('/api/webhooks', webhooksRouter);
+  app.use('/api/v1', apiV1Router);
   app.use("/api", changePlanRouter);
   app.use("/api", fixOptionsRouter);
   app.use("/api", appliedPlansRouter);
@@ -3860,6 +3856,9 @@ export async function registerRoutes(
   app.use("/api/knowledge", knowledgeRouter);
   app.use("/api/mapbox", mapboxRouter);
   app.use("/api/scrape", scrapeRouter);
+  app.use("/api/places", placesRouter);
+  app.use("/api/import", socialImportRouter);
+  app.use("/api/concierge", conciergeRouter);
 
   // ==========================================================================
   // HEALTH & KEEP-ALIVE ENDPOINTS
@@ -4333,8 +4332,7 @@ export async function registerRoutes(
       console.log(`[ModifyAPI] Trip ${tripId}: "${prompt}"`);
 
       // Initialize Director Agent
-      const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || "";
-      const modifier = new ItineraryModifierService(apiKey, aiModel);
+      const modifier = new ItineraryModifierService();
 
       // Execute surgical modification
       const startTime = Date.now();

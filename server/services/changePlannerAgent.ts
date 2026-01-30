@@ -12,7 +12,8 @@
  * 5. Return structured response for UI
  */
 
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import { getAIClient, isAIConfigured } from "./aiClientFactory";
 import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
@@ -203,15 +204,25 @@ let openai: OpenAI | null = null;
 let aiModel = "deepseek-chat";
 
 /**
- * Initialize the agent with API credentials
+ * Lazy-init from centralized factory on first use.
  */
-export function initializeChangePlannerAgent(apiKey: string, baseURL?: string, model?: string) {
-  openai = new OpenAI({
-    apiKey,
-    baseURL: baseURL || "https://api.deepseek.com",
-  });
-  if (model) aiModel = model;
-  console.log(`[ChangePlannerAgent] Initialized with model: ${aiModel}`);
+function ensureAIClient(): void {
+  if (!openai && isAIConfigured()) {
+    const client = getAIClient('standard');
+    openai = client.openai;
+    aiModel = client.model;
+  }
+}
+
+/**
+ * @deprecated Use aiClientFactory directly. Kept for backward compatibility.
+ */
+export function initializeChangePlannerAgent(
+  _apiKey?: string,
+  _baseURL?: string,
+  _model?: string
+) {
+  ensureAIClient();
 }
 
 /**
@@ -384,6 +395,9 @@ export async function runChangePlannerAgent(
   ).sort((a, b) => MODULE_PRIORITY[a] - MODULE_PRIORITY[b]);
 
   console.log(`[ChangePlannerAgent] Detected ${detectedChanges.length} changes, modules: ${modulesToRecompute.join(", ")}`);
+
+  // Ensure AI client is initialized from factory
+  ensureAIClient();
 
   // If no OpenAI client or no changes, return fast deterministic response
   if (!openai || detectedChanges.length === 0) {
@@ -722,8 +736,9 @@ function buildDeterministicResponse(
 }
 
 /**
- * Check if agent is initialized
+ * Check if agent is initialized (triggers lazy init if possible)
  */
 export function isAgentInitialized(): boolean {
+  ensureAIClient();
   return openai !== null;
 }

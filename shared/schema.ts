@@ -366,6 +366,38 @@ export const affiliateClicks = pgTable("affiliate_clicks", {
 });
 
 // ============================================================================
+// B2B API KEYS
+// ============================================================================
+
+export const apiKeys = pgTable("api_keys", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").references(() => users.id, { onDelete: "cascade" }),
+
+  // Key details
+  key: text("key").notNull().unique(), // Format: sk_live_xxx or sk_test_xxx
+  name: text("name").notNull(), // Display name for the key
+  description: text("description"),
+
+  // Permissions and limits
+  permissions: jsonb("permissions").default(['read']), // Array: ['read', 'write', 'trips', 'feasibility', 'itinerary']
+  rateLimit: integer("rate_limit").default(1000), // Requests per day
+  tier: text("tier").default("free"), // 'free', 'pro', 'business', 'enterprise'
+
+  // Usage tracking
+  usageCount: integer("usage_count").default(0),
+  usageResetAt: timestamp("usage_reset_at"),
+  lastUsedAt: timestamp("last_used_at"),
+
+  // Status
+  isActive: boolean("is_active").default(true),
+  expiresAt: timestamp("expires_at"), // Optional expiration
+
+  // Metadata
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ============================================================================
 // EMAIL NOTIFICATIONS
 // ============================================================================
 

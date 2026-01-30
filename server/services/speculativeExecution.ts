@@ -13,6 +13,8 @@
  * - Full generation continues when user explicitly requests it
  */
 
+import { BoundedMap } from '../utils/boundedMap';
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -28,7 +30,7 @@ interface SpeculativeJob {
 // STATE
 // ============================================================================
 
-const speculativeJobs = new Map<number, SpeculativeJob>();
+const speculativeJobs = new BoundedMap<number, SpeculativeJob>({ maxSize: 100, ttlMs: 10 * 60 * 1000 }); // 10min TTL
 
 // Score threshold for triggering speculative execution
 const SPECULATIVE_SCORE_THRESHOLD = 80;

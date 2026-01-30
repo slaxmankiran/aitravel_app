@@ -26,8 +26,17 @@ export function useTrip(id: number) {
     enabled: !!id && !isNaN(id),
     // Poll while feasibility is pending OR itinerary is not yet ready
     refetchInterval: (query) => {
-      const data = query.state.data as TripResponse | undefined;
-      if (!data) return 2000; // Keep polling if no data yet
+      const data = query.state.data as TripResponse | null | undefined;
+
+      // Stop polling if trip not found (404 returns null)
+      if (data === null) return false;
+
+      // Stop polling on error
+      if (query.state.error) return false;
+
+      // Keep polling if data not yet loaded
+      if (data === undefined) return 2000;
+
       if (data.feasibilityStatus === "pending") return 2000; // Feasibility in progress
       if (data.feasibilityStatus === "yes" || data.feasibilityStatus === "warning") {
         // Feasibility done, but check if itinerary is ready

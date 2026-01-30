@@ -13,6 +13,7 @@
 import OpenAI from "openai";
 import { distance } from "@turf/distance";
 import { point } from "@turf/helpers";
+import { getAIClient } from "./aiClientFactory";
 import type { TripResponse } from "@shared/schema";
 
 // ============================================================================
@@ -70,12 +71,10 @@ export class ItineraryModifierService {
   private openai: OpenAI;
   private model: string;
 
-  constructor(apiKey: string, model: string = "deepseek-chat") {
-    this.openai = new OpenAI({
-      apiKey,
-      baseURL: model.includes("deepseek") ? "https://api.deepseek.com" : undefined,
-    });
-    this.model = model;
+  constructor() {
+    const client = getAIClient('premium');
+    this.openai = client.openai;
+    this.model = client.model;
   }
 
   // ============================================================================
@@ -160,7 +159,7 @@ export class ItineraryModifierService {
   ): Promise<ModificationIntent> {
     try {
       const response = await this.openai.chat.completions.create({
-        model: "deepseek-chat", // Fast and cheap for classification
+        model: this.model, // Uses tier from factory
         messages: [
           {
             role: "system",

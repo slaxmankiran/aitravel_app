@@ -8,7 +8,9 @@
  * Supports: blogs, articles, YouTube, TikTok, Reddit, etc.
  */
 
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import { getAIClient, isAIConfigured } from "./aiClientFactory";
+import { BoundedMap } from '../utils/boundedMap';
 
 // ============================================================================
 // TYPES
@@ -45,11 +47,11 @@ const JINA_TIMEOUT_MS = 15000; // 15 seconds
 const AI_TIMEOUT_MS = 30000; // 30 seconds for AI extraction
 const MAX_CONTENT_LENGTH = 50000; // Truncate very long articles
 
-// Cache for scraped content (24 hour TTL)
-const contentCache = new Map<string, { content: string; timestamp: number }>();
+// Cache for scraped content (bounded, 24 hour TTL, max 200 entries due to large per-entry size)
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const contentCache = new BoundedMap<string, { content: string; timestamp: number }>({ maxSize: 200, ttlMs: CACHE_TTL_MS });
 
-// AI client (initialized lazily)
+// AI client (initialized lazily via factory)
 let openai: OpenAI | null = null;
 let aiModel = "deepseek-chat";
 
@@ -59,18 +61,12 @@ let aiModel = "deepseek-chat";
 
 function getOpenAI(): OpenAI {
   if (!openai) {
-    const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
-    if (!apiKey) {
+    if (!isAIConfigured()) {
       throw new Error('[ScrapingService] No AI API key configured');
     }
-
-    openai = new OpenAI({
-      apiKey,
-      baseURL: process.env.AI_BASE_URL || "https://api.deepseek.com",
-    });
-
-    aiModel = process.env.AI_MODEL || "deepseek-chat";
-    console.log(`[ScrapingService] AI initialized with model: ${aiModel}`);
+    const client = getAIClient('fast');
+    openai = client.openai;
+    aiModel = client.model;
   }
   return openai;
 }

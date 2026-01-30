@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 VoyageAI is an AI-powered travel planning application that analyzes trip feasibility, generates personalized itineraries, and provides real-time travel insights. The core value proposition is the "Certainty Engine" - answering "Can I go? What will it truly cost? What's the plan?"
 
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-01-30
 
 ## Commands
 
@@ -26,7 +26,8 @@ cp .env.example .env
 
 # Required environment variables in .env:
 # DATABASE_URL="postgresql://user:pass@host:5432/db"  (Supabase recommended)
-# DEEPSEEK_API_KEY="sk-xxx"
+# DEEPSEEK_API_KEY="sk-xxx"       # Default AI provider
+# OPENAI_API_KEY="sk-xxx"         # Optional: enables GPT-4o (overrides DeepSeek)
 # PORT=3000
 
 # Start dev server
@@ -96,7 +97,7 @@ All documentation is organized in `.claude/docs/`. Files are categorized below:
 | **Frontend** | React 18 + TypeScript + Vite + TailwindCSS + Radix UI |
 | **Backend** | Express + TypeScript |
 | **Database** | PostgreSQL 15 (Drizzle ORM) + pgvector for RAG |
-| **AI** | Deepseek API (OpenAI SDK compatible) |
+| **AI** | Tiered LLM Factory (GPT-4o / DeepSeek via OpenAI SDK) |
 | **Embeddings** | Ollama (nomic-embed-text) or OpenAI-compatible |
 | **Routing** | Wouter (client), Express (server) |
 | **State** | React Query + WorkingTrip pattern |
@@ -140,10 +141,12 @@ server/
     auth.ts, collaboration.ts, templates.ts, etc.
 
   services/           # Business logic (20+ files)
-    aiAgent.ts           # AI travel intelligence
-    changePlannerAgent.ts # Agentic change planning
-    agentChat.ts         # Conversational modifications
-    streamingItinerary.ts # SSE day-by-day generation
+    aiClientFactory.ts   # Centralized AI client (tiered: premium/standard/fast/auxiliary)
+    aiAgent.ts           # AI travel intelligence (standard tier)
+    changePlannerAgent.ts # Agentic change planning (standard tier)
+    agentChat.ts         # Conversational modifications (premium tier)
+    streamingItinerary.ts # SSE day-by-day generation (premium tier)
+    itineraryModifier.ts # Director Agent - surgical edits (premium+fast tier)
     itineraryLock.ts     # Concurrency protection
     embeddings.ts        # RAG embeddings
     visaService.ts       # Visa lookup with RAG
@@ -151,6 +154,11 @@ server/
     passportIndexUpdater.ts  # Auto-update from GitHub
     visaApiService.ts    # RapidAPI enrichment (optional)
     feasibilityCache.ts  # LRU caching
+    scrapingService.ts   # URL scraping + AI extraction (fast tier)
+    flightApi.ts         # Flight search + AI airport lookup (fast tier)
+
+  utils/
+    boundedMap.ts        # LRU + TTL Map wrapper (used by all caches)
 
   middleware/
     rateLimiter.ts    # Rate limiting + admin protection
@@ -166,7 +174,12 @@ shared/
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DEEPSEEK_API_KEY` | Yes | API key for AI (Deepseek/OpenAI-compatible) |
+| `DEEPSEEK_API_KEY` | Yes* | DeepSeek API key (default AI provider) |
+| `OPENAI_API_KEY` | No | OpenAI API key (overrides DeepSeek, enables GPT-4o) |
+| `AI_PREMIUM_MODEL` | No | Override premium tier model (default: gpt-4o) |
+| `AI_STANDARD_MODEL` | No | Override standard tier model (default: gpt-4o) |
+| `AI_FAST_MODEL` | No | Override fast tier model (default: gpt-4o-mini) |
+| `AI_AUXILIARY_MODEL` | No | Override auxiliary tier model (default: gpt-4o-mini) |
 | `DATABASE_URL` | Yes | PostgreSQL connection (Supabase) |
 | `ADMIN_TOKEN` | Prod | Admin token for protected endpoints (ingest, delete) |
 | `NODE_ENV` | No | Set to `production` for strict security |
@@ -175,6 +188,8 @@ shared/
 | `EMBEDDING_DIM` | No | RAG embedding dimension (default: 768) |
 | `OLLAMA_URL` | No | Local Ollama for embeddings |
 | `STREAMING_ITINERARY_ENABLED` | No | Enable SSE streaming (default: true) |
+
+*At least one of `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` required.
 
 ## Current Feature Status
 
@@ -197,6 +212,11 @@ shared/
 | - Stream Summary Logging | ✅ |
 | - Generation Budget Guard | ✅ |
 | - Metrics Endpoint | ✅ |
+| **Phase 9: AI Infrastructure** | ✅ Complete |
+| - Centralized AI Client Factory | ✅ |
+| - Tiered model routing (premium/standard/fast/auxiliary) | ✅ |
+| - Provider-agnostic (DeepSeek ↔ OpenAI via env) | ✅ |
+| - BoundedMap caches (LRU + TTL) | ✅ |
 | **Visa System (2026-01-20)** | ✅ Complete |
 | - Passport Index Dataset (39k routes, FREE) | ✅ |
 | - Auto-update on startup (if > 7 days old) | ✅ |
